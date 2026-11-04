@@ -61,10 +61,18 @@ def _finish(db, batch, state, error=None):
         db.execute('UPDATE batch SET state=?, error=?, done_at=? WHERE id=?', (state, error, now(), batch))
 
 
+def busy(db, conversation, exclude=None):
+    return db.execute('SELECT b.id FROM batch b WHERE b.id!=COALESCE(?,-1) AND '
+                      '(b.conversation=? OR b.work_item IN (SELECT work_item FROM work_item_conversation '
+                      "WHERE conversation=? AND kind='attach')) AND (b.state='running' OR "
+                      '(b.prompt_id IS NOT NULL AND b.delivered_at IS NULL)) LIMIT 1',
+                      (exclude, conversation, conversation)).fetchone()
+
+
 def take_batch(db, conversation):
     with db:
         db.execute('BEGIN IMMEDIATE')
-        if db.execute("SELECT 1 FROM batch WHERE conversation=? AND state='running'", (conversation,)).fetchone():
+        if busy(db, conversation):
             return None, []
         batch = db.execute("INSERT INTO batch (conversation, state, created_at) VALUES (?, 'running', ?)",
                            (conversation, now())).lastrowid
@@ -259,6 +267,10 @@ def resume_batch(cfg, db, batch):
         raise RuntimeError('batch has no reconcilable prompt identity')
     work = _row(db, 'work_item', b['work_item'])
     with session_lock(work['id']):
+        earlier = db.execute('SELECT id FROM batch WHERE work_item=? AND id<? AND prompt_id IS NOT NULL '
+                             'AND delivered_at IS NULL ORDER BY id LIMIT 1', (work['id'], batch)).fetchone()
+        if earlier:
+            raise RuntimeError('earlier batch %d must be reconciled first' % earlier['id'])
         if not b['delivered_at']:
             oc = client(cfg)
             saved = db.execute('SELECT * FROM prompt_submission WHERE batch=?', (batch,)).fetchone()
@@ -278,6 +290,13 @@ def resume_batch(cfg, db, batch):
 def deliver(cfg, db, work, conv, batch, msgs, soft):
     oc = client(cfg)
     with session_lock(work['id']):
+        with db:
+            db.execute('BEGIN IMMEDIATE')
+            if busy(db, conv['id'], exclude=batch):
+                db.execute('UPDATE message SET batch=NULL WHERE batch=?', (batch,))
+                db.execute("UPDATE batch SET state='deferred',work_item=?,done_at=? WHERE id=?",
+                           (work['id'], now(), batch))
+                return
         work = _row(db, 'work_item', work['id'])
         session = work['session_id']
         if not session:
@@ -320,8 +339,10 @@ def collect(cfg, db, batch):
     status = STATUS_RX.findall(text)
     drafts = DRAFT_RX.findall(text) if outcome == 'succeeded' else []
     with db:
-        db.execute('UPDATE work_item SET status_line=COALESCE(?, status_line), last_activity_at=? WHERE id=?',
-                   (status[-1][:300] if status else None, now(), work['id']))
+        db.execute('UPDATE work_item SET status_line=CASE WHEN EXISTS '
+                   "(SELECT 1 FROM batch newer WHERE newer.work_item=work_item.id AND newer.id>? AND newer.state='done') "
+                   'THEN status_line ELSE COALESCE(?,status_line) END,last_activity_at=? WHERE id=?',
+                   (batch, status[-1][:300] if status else None, now(), work['id']))
         for target, body in drafts:
             store_draft(db, work['id'], target, batch, body.strip())
         db.execute('UPDATE batch SET state=?, error=?, done_at=? WHERE id=?',
@@ -352,8 +373,8 @@ def store_draft(db, work, target, batch, body):
             status = 'dropped' if newer['sender_is_me'] else 'stale'
     if conversation:
         db.execute("UPDATE draft SET status='superseded', updated_at=? WHERE conversation=? "
-                   "AND status IN ('pending','approved','revision_requested')",
-                   (now(), conversation))
+                   "AND status IN ('pending','approved','revision_requested') AND (batch IS NULL OR batch<=?)",
+                    (now(), conversation, batch))
     db.execute('INSERT OR IGNORE INTO draft (work_item, conversation, batch, text, status, idempotency_key, '
                'created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)',
                (work, conversation, batch, body, status, key, now(), now()))
@@ -387,19 +408,30 @@ def recover(cfg, db):
     """After a restart: undelivered batches give their messages back, delivered ones get their reply collected."""
     resume = []
     with db:
+        db.execute('BEGIN IMMEDIATE')
         for b in db.execute("SELECT b.* FROM batch b LEFT JOIN prompt_submission s ON s.batch=b.id "
                             "WHERE b.state='running' OR (s.state IN ('prepared','uncertain') "
-                            "AND b.state IN ('failed','interrupted'))").fetchall():
+                            "AND b.state IN ('failed','interrupted')) ORDER BY b.id").fetchall():
             if b['delivered_at'] or b['prompt_id']:
+                db.execute("UPDATE batch SET state='running' WHERE id=?", (b['id'],))
                 resume.append(b['id'])
             else:
                 db.execute('UPDATE message SET batch=NULL WHERE batch=?', (b['id'],))
                 db.execute("UPDATE batch SET state='interrupted', done_at=? WHERE id=?", (now(), b['id']))
                 db.execute("UPDATE approval_event SET state='pending',batch=NULL WHERE batch=? AND action='revise' "
                            "AND state='delivering'", (b['id'],))
+    grouped = {}
     for batch in resume:
-        threading.Thread(target=_collect_later, args=(cfg, batch), daemon=True).start()
+        wid = _row(db, 'batch', batch)['work_item']
+        grouped.setdefault(wid, []).append(batch)
+    for batches in grouped.values():
+        threading.Thread(target=_recover_work, args=(cfg, batches), daemon=True).start()
     return resume
+
+
+def _recover_work(cfg, batches):
+    for batch in batches:
+        _collect_later(cfg, batch)
 
 
 def _collect_later(cfg, batch):
@@ -417,8 +449,9 @@ def archive_idle(cfg, db, hours=24):
     oc = client(cfg)
     for w in db.execute("SELECT * FROM work_item WHERE status='open' AND session_id IS NOT NULL").fetchall():
         idle = (parse(now()) - parse(w['last_activity_at'])).total_seconds() > hours * 3600
-        busy = db.execute("SELECT 1 FROM batch WHERE work_item=? AND state='running'", (w['id'],)).fetchone()
-        if idle and not busy:
+        active = db.execute("SELECT 1 FROM batch WHERE work_item=? AND (state='running' OR "
+                            '(prompt_id IS NOT NULL AND delivered_at IS NULL))', (w['id'],)).fetchone()
+        if idle and not active:
             try:
                 oc.archive(w['session_id'])
             except Exception as e:

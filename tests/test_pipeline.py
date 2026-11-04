@@ -3,6 +3,7 @@ import http.server
 import io
 import json
 import os
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -10,7 +11,7 @@ import urllib.error
 from unittest import mock
 
 from dispatcher import __main__ as app, config, triage, vault, watch_teamsrelay, work
-from dispatcher.db import connect, now
+from dispatcher.db import SCHEMA, connect, now
 from dispatcher.opencode import Opencode
 
 
@@ -59,6 +60,63 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM message').fetchone()[0], 1)
         self.assertEqual(self.db.execute('SELECT since FROM cursor').fetchone()[0], line()['sent_at'])
         self.assertEqual(self.db.execute('SELECT email FROM person').fetchone()[0], 'bob@roarinc.com')
+
+    def test_message_identity_is_scoped_by_receiving_account(self):
+        self.assertTrue(app.ingest(self.db, line()))
+        self.assertTrue(app.ingest(self.db, line(account='other@roarinc.com')))
+        self.assertFalse(app.ingest(self.db, line(account='other@roarinc.com')))
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM message').fetchone()[0], 2)
+
+    def test_identity_upgrade_uses_retained_native_id_after_format_rollback(self):
+        app.ingest(self.db, line())
+        expected = self.db.execute('SELECT message_id FROM message').fetchone()[0]
+        with self.db:
+            self.db.execute('PRAGMA user_version=0')
+        reopened = connect(self.cfg['db']['path'])
+        try:
+            self.assertEqual(reopened.execute('SELECT message_id FROM message').fetchone()[0], expected)
+        finally:
+            reopened.close()
+
+    def test_legacy_identity_migration_preserves_batch_and_draft_references(self):
+        path = os.path.join(self.tmp.name, 'legacy.db')
+        legacy = sqlite3.connect(path)
+        legacy.executescript('CREATE TABLE conversation (id INTEGER PRIMARY KEY,source TEXT NOT NULL,account TEXT NOT NULL,'
+                             'native_id TEXT NOT NULL,title TEXT,approval TEXT NOT NULL DEFAULT \'approve\',last_message_at TEXT,'
+                             'UNIQUE(source,account,native_id)); '
+                             'CREATE TABLE message (id INTEGER PRIMARY KEY,source TEXT NOT NULL,message_id TEXT NOT NULL,'
+                             'conversation INTEGER NOT NULL REFERENCES conversation,person INTEGER REFERENCES person,'
+                             'sender TEXT,sender_name TEXT,sender_is_me INTEGER NOT NULL,sent_at TEXT NOT NULL,text TEXT,'
+                             'attachments TEXT,ref TEXT,batch INTEGER REFERENCES batch,stored_at TEXT NOT NULL,'
+                             'UNIQUE(source,message_id));')
+        legacy.executescript(SCHEMA)
+        message = line()
+        legacy.execute("INSERT INTO conversation(id,source,account,native_id,title,last_message_at) VALUES (1,'outlook',?,?,?,?)",
+                       (message['account'], message['conversation_id'], message['conversation_title'], message['sent_at']))
+        legacy.execute("INSERT INTO work_item(id,title,created_at,last_activity_at) VALUES (3,'Legacy',?,?)", (now(), now()))
+        legacy.execute("INSERT INTO batch(id,conversation,work_item,state,created_at) VALUES (4,1,3,'done',?)", (now(),))
+        legacy.execute('INSERT INTO message(id,source,message_id,conversation,sender,sender_name,sender_is_me,sent_at,text,'
+                       'attachments,ref,batch,stored_at) VALUES (7,?,?,?,?,?,?,?,?,?,?,4,?)',
+                       (message['source'], message['message_id'], 1, message['sender'].lower(), message['sender_name'],
+                        False, message['sent_at'], message['text'], json.dumps(message['attachments']),
+                        json.dumps(message['ref']), now()))
+        legacy.execute("INSERT INTO draft(id,work_item,conversation,batch,text,idempotency_key,created_at,updated_at) "
+                       "VALUES (9,3,1,4,'Legacy draft','legacy',?,?)", (now(), now()))
+        legacy.commit()
+        legacy.close()
+        migrated = connect(path)
+        try:
+            expected = json.dumps([message['account'], message['message_id']], separators=(',', ':'))
+            self.assertEqual(tuple(migrated.execute('SELECT id,message_id FROM message').fetchone()), (7, expected))
+            self.assertEqual(tuple(migrated.execute('SELECT native_id,batch FROM message').fetchone()), (message['message_id'], 4))
+            self.assertEqual(tuple(migrated.execute('SELECT id,batch FROM draft').fetchone()), (9, 4))
+            self.assertFalse(app.ingest(migrated, message))
+            self.assertEqual(migrated.execute('PRAGMA foreign_key_check').fetchall(), [])
+        finally:
+            migrated.close()
+        reopened = connect(path)
+        self.assertEqual(reopened.execute('SELECT message_id FROM message').fetchone()[0], expected)
+        reopened.close()
 
     def test_due_waits_for_quiet_window_and_ignores_own_messages(self):
         app.ingest(self.db, line(message_id='<me>', sender_is_me=True, sent_at=ago(900)))

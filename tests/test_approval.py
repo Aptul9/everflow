@@ -95,7 +95,7 @@ class Approval(unittest.TestCase):
         from dispatcher import approval
         self.shown()
         self.answer()
-        original = self.db.execute('SELECT message_id,sent_at FROM message').fetchone()
+        original = self.db.execute('SELECT native_id AS message_id,sent_at FROM message').fetchone()
         edited = line(message_id=original['message_id'], sent_at=original['sent_at'], text='Cancel this change')
         reader = mock.Mock(return_value={'complete': True, 'messages': [edited]})
         sender = mock.Mock(return_value='sent_id')
@@ -110,13 +110,25 @@ class Approval(unittest.TestCase):
         from dispatcher import approval
         self.shown()
         self.answer()
-        original = self.db.execute('SELECT message_id,sent_at FROM message').fetchone()
+        original = self.db.execute('SELECT native_id AS message_id,sent_at FROM message').fetchone()
         reader = mock.Mock(return_value={'complete': True, 'messages': [
             line(message_id=original['message_id'], sent_at=original['sent_at'])]})
         sender = mock.Mock(return_value='sent_id')
         settings = {'mode': {'shadow': False}, 'delivery': {'enabled': True}}
         self.assertEqual(approval.deliver(settings, self.db, self.did, reader, sender), 'sent')
         sender.assert_called_once()
+
+    def test_other_account_copy_cannot_hide_send_time_cancellation(self):
+        from dispatcher import approval
+        self.shown()
+        self.answer()
+        app.ingest(self.db, line(account='other@roarinc.com', message_id='shared-message', text='Other account copy'))
+        reader = mock.Mock(return_value={'complete': True, 'messages': [
+            line(message_id='shared-message', text='Cancel this change')]})
+        sender = mock.Mock(return_value='sent_id')
+        settings = {'mode': {'shadow': False}, 'delivery': {'enabled': True}}
+        self.assertEqual(approval.deliver(settings, self.db, self.did, reader, sender), 'stale')
+        sender.assert_not_called()
 
     def test_successful_send_is_once_and_uses_exact_text(self):
         from dispatcher import approval
@@ -220,6 +232,29 @@ class Approval(unittest.TestCase):
         self.assertEqual(approval.deliver(settings, self.db, self.did, reader, sender), 'blocked')
         reader.assert_not_called()
         sender.assert_not_called()
+
+    def test_direct_revision_paging_reaches_prompt_older_than_batch_creation(self):
+        from dispatcher import approval
+        with self.db:
+            self.db.execute("UPDATE batch SET prompt_id='msg_revision',created_at='2026-11-04T11:01:00Z'")
+        first = [
+            {'id': 'msg_ok', 'type': 'user', 'text': 'ok', 'time': {'created': 1793790180000}},
+            {'id': 'msg_idle', 'type': 'idle', 'outcome': 'succeeded', 'time': {'created': 1793790120600}},
+            {'id': 'msg_output', 'type': 'assistant', 'time': {'created': 1793790120100, 'completed': 1793790120500},
+             'content': [{'type': 'text', 'text': '<<<DRAFT conversation=1\nExact approved text\nDRAFT>>>'}]},
+        ] + [{'id': 'msg_earlier_%d' % i, 'type': 'assistant', 'content': [],
+              'time': {'created': 1793790001000 + i * 1000, 'completed': 1793790001010 + i * 1000}}
+             for i in reversed(range(47))]
+        client = mock.Mock()
+        client.call.side_effect = [
+            {'data': first, 'cursor': {'next': 'revision-source'}},
+            {'data': [{'id': 'msg_revision', 'type': 'user', 'text': 'Make it shorter',
+                       'time': {'created': 1793790000000}}], 'cursor': {}},
+        ]
+        approval.poll_sessions({'approval': {'enabled': True}}, self.db, client)
+        self.assertEqual(client.call.call_count, 2)
+        self.assertEqual(self.db.execute('SELECT status FROM draft').fetchone()[0], 'approved')
+        self.assertEqual(self.db.execute('SELECT anchor FROM approval_request').fetchone()[0], 'msg_output')
 
     def test_bare_ok_is_ambiguous_with_multiple_shown_drafts(self):
         from dispatcher import approval

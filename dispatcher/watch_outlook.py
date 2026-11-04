@@ -89,9 +89,10 @@ def emit(item, account, mine, sent, seen):
     except pythoncom.com_error as e:
         log('item read failed in %s: %s' % (account, e))
         raise
-    if rec['message_id'] in seen:
+    key = (account.lower(), rec['message_id'])
+    if key in seen:
         return
-    seen.add(rec['message_id'])
+    seen.add(key)
     print(json.dumps(rec, ensure_ascii=False), flush=True)
 
 
@@ -99,7 +100,10 @@ class Events:
     pending = []
 
     def OnNewMailEx(self, entry_ids):
-        Events.pending.extend(i for i in entry_ids.split(',') if i)
+        entries = [i for i in entry_ids.split(',') if i]
+        Events.pending.extend(entries)
+        if entries:
+            log('NewMailEx received %d item(s)' % len(entries))
 
 
 def watch(state, poll, once, seen):
@@ -112,6 +116,9 @@ def watch(state, poll, once, seen):
         mine = {a.SmtpAddress.lower() for a in accounts}
         expected = state.setdefault('accounts', set())
         expected.update(mine)
+        if state.get('reported') != expected:
+            print(json.dumps({'source': 'outlook', 'accounts': sorted(expected)}), flush=True)
+            state['reported'] = set(expected)
         if not mine or expected - mine:
             raise RuntimeError('Outlook account coverage incomplete: ' + ', '.join(sorted(expected - mine)))
         folders, stores = [], {}

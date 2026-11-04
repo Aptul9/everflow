@@ -112,13 +112,13 @@ def poll_sessions(cfg, db, oc):
     if cfg.get('approval', {}).get('enabled') is not True:
         return
     from .work import DRAFT_RX
-    rows = db.execute('SELECT d.*,w.session_id,c.native_id,b.prompt_id,b.created_at AS batch_created_at '
+    rows = db.execute('SELECT d.*,w.session_id,c.native_id,b.prompt_id '
                       'FROM draft d JOIN work_item w ON w.id=d.work_item JOIN conversation c ON c.id=d.conversation '
                       "JOIN batch b ON b.id=d.batch WHERE d.status='pending' AND w.session_id IS NOT NULL "
                       'AND b.prompt_id IS NOT NULL').fetchall()
     for session in {r['session_id'] for r in rows}:
         pending = [r for r in rows if r['session_id'] == session]
-        since_ms = min(parse(r['batch_created_at']).timestamp() * 1000 for r in pending)
+        remaining = {r['prompt_id'] for r in pending}
         cursor, messages = None, []
         for _ in range(100):
             query = {'limit': '50'}
@@ -128,8 +128,9 @@ def poll_sessions(cfg, db, oc):
                 query['order'] = 'desc'
             page = oc.call('GET', '/api/session/%s/message?%s' % (session, urllib.parse.urlencode(query)))
             messages.extend(page['data'])
+            remaining.difference_update(m.get('id') for m in page['data'])
             cursor = (page.get('cursor') or {}).get('next')
-            if not cursor or any(m.get('time', {}).get('created', 0) < since_ms for m in page['data']):
+            if not cursor or not remaining:
                 break
         else:
             raise RuntimeError('approval message pagination limit reached')
@@ -184,7 +185,7 @@ def revise(cfg, db, event_id):
             if draft(db, d['id'])['status'] != 'revision_requested':
                 db.execute("UPDATE approval_event SET state='stale' WHERE id=?", (event_id,))
                 return
-            if db.execute("SELECT 1 FROM batch WHERE work_item=? AND state='running'", (d['work_item'],)).fetchone():
+            if work.busy(db, d['conversation']):
                 return
             direct = event['channel'] == 'session'
             batch = db.execute("INSERT INTO batch (conversation,work_item,state,created_at,prompt_id,delivered_at) "

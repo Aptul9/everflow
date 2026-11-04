@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from . import approval, config, work
-from .db import connect, now, parse
+from .db import connect, message_key, now, parse
 from .runtime import instance_lock, terminate
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -60,6 +60,7 @@ def ingest(db, m):
         return False
     sent_at = iso(parse(m['sent_at']).astimezone(dt.timezone.utc))
     sender = (m.get('sender') or '').lower()
+    identity = message_key(m['account'], m['message_id'])
     with db:
         db.execute('INSERT INTO conversation (source, account, native_id, title, last_message_at) VALUES (?,?,?,?,?) '
                    "ON CONFLICT (source, account, native_id) DO UPDATE SET "
@@ -75,14 +76,14 @@ def ingest(db, m):
                        'name=COALESCE(excluded.name, name)' % (column, column), (sender, m.get('sender_name') or None))
             person = db.execute('SELECT id FROM person WHERE %s=?' % column, (sender,)).fetchone()[0]
         stored = db.execute(
-            'INSERT OR IGNORE INTO message (source, message_id, conversation, person, sender, sender_name, '
-            'sender_is_me, sent_at, text, attachments, ref, stored_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-            (m['source'], m['message_id'], conv, person, sender, m.get('sender_name'), bool(m['sender_is_me']),
+            'INSERT OR IGNORE INTO message (source, message_id, native_id, conversation, person, sender, sender_name, '
+            'sender_is_me, sent_at, text, attachments, ref, stored_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (m['source'], identity, m['message_id'], conv, person, sender, m.get('sender_name'), bool(m['sender_is_me']),
              sent_at, m.get('text'), json.dumps(m.get('attachments') or []), json.dumps(m.get('ref') or {}),
               now())).rowcount
         if not stored:
             previous = db.execute('SELECT * FROM message WHERE source=? AND message_id=?',
-                                  (m['source'], m['message_id'])).fetchone()
+                                  (m['source'], identity)).fetchone()
             before = (previous['sender'], bool(previous['sender_is_me']), previous['sent_at'], previous['text'] or '',
                       json.loads(previous['attachments'] or '[]'), json.loads(previous['ref'] or '{}').get('deleted', False))
             after = (sender, bool(m['sender_is_me']), sent_at, m.get('text') or '', m.get('attachments') or [],
@@ -120,6 +121,8 @@ def due(cfg, db):
         "(SELECT 1 FROM batch b WHERE b.conversation=c.id AND b.state='running') GROUP BY c.id").fetchall()
     current, out = parse(now()), []
     for r in rows:
+        if work.busy(db, r['id']):
+            continue
         if (current - parse(r['last'])).total_seconds() < cfg['windows'].get(r['source'], 300):
             continue
         if r['others'] and not r['mine_last']:
@@ -275,7 +278,11 @@ def retry(cfg, batch):
     try:
         b = work._row(db, 'batch', batch)
         if b and b['state'] in ('failed', 'interrupted') and (b['delivered_at'] or b['prompt_id']):
-            work.resume_batch(cfg, db, batch)
+            try:
+                work.resume_batch(cfg, db, batch)
+            except Exception as error:
+                work._finish(db, batch, 'failed', '%s: %s' % (type(error).__name__, error))
+                raise
             print('reply of batch %d collected without resending' % batch)
             return
         with db:
