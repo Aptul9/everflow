@@ -68,6 +68,15 @@ class Pipeline(unittest.TestCase):
         app.ingest(self.db, line(message_id='<3>', conversation_id='C2', sent_at=ago(400)))
         self.assertEqual(len(app.due(self.cfg, self.db)), 1)
 
+    def test_conversation_answered_by_me_closes_without_a_run(self):
+        app.ingest(self.db, line(message_id='<q>', sent_at=ago(700)))
+        app.ingest(self.db, line(message_id='<a>', sender_is_me=True, sent_at=ago(400)))
+        self.assertEqual(app.due(self.cfg, self.db), [])
+        batch = self.db.execute('SELECT id, state FROM batch').fetchone()
+        self.assertEqual(batch['state'], 'answered')
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM message WHERE batch=?', (batch['id'],)).fetchone()[0], 2)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM triage_log').fetchone()[0], 0)
+
     def test_new_message_marks_draft_stale_and_own_reply_drops_it(self):
         app.ingest(self.db, line())
         wid = self.work_item()

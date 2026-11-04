@@ -35,6 +35,11 @@ lookback_minutes = 0
 source = "outlook"
 command = ["{python}", "-m", "dispatcher.watch_outlook"]
 
+# `watch` of Aptul9/Teams-MCP: every account of the Teams desktop client, never restarts Teams.
+[[watchers]]
+source = "teams"
+command = ["{python}", "C:/Users/Antonio/Downloads/teams-mcp/teams_mcp.py", "watch"]
+
 # A receiving account names its client; for an account that is no client's (bandpey), the sender
 # domains and the addresses quoted in the text decide. Keywords pick the client's vault notes.
 [clients.msc]
@@ -57,16 +62,24 @@ domains = ["serco.eu", "serco.com"]
 keywords = ["serco"]
 
 [clients.avvale]
+accounts = ["antonio.maritato@avvale.com"]
 domains = ["avvale.com", "ariston.com"]
 keywords = ["avvale", "ariston"]
 
 [clients.bip]
+accounts = ["antonio.maritato@bip-group.com"]
 domains = ["bip-group.com", "snam.it"]
 keywords = ["bip", "dmm", "snam"]
 
 [clients.vection]
+accounts = ["antonio.maritato@ext.vection-technologies.com"]
 domains = ["vection-technologies.com", "ext.vection-technologies.com", "prysmian.com"]
 keywords = ["vection", "prysman"]
+
+[clients.cgm]
+accounts = ["antonio.maritato@partner.cgm.com"]
+domains = ["cgm.com"]
+keywords = ["cgm"]
 
 [clients.tesco]
 domains = ["tesco.com"]

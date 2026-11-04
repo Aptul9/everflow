@@ -159,6 +159,8 @@ def messages_block(conv, msgs):
             lines.append('(attachments: %s)' % ', '.join(files))
         if ref.get('entry_id'):
             lines.append('(full item: outlook-desktop read_email entry_id=%s)' % ref['entry_id'])
+        elif ref.get('chat'):
+            lines.append('(Teams chat %s, message id %s, account %s)' % (ref['chat'], ref.get('id'), ref.get('account')))
         lines.append('')
     lines.append('MESSAGES>>>')
     return '\n'.join(lines)

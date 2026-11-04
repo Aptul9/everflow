@@ -64,14 +64,28 @@ def ingest(db, m):
 
 
 def due(cfg, db):
-    """Conversations with a pending message from someone else, quiet for their window, and no run going."""
+    """Conversations quiet for their window with a pending message from someone else, and no run going.
+
+    When the newest pending message is the user's own, the other side has had its answer: those messages close
+    as one 'answered' batch, with no triage and no session."""
     rows = db.execute(
-        "SELECT c.id, c.source, MAX(m.sent_at) AS last FROM conversation c JOIN message m ON m.conversation=c.id "
-        "WHERE m.batch IS NULL AND NOT EXISTS (SELECT 1 FROM batch b WHERE b.conversation=c.id "
-        "AND b.state='running') GROUP BY c.id HAVING SUM(1 - m.sender_is_me) > 0").fetchall()
-    current = parse(now())
-    return [r['id'] for r in rows
-            if (current - parse(r['last'])).total_seconds() >= cfg['windows'].get(r['source'], 300)]
+        "SELECT c.id, c.source, MAX(m.sent_at) AS last, SUM(1 - m.sender_is_me) AS others, "
+        "(SELECT x.sender_is_me FROM message x WHERE x.conversation=c.id AND x.batch IS NULL "
+        "ORDER BY x.sent_at DESC, x.id DESC LIMIT 1) AS mine_last "
+        "FROM conversation c JOIN message m ON m.conversation=c.id WHERE m.batch IS NULL AND NOT EXISTS "
+        "(SELECT 1 FROM batch b WHERE b.conversation=c.id AND b.state='running') GROUP BY c.id").fetchall()
+    current, out = parse(now()), []
+    for r in rows:
+        if (current - parse(r['last'])).total_seconds() < cfg['windows'].get(r['source'], 300):
+            continue
+        if r['others'] and not r['mine_last']:
+            out.append(r['id'])
+            continue
+        with db:
+            batch = db.execute("INSERT INTO batch (conversation, state, created_at, done_at) "
+                               "VALUES (?, 'answered', ?, ?)", (r['id'], now(), now())).lastrowid
+            db.execute('UPDATE message SET batch=? WHERE conversation=? AND batch IS NULL', (batch, r['id']))
+    return out
 
 
 def watcher(cfg, spec, lines):
