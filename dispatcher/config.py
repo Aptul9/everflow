@@ -6,7 +6,7 @@ from pathlib import Path
 
 HOME = Path.home()
 OPENCODE_CONFIG = HOME / '.config' / 'opencode' / 'opencode.jsonc'
-OPENCODE_SERVICE = HOME / '.config' / 'opencode' / 'service.json'
+OPENCHAMBER_SETTINGS = HOME / '.config' / 'openchamber' / 'settings.json'
 
 
 def jsonc(path):
@@ -22,19 +22,25 @@ def load(path):
     cfg['db']['path'] = str(root / cfg['db']['path'])
 
     # The model behind the triage gate is reached the way opencode reaches it: same baseURL, key and headers.
-    provider = jsonc(OPENCODE_CONFIG)['providers'][cfg['triage']['provider']]
-    settings = provider.get('settings') or {}
-    cfg['triage']['base_url'] = settings['baseURL'].rstrip('/')
-    cfg['triage']['api_key'] = settings.get('apiKey') or ''
-    cfg['triage']['headers'] = provider.get('headers') or {}
+    # Providers are tried in order; the next one takes over when one answers with a rate limit.
+    providers = jsonc(OPENCODE_CONFIG)['providers']
+    cfg['triage']['routes'] = []
+    for name in cfg['triage']['providers']:
+        settings = providers[name].get('settings') or {}
+        cfg['triage']['routes'].append({'provider': name, 'base_url': settings['baseURL'].rstrip('/'),
+                                        'api_key': settings.get('apiKey') or '',
+                                        'headers': providers[name].get('headers') or {}})
 
-    # Sessions go to the shared opencode service unless a server is set explicitly.
+    # Sessions go to OpenChamber's own server through its fixed local port, so they show up live there with
+    # OpenChamber's plugins loaded. A url set here means a plain opencode server with basic auth instead.
     oc = cfg['opencode']
-    if not oc.get('url'):
-        service = json.loads(OPENCODE_SERVICE.read_text(encoding='utf-8'))
-        oc['url'] = 'http://127.0.0.1:%d' % service['port']
-        oc.setdefault('password', service.get('password') or '')
-    oc['password'] = os.environ.get('INBOX_OPENCODE_PASSWORD', oc.get('password') or '')
+    oc['openchamber'] = not oc.get('url')
+    if oc['openchamber']:
+        settings = json.loads(OPENCHAMBER_SETTINGS.read_text(encoding='utf-8'))
+        oc['url'] = 'http://127.0.0.1:%d' % settings['desktopLocalPort']
+        oc['password'] = settings.get('desktopUiPassword') or ''
+    else:
+        oc['password'] = os.environ.get('INBOX_OPENCODE_PASSWORD', oc.get('password') or '')
     return cfg
 
 

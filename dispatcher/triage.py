@@ -64,14 +64,26 @@ def ask(cfg, text):
     t = cfg['triage']
     body = json.dumps({'model': t['model'], 'max_tokens': 600, 'system': SYSTEM,
                        'messages': [{'role': 'user', 'content': text}]}).encode('utf-8')
+    for n, route in enumerate(t['routes']):
+        try:
+            return _post(route, body)
+        except urllib.error.HTTPError as e:
+            # 429: this plan's window is spent; 529: the model is overloaded. Either way the next plan may answer.
+            if e.code not in (429, 529) or n == len(t['routes']) - 1:
+                raise RuntimeError('triage on %s: HTTP %d %s' % (route['provider'], e.code, e.read()[:300])) from None
+
+
+def _post(route, body):
     headers = {'content-type': 'application/json', 'anthropic-version': '2023-06-01',
-               'x-api-key': t['api_key'], **t['headers']}
+               'x-api-key': route['api_key'], **route['headers']}
     for attempt in range(2):
         try:
-            req = urllib.request.Request(t['base_url'] + '/messages', data=body, headers=headers, method='POST')
+            req = urllib.request.Request(route['base_url'] + '/messages', data=body, headers=headers, method='POST')
             with urllib.request.urlopen(req, timeout=180) as r:
                 out = json.loads(r.read())
             return ''.join(b.get('text', '') for b in out.get('content', []) if b.get('type') == 'text')
+        except urllib.error.HTTPError:
+            raise
         except urllib.error.URLError as e:
             refused = isinstance(e.reason, ConnectionRefusedError)
             if attempt or not refused or not MERIDIAN_CTL.is_file():

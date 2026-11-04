@@ -21,7 +21,7 @@ python -m venv .venv
 .venv\Scripts\python -m dispatcher retry <batch>
 ```
 
-Needs Classic Outlook open, Meridian on `127.0.0.1:3456`, and the opencode server set in `[opencode]` (default: the shared service from `~/.config/opencode/service.json`).
+Needs Classic Outlook open, Meridian on `127.0.0.1:3456`, and OpenChamber running: sessions are created on OpenChamber's own opencode server through its fixed local port, so they show up there live with OpenChamber's plugins. `[opencode] url` points the dispatcher at a plain `opencode serve` instead.
 
 ## Tests
 

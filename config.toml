@@ -7,15 +7,17 @@ path = "data/dispatcher.db"
 path = "C:/Users/Antonio/OneDrive/Documenti/Vault"
 
 [opencode]
-# Empty url: the shared opencode service, port and password from ~/.config/opencode/service.json.
-# INBOX_OPENCODE_PASSWORD overrides the password.
+# Empty url: OpenChamber's own opencode server, through OpenChamber's local port with its UI password
+# (desktopLocalPort, desktopUiPassword in ~/.config/openchamber/settings.json). A url here means a plain
+# `opencode serve` with basic auth, password from INBOX_OPENCODE_PASSWORD.
 url = ""
 directory = "C:/Users/Antonio/OneDrive/Documenti/Vault"
-model = "meridian-notarify/claude-opus-5-5"
+model = "meridian-everbright/claude-opus-5-5"
 
 [triage]
-# An opencode provider id: base URL, key and headers are read from ~/.config/opencode/opencode.jsonc.
-provider = "meridian-notarify"
+# opencode provider ids, tried in order on a rate limit: base URL, key and headers are read from
+# ~/.config/opencode/opencode.jsonc.
+providers = ["meridian-everbright", "meridian-notarify"]
 model = "claude-haiku-5-5"
 min_confidence = 0.75
 

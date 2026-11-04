@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import threading
+import time
 
 from . import config, triage, vault
 from .db import connect, now, parse
@@ -21,6 +22,7 @@ DRAFT_RX = re.compile(r'<<<DRAFT conversation=(\d+)[^\n]*\n(.*?)\n\s*DRAFT>>>', 
 STATUS_RX = re.compile(r'^STATUS:\s*(.+?)\s*$', re.M)
 SOURCES = {'outlook': 'Outlook', 'teams': 'Teams', 'gchat': 'Google Chat'}
 MAX_PROMPT_TEXT = 12000
+POLL_SECONDS = 10
 
 RULES = """This session was opened by the inbox dispatcher, in shadow mode, for messages Antonio received. \
 Work it under your normal rules: find out, do the part that is yours, keep the vault note current. \
@@ -188,8 +190,13 @@ def next_prompt(conv, msgs, soft):
                               'never a meeting, and the STATUS line at the end.'])
 
 
+def client(cfg):
+    oc = cfg['opencode']
+    return Opencode(oc['url'], oc['password'], oc.get('openchamber', False))
+
+
 def deliver(cfg, db, work, conv, batch, msgs, soft):
-    oc = Opencode(cfg['opencode']['url'], cfg['opencode']['password'])
+    oc = client(cfg)
     with session_lock(work['id']):
         work = _row(db, 'work_item', work['id'])
         session = work['session_id']
@@ -217,9 +224,20 @@ def deliver(cfg, db, work, conv, batch, msgs, soft):
 def collect(cfg, db, batch):
     b = _row(db, 'batch', batch)
     work = _row(db, 'work_item', b['work_item'])
-    oc = Opencode(cfg['opencode']['url'], cfg['opencode']['password'])
-    oc.wait(work['session_id'])
-    text, outcome = oc.turn(work['session_id'], b['prompt_id'])
+    oc = client(cfg)
+    # Polled rather than one long wait call: OpenChamber's proxy is not meant to hold a request for a whole turn.
+    lost = 0
+    while True:
+        found = oc.turn(work['session_id'], b['prompt_id'])
+        if found and found[1]:
+            text, outcome = found
+            break
+        if found is None:
+            lost = 0 if b['prompt_id'] in oc.queued(work['session_id']) else lost + 1
+            if lost >= 3:
+                raise RuntimeError('prompt %s is neither in session %s nor in its inbox' % (
+                    b['prompt_id'], work['session_id']))
+        time.sleep(POLL_SECONDS)
     status = STATUS_RX.findall(text)
     drafts = DRAFT_RX.findall(text)
     with db:
@@ -299,7 +317,7 @@ def _collect_later(cfg, batch):
 
 
 def archive_idle(cfg, db, hours=24):
-    oc = Opencode(cfg['opencode']['url'], cfg['opencode']['password'])
+    oc = client(cfg)
     for w in db.execute("SELECT * FROM work_item WHERE status='open' AND session_id IS NOT NULL").fetchall():
         idle = (parse(now()) - parse(w['last_activity_at'])).total_seconds() > hours * 3600
         busy = db.execute("SELECT 1 FROM batch WHERE work_item=? AND state='running'", (w['id'],)).fetchone()

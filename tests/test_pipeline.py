@@ -1,8 +1,12 @@
 import datetime as dt
+import http.server
+import io
 import json
 import os
 import tempfile
+import threading
 import unittest
+import urllib.error
 from unittest import mock
 
 from dispatcher import __main__ as app, config, triage, work
@@ -83,6 +87,16 @@ class Pipeline(unittest.TestCase):
         with self.assertRaises(ValueError):
             triage.parse('{"action": "send"}', [])
 
+    def test_triage_moves_to_next_plan_on_rate_limit(self):
+        def limited(code):
+            return urllib.error.HTTPError('u', code, 'x', {}, io.BytesIO(b'{"type":"error"}'))
+        cfg = {'triage': {'model': 'm', 'routes': [{'provider': 'a'}, {'provider': 'b'}]}}
+        with mock.patch.object(triage, '_post', side_effect=[limited(429), '{"ok": 1}']) as post:
+            self.assertEqual(triage.ask(cfg, 'x'), '{"ok": 1}')
+        self.assertEqual([c[0][0]['provider'] for c in post.call_args_list], ['a', 'b'])
+        with mock.patch.object(triage, '_post', side_effect=[limited(400)]), self.assertRaises(RuntimeError):
+            triage.ask(cfg, 'x')
+
     def test_keys_skip_encodings(self):
         self.assertEqual(work.keys('RCA-12, UTF-8, ISO-8601, https://github.com/a/b/pull/3 x'),
                          {'RCA-12', 'https://github.com/a/b/pull/3'})
@@ -134,6 +148,39 @@ class Pipeline(unittest.TestCase):
         oc = Opencode('http://x', 'p')
         with mock.patch.object(oc, 'call', side_effect=pages):
             self.assertEqual(oc.turn('ses', 'msg_p'), ('one\ntwo', 'succeeded'))
+        with mock.patch.object(oc, 'call', return_value={'data': [{'type': 'user', 'id': 'other'}], 'cursor': {}}):
+            self.assertIsNone(oc.turn('ses', 'msg_p'))
+
+    def test_openchamber_cookie_and_sign_in_again(self):
+        signs = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers['Content-Length'])).decode()
+                signs.append(body)
+                self.send_response(200 if body == 'password=s%26cret' else 401)
+                self.send_header('Set-Cookie', 'oc_ui_session=t%d; Path=/; HttpOnly' % len(signs))
+                self.end_headers()
+                self.wfile.write(b'{"authenticated":true}')
+
+            def do_GET(self):
+                ok = self.headers.get('Cookie') == 'oc_ui_session=t2'  # the first cookie counts as expired
+                self.send_response(200 if ok else 401)
+                self.end_headers()
+                self.wfile.write(b'{"data": {}}' if ok else b'{}')
+
+        server = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            oc = Opencode('http://127.0.0.1:%d' % server.server_port, 's&cret', openchamber=True)
+            self.assertEqual(oc.call('GET', '/api/session/active'), {'data': {}})
+            self.assertEqual(len(signs), 2)
+        finally:
+            server.shutdown()
+            server.server_close()
 
     def test_run_start_to_draft(self):
         app.ingest(self.db, line())
@@ -143,7 +190,6 @@ class Pipeline(unittest.TestCase):
         with mock.patch.object(triage, 'ask', return_value=answer) as ask, \
                 mock.patch.object(Opencode, 'create', return_value='ses_1') as create, \
                 mock.patch.object(Opencode, 'prompt', side_effect=lambda s, t: prompts.append(t) or 'msg_1'), \
-                mock.patch.object(Opencode, 'wait'), \
                 mock.patch.object(Opencode, 'turn', return_value=(REPLY, 'succeeded')):
             work.run(self.cfg, 1)
         self.assertIn('note:01_Projects/roar-k8s.md', ask.call_args[0][1])
@@ -155,14 +201,18 @@ class Pipeline(unittest.TestCase):
                                                                           '["RCA-12"]'))
         self.assertEqual(tuple(self.db.execute('SELECT text, status FROM draft').fetchone()), ('Hi Bob, done.', 'pending'))
         self.assertEqual(self.db.execute('SELECT state FROM batch').fetchone()[0], 'done')
-        # The next batch on the same conversation skips triage and goes to the same session as the next turn.
+        # The next batch on the same conversation skips triage and goes to the same session as the next turn,
+        # which waits in the inbox, runs, then ends.
         app.ingest(self.db, line(message_id='<2>', text='Thanks'))
+        turns = [None, ('', None), ('ok\nSTATUS: closed', 'succeeded')]
         with mock.patch.object(triage, 'ask') as ask, \
                 mock.patch.object(Opencode, 'prompt', side_effect=lambda s, t: prompts.append(t) or 'msg_2'), \
-                mock.patch.object(Opencode, 'wait'), \
-                mock.patch.object(Opencode, 'turn', return_value=('ok\nSTATUS: closed', 'succeeded')):
+                mock.patch.object(Opencode, 'queued', return_value=['msg_2']), \
+                mock.patch.object(Opencode, 'turn', side_effect=turns) as turn, \
+                mock.patch.object(work, 'POLL_SECONDS', 0):
             work.run(self.cfg, 1)
         ask.assert_not_called()
+        self.assertEqual(turn.call_count, 3)
         self.assertIn('New messages for this work item', prompts[1])
         self.assertEqual(work._row(self.db, 'work_item', 1)['status_line'], 'closed')
 

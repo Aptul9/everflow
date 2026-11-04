@@ -160,16 +160,20 @@ def main():
     ap = argparse.ArgumentParser(prog='python -m dispatcher')
     ap.add_argument('--config', default=str(ROOT / 'config.toml'))
     sub = ap.add_subparsers(dest='command', required=True)
-    sub.add_parser('run', help='watch, triage, correlate and deliver until stopped')
+    rn = sub.add_parser('run', help='watch, triage, correlate and deliver until stopped')
+    rn.add_argument('--lookback', type=int, help='minutes of catch-up for a source with no cursor yet')
     st = sub.add_parser('status', help='counts, recent triage decisions, work items, drafts')
     st.add_argument('--limit', type=int, default=20)
     rt = sub.add_parser('retry', help='put the messages of a failed batch back in the queue')
     rt.add_argument('batch', type=int)
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     cfg = config.load(args.config)
     if args.command == 'run':
+        if args.lookback is not None:
+            cfg['start']['lookback_minutes'] = args.lookback
         run(cfg)
     elif args.command == 'status':
         status(cfg, args.limit)
