@@ -25,6 +25,7 @@ min_confidence = 0.75
 # Seconds a conversation stays quiet before its batch runs. Floors from the design: chat 120, email 300.
 outlook = 300
 teams = 120
+teamsrelay = 120
 gchat = 120
 
 [start]
@@ -39,6 +40,12 @@ command = ["{python}", "-m", "dispatcher.watch_outlook"]
 [[watchers]]
 source = "teams"
 command = ["{python}", "C:/Users/Antonio/Downloads/teams-mcp/teams_mcp.py", "watch"]
+
+# Teams accounts held by the teamsrelay server (Npo, MSC, Zurich, AGAP2, ...): read tools of its /mcp only.
+# Token: data/teamsrelay.token (MCP_TOKEN of /opt/teamsrelay/.env on oe-vm) or INBOX_TEAMSRELAY_TOKEN.
+[[watchers]]
+source = "teamsrelay"
+command = ["{python}", "-m", "dispatcher.watch_teamsrelay"]
 
 # A receiving account names its client; for an account that is no client's (bandpey), the sender
 # domains and the addresses quoted in the text decide. Keywords pick the client's vault notes.
@@ -80,6 +87,26 @@ keywords = ["vection", "prysman"]
 accounts = ["antonio.maritato@partner.cgm.com"]
 domains = ["cgm.com"]
 keywords = ["cgm"]
+
+[clients.npo]
+domains = ["nposervices.com", "iveco.com"]
+keywords = ["npo", "iveco"]
+
+[clients.zurich]
+domains = ["zurich.com"]
+keywords = ["zurich"]
+
+[clients.agap2]
+domains = ["agap2.it"]
+keywords = ["agap2", "sisal"]
+
+[clients.aubay]
+domains = ["office.aubay.it", "aubay.it"]
+keywords = ["aubay"]
+
+[clients.fincons]
+domains = ["finconsgroup.com"]
+keywords = ["fincons"]
 
 [clients.tesco]
 domains = ["tesco.com"]

@@ -8,7 +8,7 @@ import urllib.request
 
 # Outbound actions a dispatcher session never gets. MCP permission actions are `<server>_<tool>` with the
 # server name as configured, hyphen included (`outlook-desktop_send_email`).
-DENY = ['teams*_send*', 'teams*_edit*', 'teams*_delete*',
+DENY = ['teams*_send*', 'teams*_edit*', 'teams*_delete*', 'teams*_react*', 'teams*_undo*', 'teams*_refresh*',
         'outlook*_send*', 'outlook*_reply*', 'outlook*_forward*', 'outlook*_respond*',
         'outlook*_create_meeting*', 'outlook*_create_event*', 'outlook*_update_event*', 'outlook*_delete_event*',
         'gmail*_send*', 'gchat*_send*', 'slack*_send*', 'slack*_post*']

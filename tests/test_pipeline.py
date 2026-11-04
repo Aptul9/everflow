@@ -9,7 +9,7 @@ import unittest
 import urllib.error
 from unittest import mock
 
-from dispatcher import __main__ as app, config, triage, work
+from dispatcher import __main__ as app, config, triage, vault, watch_teamsrelay, work
 from dispatcher.db import connect, now
 from dispatcher.opencode import Opencode
 
@@ -114,6 +114,19 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(config.clients_for(self.cfg, 'ME@roarinc.com', []), ['roar'])
         self.assertEqual(config.clients_for(self.cfg, 'me@bandpey.com', ['x@msccruises.com']), ['msc'])
         self.assertEqual(config.clients_for(self.cfg, 'me@bandpey.com', ['x@gmail.com']), [])
+        # relay senders are names: the receiving account's domain names the client
+        cfg = dict(self.cfg, clients=dict(self.cfg['clients'], npo={'domains': ['nposervices.com']}))
+        self.assertEqual(config.clients_for(cfg, 'me@nposervices.com', ['mario rossi']), ['npo'])
+
+    def test_vault_cards_reach_area_subfolders(self):
+        for rel, head in [('02_Areas/msc/msc.md', ''), ('02_Areas/msc/tickets/concierge.md', 'status: active'),
+                          ('02_Areas/msc/tickets/_closed/old.md', ''), ('02_Areas/msc/tickets/done.md', 'status: closed')]:
+            path = os.path.join(self.tmp.name, *rel.split('/'))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('---\n%s\n---\n\n# t\n' % head)
+        self.assertEqual(vault.client_notes(self.tmp.name, ['msc']),
+                         ['02_Areas/msc/msc.md', '02_Areas/msc/tickets/concierge.md'])
 
     def test_correlate(self):
         app.ingest(self.db, line())
@@ -147,6 +160,48 @@ class Pipeline(unittest.TestCase):
         rows = self.db.execute('SELECT text, status FROM draft ORDER BY id').fetchall()
         self.assertEqual([tuple(r) for r in rows], [('unlinked', 'no_target'), ('first', 'superseded'),
                                                     ('second', 'stale'), ('third', 'stale')])
+
+    def test_draft_named_by_native_id(self):
+        app.ingest(self.db, line())
+        wid = self.work_item()
+        batch, _ = work.take_batch(self.db, 1)
+        reply = 'x\n<<<DRAFT conversation=C1\nHello\nDRAFT>>>\n<<<DRAFT conversation=7\nLost\nDRAFT>>>\nSTATUS: s'
+        with self.db:
+            self.db.execute("INSERT INTO work_item_conversation VALUES (?, 1, 'attach', ?)", (wid, now()))
+            for target, body in work.DRAFT_RX.findall(reply):
+                work.store_draft(self.db, wid, target, batch, body)
+        rows = self.db.execute('SELECT text, conversation, status FROM draft ORDER BY id').fetchall()
+        self.assertEqual([tuple(r) for r in rows], [('Hello', 1, 'pending'), ('Lost', None, 'no_target')])
+        self.assertIn('Local time now: ', work.next_prompt(work._row(self.db, 'conversation', 1), [], []))
+
+    def test_relay_watch_reads_new_then_only_changed_chats(self):
+        since = watch_teamsrelay.parse_iso('2026-11-04T10:00:00Z')
+        chats = {'A': [{'id': '1', 'time': '2026-11-04T09:00:00.000Z', 'author': 'Bob', 'text': 'old'},
+                       {'id': '2', 'time': '2026-11-04T11:00:00.000Z', 'author': 'Bob', 'text': 'new'}],
+                 'B': [{'id': '3', 'time': '2026-11-01T09:00:00.000Z', 'author': 'Eve', 'text': 'x'}]}
+        rows = {'A': ('11:00', 'new'), 'B': ('11/1', 'x')}
+        reads = []
+
+        class Fake:
+            def tool(self, name, args):
+                if name == 'list_accounts':
+                    return {'accounts': [{'slot': 2, 'email': 'Me@MSCcruises.com'}, {'slot': 9, 'stopped': True}]}
+                if name == 'list_chats':
+                    return {'chats': [{'name': n, 'last': rows[n][0], 'preview': rows[n][1]} for n in chats]}
+                reads.append(args['chat'])
+                return {'messages': chats[args['chat']]}
+
+        out, state = [], {'rows': {}, 'recheck': {}, 'seen': set()}
+        watch_teamsrelay.watch_round(Fake(), since, state, out.append)
+        self.assertEqual([(r['message_id'], r['account'], r['sent_at']) for r in out],
+                         [('me@msccruises.com/A;messageid=2', 'me@msccruises.com', '2026-11-04T11:00:00.000Z')])
+        reads.clear()
+        watch_teamsrelay.watch_round(Fake(), since, state, out.append)
+        self.assertEqual(reads, [])  # no list row changed: no chat read
+        chats['B'].append({'id': '4', 'time': '2026-11-04T12:00:00.000Z', 'author': 'Eve', 'text': 'hi'})
+        rows['B'] = ('12:00', 'hi')
+        watch_teamsrelay.watch_round(Fake(), since, state, out.append)
+        self.assertEqual((reads, out[-1]['text'], len(out)), (['B'], 'hi', 2))
 
     def test_turn_collects_text_after_prompt(self):
         pages = [{'data': [{'type': 'idle', 'id': 'i', 'outcome': 'succeeded'},

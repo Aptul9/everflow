@@ -45,10 +45,11 @@ def load(path):
 
 
 def clients_for(cfg, account, addresses):
-    """Clients whose accounts include the receiving account, else whose domains match an address."""
+    """Clients whose accounts include the receiving account, else whose domains match the receiving account or an
+    address (relay senders carry a name, not an address, so their account's domain is all there is)."""
     clients = cfg.get('clients') or {}
     hit = [name for name, c in clients.items() if account.lower() in [a.lower() for a in c.get('accounts', [])]]
     if hit:
         return hit
-    domains = {a.rsplit('@', 1)[-1].lower() for a in addresses if '@' in a}
+    domains = {a.rsplit('@', 1)[-1].lower() for a in list(addresses) + [account] if '@' in a}
     return [name for name, c in clients.items() if domains & {d.lower() for d in c.get('domains', [])}]
