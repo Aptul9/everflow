@@ -1,6 +1,6 @@
 # inbox-dispatcher
 
-Incoming Outlook mail (Teams and Google Chat to follow) starts agent work in opencode, one session per work item. Phase 1 is shadow mode: messages are triaged, correlated and worked, replies are drafted, nothing is sent.
+Incoming Outlook mail and Teams messages (Google Chat to follow) start agent work in opencode, one session per work item. Phase 1 is shadow mode: messages are triaged, correlated and worked, replies are drafted, nothing is sent.
 
 ## Pipeline
 
@@ -22,6 +22,12 @@ python -m venv .venv
 ```
 
 Needs Classic Outlook open, Meridian on `127.0.0.1:3456`, and OpenChamber running: sessions are created on OpenChamber's own opencode server through its fixed local port, so they show up there live with OpenChamber's plugins. `[opencode] url` points the dispatcher at a plain `opencode serve` instead.
+
+Watchers in `config.toml`:
+
+- `outlook`: `dispatcher.watch_outlook`, every account of Classic Outlook over COM (`NewMailEx` plus a re-scan with `Items.Restrict`).
+- `teams`: the `watch` subcommand of [Teams-MCP](https://github.com/Aptul9/Teams-MCP), every account the Teams desktop client holds a token for. Never restarts Teams.
+- `teamsrelay`: `dispatcher.watch_teamsrelay`, the accounts held by the teamsrelay server, through the read tools of its `/mcp` only (never `refresh_chat`, which opens the chat in Teams and marks it read). Token in `data/teamsrelay.token` (gitignored) or `INBOX_TEAMSRELAY_TOKEN`. `read_chat` returns only what the relay saved, and the relay cuts message text at 2000 characters.
 
 ## Tests
 

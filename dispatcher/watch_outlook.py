@@ -117,6 +117,7 @@ def watch(state, poll, once, seen):
     mine = set(stores.values())
     events = None if once else win32com.client.WithEvents(app, Events)  # the sink lives as long as this reference
     log('watching %s from %s' % (', '.join(sorted(mine)), iso(state['since'])))
+    state.pop('failing', None)
     while True:
         started = dt.datetime.now(dt.timezone.utc)
         for account, folder, sent in folders:
@@ -155,8 +156,11 @@ def main():
             if args.once:
                 return
         except pythoncom.com_error as e:
-            log('Outlook not reachable (%s); retrying in 30 s. Classic Outlook must be open; '
-                'after a scripted start click into its window once.' % e)
+            # Once per outage: a closed Outlook otherwise writes a line every 30 s all night. watch() clears it on attach.
+            if str(e) != state.get('failing'):
+                log('Outlook not reachable (%s); retrying every 30 s. Classic Outlook must be open; '
+                    'after a scripted start click into its window once.' % e)
+            state['failing'] = str(e)
             time.sleep(30)
 
 
