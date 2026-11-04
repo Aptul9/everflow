@@ -9,8 +9,9 @@ import threading
 import time
 from pathlib import Path
 
-from . import config, work
+from . import approval, config, work
 from .db import connect, now, parse
+from .runtime import instance_lock, terminate
 
 ROOT = Path(__file__).resolve().parent.parent
 REQUIRED = ('source', 'account', 'conversation_id', 'message_id', 'sender_is_me', 'sent_at')
@@ -24,6 +25,16 @@ def iso(t):
 
 def ingest(db, m):
     """Store one watcher line. Returns False for a message already stored."""
+    if not isinstance(m, dict):
+        raise ValueError('watcher line must be an object')
+    if 'checkpoint' in m:
+        stamp = parse(m['checkpoint'])
+        if not m.get('source') or stamp.tzinfo is None or stamp > dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=5):
+            raise ValueError('invalid source checkpoint')
+        with db:
+            db.execute("INSERT INTO cursor VALUES (?, '*', ?) ON CONFLICT (source,account) "
+                       'DO UPDATE SET since=MAX(since,excluded.since)', (m['source'], iso(stamp)))
+        return True
     if any(k not in m for k in REQUIRED):
         log.warning('watcher line without %s', [k for k in REQUIRED if k not in m])
         return False
@@ -56,9 +67,10 @@ def ingest(db, m):
                    'DO UPDATE SET since=MAX(since, excluded.since)', (m['source'], m['account'], sent_at))
         if m['sender_is_me']:  # Antonio answered himself: the pending draft is moot
             db.execute("UPDATE draft SET status='dropped', updated_at=? WHERE conversation=? "
-                       "AND status IN ('pending', 'stale')", (now(), conv))
+                       "AND status IN ('pending', 'approved', 'revision_requested', 'stale')", (now(), conv))
         else:
-            db.execute("UPDATE draft SET status='stale', updated_at=? WHERE conversation=? AND status='pending'",
+            db.execute("UPDATE draft SET status='stale', updated_at=? WHERE conversation=? "
+                       "AND status IN ('pending','approved','revision_requested')",
                        (now(), conv))
     return True
 
@@ -88,51 +100,111 @@ def due(cfg, db):
     return out
 
 
-def watcher(cfg, spec, lines):
+def watcher_start(cfg, db, source):
+    saved = db.execute("SELECT since FROM cursor WHERE source=? AND account='*'", (source,)).fetchone()
+    oldest = saved[0] if saved else db.execute('SELECT MIN(since) FROM cursor WHERE source=?', (source,)).fetchone()[0]
+    current = dt.datetime.now(dt.timezone.utc)
+    start = max(parse(oldest), current - MAX_CATCH_UP) if oldest else (
+        current - dt.timedelta(minutes=cfg['start']['lookback_minutes']))
+    with db:
+        db.execute("INSERT OR IGNORE INTO cursor VALUES (?, '*', ?)", (source, iso(start)))
+    return parse(iso(start))
+
+
+def watcher(cfg, spec, lines, stop, processes):
     db = connect(cfg['db']['path'])
-    while True:
-        oldest = db.execute('SELECT MIN(since) FROM cursor WHERE source=?', (spec['source'],)).fetchone()[0]
-        floor = dt.datetime.now(dt.timezone.utc) - MAX_CATCH_UP
-        start = max(parse(oldest), floor) if oldest else (
-            dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=cfg['start']['lookback_minutes']))
-        command = [sys.executable if c == '{python}' else c for c in spec['command']] + ['--since', iso(start)]
-        log.info('%s watcher starting from %s', spec['source'], iso(start))
-        p = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, text=True, encoding='utf-8',
-                             errors='replace')
-        for line in p.stdout:
-            if line.strip():
-                lines.put(line)
-        log.warning('%s watcher exited with code %s, restarting in 30 s', spec['source'], p.wait())
-        time.sleep(30)
+    p = None
+    try:
+        while not stop.is_set():
+            try:
+                start = watcher_start(cfg, db, spec['source'])
+                command = [sys.executable if c == '{python}' else c for c in spec['command']] + ['--since', iso(start)]
+                log.info('%s watcher starting from %s', spec['source'], iso(start))
+                p = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, text=True, encoding='utf-8',
+                                     errors='strict')
+                processes[spec['source']] = p
+                for line in p.stdout:
+                    if stop.is_set():
+                        break
+                    if line.strip():
+                        lines.put((spec['source'], line))
+                if not stop.is_set():
+                    log.warning('%s watcher exited with code %s', spec['source'], p.wait())
+            except (OSError, UnicodeError) as e:
+                log.warning('%s watcher failed: %s', spec['source'], e)
+            finally:
+                if p:
+                    terminate(p)
+                    processes.pop(spec['source'], None)
+                    p = None
+            stop.wait(30)
+    finally:
+        db.close()
 
 
 def run(cfg):
+    with instance_lock(cfg['db']['path']):
+        _run(cfg)
+
+
+def _run(cfg):
     db = connect(cfg['db']['path'])
+    lines, stop, processes = queue.Queue(), threading.Event(), {}
+    cfg['_stop'] = stop
     resumed = work.recover(cfg, db)
     if resumed:
         log.info('collecting replies of batches delivered before the restart: %s', resumed)
-    lines = queue.Queue()
+    stop_file = Path(cfg['db']['path'] + '.stop')
+    stop_file.unlink(missing_ok=True)
+    watchers = []
+    if cfg.get('approval', {}).get('enabled') is True:
+        thread = threading.Thread(target=approval.loop, args=(cfg, stop), daemon=True, name='approval')
+        watchers.append(thread)
+        thread.start()
     for spec in cfg['watchers']:
-        threading.Thread(target=watcher, args=(cfg, spec, lines), daemon=True, name='watch-' + spec['source']).start()
+        t = threading.Thread(target=watcher, args=(cfg, spec, lines, stop, processes),
+                             daemon=True, name='watch-' + spec['source'])
+        watchers.append(t)
+        t.start()
     runs, archived_at = {}, 0
-    while True:
-        try:
-            while True:
-                line = lines.get(timeout=1)
-                try:
-                    ingest(db, json.loads(line))
-                except (ValueError, KeyError) as e:
-                    log.warning('bad watcher line (%s): %.200s', e, line)
-        except queue.Empty:
-            pass
-        for conversation in due(cfg, db):
-            if conversation in runs and runs[conversation].is_alive():
-                continue
-            runs[conversation] = threading.Thread(target=work.run, args=(cfg, conversation), daemon=True)
-            runs[conversation].start()
-        if time.time() - archived_at > 600:
-            archived_at = time.time()
-            work.archive_idle(cfg, db)
+    try:
+        while not stop_file.exists():
+            try:
+                until = time.monotonic() + 1
+                for _ in range(500):
+                    if time.monotonic() >= until or stop_file.exists():
+                        break
+                    source, line = lines.get(timeout=0.2)
+                    try:
+                        m = json.loads(line)
+                        if not isinstance(m, dict) or m.get('source') != source:
+                            raise ValueError('source mismatch')
+                        if not approval.notes_control(cfg, db, m):
+                            ingest(db, m)
+                    except (ValueError, KeyError, TypeError) as e:
+                        log.warning('bad %s watcher line: %s', source, e)
+            except queue.Empty:
+                pass
+            for conversation in due(cfg, db):
+                if conversation in runs and runs[conversation].is_alive():
+                    continue
+                runs[conversation] = threading.Thread(target=work.run, args=(cfg, conversation), daemon=True)
+                runs[conversation].start()
+            runs = {c: t for c, t in runs.items() if t.is_alive()}
+            if time.time() - archived_at > 600:
+                archived_at = time.time()
+                work.archive_idle(cfg, db)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop.set()
+        for p in list(processes.values()):
+            terminate(p)
+        for t in watchers:
+            t.join(timeout=20)
+        stop_file.unlink(missing_ok=True)
+        db.close()
+        log.info('dispatcher stopped; delivered turns remain recoverable')
 
 
 def status(cfg, limit):
@@ -162,12 +234,21 @@ def status(cfg, limit):
 
 def retry(cfg, batch):
     db = connect(cfg['db']['path'])
-    with db:
-        released = db.execute('UPDATE message SET batch=NULL WHERE batch=? AND batch IN '
-                              "(SELECT id FROM batch WHERE state IN ('failed', 'interrupted'))", (batch,)).rowcount
-        db.execute("UPDATE batch SET state='retried', done_at=? WHERE id=? AND state IN ('failed', 'interrupted')",
-                   (now(), batch))
-    print('%d message(s) of batch %d back in the queue' % (released, batch))
+    try:
+        b = work._row(db, 'batch', batch)
+        if b and b['state'] in ('failed', 'interrupted') and b['delivered_at']:
+            with work.session_lock(b['work_item']):
+                work.collect(cfg, db, batch)
+            print('reply of batch %d collected without resending' % batch)
+            return
+        with db:
+            released = db.execute('UPDATE message SET batch=NULL WHERE batch=? AND batch IN '
+                                  "(SELECT id FROM batch WHERE state IN ('failed', 'interrupted'))", (batch,)).rowcount
+            db.execute("UPDATE batch SET state='retried', done_at=? WHERE id=? AND state IN ('failed', 'interrupted')",
+                       (now(), batch))
+        print('%d message(s) of batch %d back in the queue' % (released, batch))
+    finally:
+        db.close()
 
 
 def main():
@@ -180,6 +261,12 @@ def main():
     st.add_argument('--limit', type=int, default=20)
     rt = sub.add_parser('retry', help='put the messages of a failed batch back in the queue')
     rt.add_argument('batch', type=int)
+    review = sub.add_parser('draft', help='show exact draft and destination, register local review')
+    review.add_argument('draft', type=int)
+    answer = sub.add_parser('reply', help='record approval or revision of a locally reviewed draft')
+    answer.add_argument('draft', type=int)
+    answer.add_argument('text')
+    sub.add_parser('stop', help='stop dispatcher and its watcher processes without losing queued work')
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding='utf-8')
     sys.stderr.reconfigure(encoding='utf-8')
@@ -191,8 +278,25 @@ def main():
         run(cfg)
     elif args.command == 'status':
         status(cfg, args.limit)
-    else:
+    elif args.command == 'retry':
         retry(cfg, args.batch)
+    elif args.command in ('draft', 'reply'):
+        import uuid
+        db = connect(cfg['db']['path'])
+        try:
+            if args.command == 'draft':
+                d = approval.present(db, args.draft, 'local', 'operator', 'local-review')
+                print(json.dumps({k: d[k] for k in ('id', 'source', 'account', 'native_id', 'title', 'status', 'text')},
+                                 ensure_ascii=False, indent=2))
+            else:
+                result = approval.decide(db, args.draft, channel='local', target='operator',
+                                         event_id=uuid.uuid4().hex, text=args.text, actor_is_me=True, at=now())
+                print(json.dumps({'decision': result, 'sending_enabled': approval.sending_enabled(cfg)}))
+        finally:
+            db.close()
+    else:
+        Path(cfg['db']['path'] + '.stop').touch()
+        print('stop requested')
 
 
 if __name__ == '__main__':

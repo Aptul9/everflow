@@ -39,6 +39,19 @@ CREATE TABLE IF NOT EXISTS draft (
     conversation INTEGER REFERENCES conversation, batch INTEGER REFERENCES batch, text TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending', idempotency_key TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS approval_request (
+    draft INTEGER NOT NULL REFERENCES draft, channel TEXT NOT NULL, target TEXT NOT NULL,
+    fingerprint TEXT NOT NULL, anchor TEXT NOT NULL, shown_at TEXT NOT NULL,
+    PRIMARY KEY (draft,channel,target));
+CREATE TABLE IF NOT EXISTS approval_event (
+    id INTEGER PRIMARY KEY, draft INTEGER NOT NULL REFERENCES draft,
+    channel TEXT NOT NULL, target TEXT NOT NULL, event_id TEXT NOT NULL,
+    action TEXT NOT NULL, body TEXT NOT NULL, fingerprint TEXT NOT NULL,
+    state TEXT NOT NULL, at TEXT NOT NULL, batch INTEGER REFERENCES batch, error TEXT,
+    UNIQUE (channel,target,event_id));
+CREATE TABLE IF NOT EXISTS send_attempt (
+    draft INTEGER PRIMARY KEY REFERENCES draft, idempotency_key TEXT NOT NULL UNIQUE,
+    state TEXT NOT NULL, result TEXT, error TEXT, updated_at TEXT NOT NULL);
 """
 
 

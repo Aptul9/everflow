@@ -1,5 +1,6 @@
 """Triage gate: a small model classifies a batch. It has no tools and never acts."""
 import json
+import math
 import re
 import subprocess
 import time
@@ -69,8 +70,9 @@ def ask(cfg, text):
             return _post(route, body)
         except urllib.error.HTTPError as e:
             # 429: this plan's window is spent; 529: the model is overloaded. Either way the next plan may answer.
-            if e.code not in (429, 529) or n == len(t['routes']) - 1:
-                raise RuntimeError('triage on %s: HTTP %d %s' % (route['provider'], e.code, e.read()[:300])) from None
+            with e:
+                if e.code not in (429, 529) or n == len(t['routes']) - 1:
+                    raise RuntimeError('triage on %s: HTTP %d %s' % (route['provider'], e.code, e.read()[:300])) from None
 
 
 def _post(route, body):
@@ -94,19 +96,31 @@ def _post(route, body):
 
 
 def parse(text, candidate_ids):
-    found = re.search(r'\{.*\}', text, re.S)
-    if not found:
-        raise ValueError('triage answer has no JSON object: %r' % text[:200])
-    d = json.loads(found.group(0))
+    text = text.strip()
+    fenced = re.fullmatch(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.S)
+    d = json.loads(fenced.group(1) if fenced else text)
+    if not isinstance(d, dict):
+        raise ValueError('triage answer must be a JSON object')
+    if any(type(d.get(k)) is not bool for k in ('relevant', 'assigned_to_me')):
+        raise ValueError('triage relevance and assignment must be booleans')
     action = d.get('action')
     if action not in ACTIONS:
         raise ValueError('triage action %r' % action)
+    if action in ('start', 'attach') and not (d['relevant'] and d['assigned_to_me']):
+        raise ValueError('triage action contradicts relevance or assignment')
+    confidence = d.get('confidence')
+    if type(confidence) not in (int, float) or not math.isfinite(confidence):
+        raise ValueError('triage confidence must be a finite number')
+    if not isinstance(d.get('reason'), str) or not d['reason'].strip():
+        raise ValueError('triage reason must be nonempty text')
     work_item = d.get('work_item')
+    if work_item is not None and not isinstance(work_item, str):
+        raise ValueError('triage work_item must be a candidate id or null')
     return {
-        'relevant': bool(d.get('relevant')),
-        'assigned_to_me': bool(d.get('assigned_to_me')),
+        'relevant': d['relevant'],
+        'assigned_to_me': d['assigned_to_me'],
         'action': action,
         'work_item': work_item if work_item in candidate_ids else None,
         'reason': str(d.get('reason') or '')[:500],
-        'confidence': min(max(float(d.get('confidence') or 0), 0.0), 1.0),
+        'confidence': min(max(float(confidence), 0.0), 1.0),
     }

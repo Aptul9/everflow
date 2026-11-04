@@ -124,6 +124,7 @@ def watch(state, poll, once, seen):
             for item in folder.Items.Restrict(since_filter(sent, state['since'] - OVERLAP)):
                 emit(item, account, mine, sent, seen)
         state['since'] = started
+        print(json.dumps({'source': 'outlook', 'checkpoint': iso(started)}), flush=True)
         if once:
             return
         deadline = time.time() + poll

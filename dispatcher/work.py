@@ -62,6 +62,9 @@ def _finish(db, batch, state, error=None):
 
 def take_batch(db, conversation):
     with db:
+        db.execute('BEGIN IMMEDIATE')
+        if db.execute("SELECT 1 FROM batch WHERE conversation=? AND state='running'", (conversation,)).fetchone():
+            return None, []
         batch = db.execute("INSERT INTO batch (conversation, state, created_at) VALUES (?, 'running', ?)",
                            (conversation, now())).lastrowid
         db.execute('UPDATE message SET batch=? WHERE conversation=? AND batch IS NULL', (batch, conversation))
@@ -98,13 +101,21 @@ def gate(cfg, db, conv, batch, msgs):
     cands = candidates(cfg, db, msgs, clients)
     with TRIAGE_SLOTS:
         raw = triage.ask(cfg, triage.prompt(conv, clients, msgs, cands))
-    t = triage.parse(raw, [c['id'] for c in cands])
+    invalid = None
+    try:
+        t = triage.parse(raw, [c['id'] for c in cands])
+    except ValueError as e:
+        invalid = e
+        t = {'relevant': False, 'assigned_to_me': False, 'action': 'error', 'work_item': None,
+             'reason': str(e)[:500], 'confidence': 0.0}
     with db:
         db.execute('INSERT INTO triage_log (batch, conversation, at, relevant, assigned_to_me, action, work_item, '
                    'reason, confidence, candidates, raw) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
                    (batch, conv['id'], now(), t['relevant'], t['assigned_to_me'], t['action'], t['work_item'],
                     t['reason'], t['confidence'], json.dumps([c['id'] for c in cands]), raw))
     log.info('batch %d triage %s %.2f %s: %s', batch, t['action'], t['confidence'], t['work_item'], t['reason'])
+    if invalid:
+        raise invalid
     if t['action'] in ('fyi', 'ignore'):
         _finish(db, batch, t['action'])
         return None, []
@@ -242,6 +253,8 @@ def collect(cfg, db, batch):
     # Polled rather than one long wait call: OpenChamber's proxy is not meant to hold a request for a whole turn.
     lost = 0
     while True:
+        if cfg.get('_stop') is not None and cfg['_stop'].is_set():
+            return
         found = oc.turn(work['session_id'], b['prompt_id'])
         if found and found[1]:
             text, outcome = found
@@ -253,15 +266,18 @@ def collect(cfg, db, batch):
                     b['prompt_id'], work['session_id']))
         time.sleep(POLL_SECONDS)
     status = STATUS_RX.findall(text)
-    drafts = DRAFT_RX.findall(text)
+    drafts = DRAFT_RX.findall(text) if outcome == 'succeeded' else []
     with db:
         db.execute('UPDATE work_item SET status_line=COALESCE(?, status_line), last_activity_at=? WHERE id=?',
                    (status[-1][:300] if status else None, now(), work['id']))
         for target, body in drafts:
             store_draft(db, work['id'], target, batch, body.strip())
         db.execute('UPDATE batch SET state=?, error=?, done_at=? WHERE id=?',
-                   ('failed' if outcome == 'failed' else 'done', None if outcome != 'failed' else 'turn failed',
-                    now(), batch))
+                   ('done' if outcome == 'succeeded' else 'failed',
+                    None if outcome == 'succeeded' else 'turn %s' % outcome,
+                     now(), batch))
+        db.execute("UPDATE approval_event SET state=? WHERE batch=? AND state IN ('running','delivering')",
+                   ('done' if outcome == 'succeeded' else 'failed', batch))
     log.info('batch %d %s: %d draft(s), status %r', batch, outcome, len(drafts), status[-1] if status else None)
 
 
@@ -270,15 +286,22 @@ def store_draft(db, work, target, batch, body):
     target = str(target).strip().strip('"\'')
     linked = db.execute("SELECT c.id, c.native_id FROM conversation c JOIN work_item_conversation l "
                         "ON l.conversation=c.id WHERE l.work_item=? AND l.kind='attach'", (work,)).fetchall()
-    conversation = next((r['id'] for r in linked if target in (str(r['id']), r['native_id'])), None)
-    status = 'pending' if conversation else 'no_target'
-    if conversation and db.execute('SELECT 1 FROM message WHERE conversation=? AND sender_is_me=0 AND '
-                                   '(batch IS NULL OR batch>?)', (conversation, batch)).fetchone():
-        status = 'stale'  # the other side wrote again while this draft was being written
-    if conversation:
-        db.execute("UPDATE draft SET status='superseded', updated_at=? WHERE conversation=? AND status='pending'",
-                   (now(), conversation))
+    matches = {r['id'] for r in linked if target in (str(r['id']), r['native_id'])}
+    conversation = next(iter(matches)) if len(matches) == 1 else None
     key = hashlib.sha256(('%s|%s|%s|%s' % (work, conversation, batch, body)).encode('utf-8')).hexdigest()
+    if db.execute('SELECT 1 FROM draft WHERE idempotency_key=?', (key,)).fetchone():
+        return
+    status = 'pending' if conversation else 'no_target'
+    if conversation:
+        newer = db.execute('SELECT sender_is_me FROM message WHERE conversation=? AND '
+                           '(batch IS NULL OR batch>?) ORDER BY sent_at DESC, id DESC LIMIT 1',
+                           (conversation, batch)).fetchone()
+        if newer:
+            status = 'dropped' if newer['sender_is_me'] else 'stale'
+    if conversation:
+        db.execute("UPDATE draft SET status='superseded', updated_at=? WHERE conversation=? "
+                   "AND status IN ('pending','approved','revision_requested')",
+                   (now(), conversation))
     db.execute('INSERT OR IGNORE INTO draft (work_item, conversation, batch, text, status, idempotency_key, '
                'created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)',
                (work, conversation, batch, body, status, key, now(), now()))
@@ -289,6 +312,8 @@ def run(cfg, conversation):
     batch = None
     try:
         batch, msgs = take_batch(db, conversation)
+        if batch is None:
+            return
         if not msgs:
             return _finish(db, batch, 'empty')
         conv = _row(db, 'conversation', conversation)

@@ -35,7 +35,8 @@ class Opencode:
                                   timeout=30) as r:
                 r.read()
         except urllib.error.HTTPError as e:
-            raise RuntimeError('OpenChamber sign-in: HTTP %d %s' % (e.code, e.read()[:200])) from None
+            with e:
+                raise RuntimeError('OpenChamber sign-in: HTTP %d %s' % (e.code, e.read()[:200])) from None
         self.signed_in = True
 
     def call(self, method, path, body=None, timeout=60):
@@ -50,9 +51,11 @@ class Opencode:
                 return json.loads(raw) if raw else None
             except urllib.error.HTTPError as e:
                 if e.code == 401 and self.openchamber and not attempt:
+                    e.close()
                     self.sign_in()  # the OpenChamber cookie lasts about 12 hours
                     continue
-                raise RuntimeError('opencode %s %s: HTTP %d %s' % (method, path, e.code, e.read()[:300])) from None
+                with e:
+                    raise RuntimeError('opencode %s %s: HTTP %d %s' % (method, path, e.code, e.read()[:300])) from None
 
     def create(self, title, directory, model=None, metadata=None):
         body = {'title': title, 'location': {'directory': directory}, 'metadata': metadata or {},
@@ -85,7 +88,9 @@ class Opencode:
             for m in page['data']:
                 if m.get('id') == prompt_id:
                     return '\n'.join(reversed(texts)), outcome
-                if m.get('type') == 'idle' and outcome is None:
+                if m.get('type') == 'user':
+                    texts, outcome = [], None
+                elif m.get('type') == 'idle' and outcome is None:
                     outcome = m.get('outcome')
                 elif m.get('type') == 'assistant':
                     texts.append('\n'.join(c['text'] for c in m.get('content') or [] if c.get('type') == 'text'))

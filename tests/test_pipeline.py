@@ -92,7 +92,8 @@ class Pipeline(unittest.TestCase):
         ok = triage.parse('```json\n{"relevant": true, "assigned_to_me": true, "action": "attach", '
                           '"work_item": "wi:1", "reason": "same deploy", "confidence": 1.4}\n```', ['wi:1'])
         self.assertEqual((ok['action'], ok['work_item'], ok['confidence']), ('attach', 'wi:1', 1.0))
-        self.assertIsNone(triage.parse('{"action": "start", "work_item": "wi:9"}', ['wi:1'])['work_item'])
+        self.assertIsNone(triage.parse('{"action":"start","relevant":true,"assigned_to_me":true,'
+                                      '"confidence":0.9,"reason":"new task","work_item":"wi:9"}', ['wi:1'])['work_item'])
         with self.assertRaises(ValueError):
             triage.parse('{"action": "send"}', [])
 
@@ -174,34 +175,24 @@ class Pipeline(unittest.TestCase):
         self.assertEqual([tuple(r) for r in rows], [('Hello', 1, 'pending'), ('Lost', None, 'no_target')])
         self.assertIn('Local time now: ', work.next_prompt(work._row(self.db, 'conversation', 1), [], []))
 
-    def test_relay_watch_reads_new_then_only_changed_chats(self):
+    def test_relay_watch_reads_saved_messages_and_deduplicates(self):
         since = watch_teamsrelay.parse_iso('2026-11-04T10:00:00Z')
-        chats = {'A': [{'id': '1', 'time': '2026-11-04T09:00:00.000Z', 'author': 'Bob', 'text': 'old'},
-                       {'id': '2', 'time': '2026-11-04T11:00:00.000Z', 'author': 'Bob', 'text': 'new'}],
-                 'B': [{'id': '3', 'time': '2026-11-01T09:00:00.000Z', 'author': 'Eve', 'text': 'x'}]}
-        rows = {'A': ('11:00', 'new'), 'B': ('11/1', 'x')}
-        reads = []
-
-        class Fake:
-            def tool(self, name, args):
-                if name == 'list_accounts':
-                    return {'accounts': [{'slot': 2, 'email': 'Me@MSCcruises.com'}, {'slot': 9, 'stopped': True}]}
-                if name == 'list_chats':
-                    return {'chats': [{'name': n, 'last': rows[n][0], 'preview': rows[n][1]} for n in chats]}
-                reads.append(args['chat'])
-                return {'messages': chats[args['chat']]}
-
-        out, state = [], {'rows': {}, 'recheck': {}, 'seen': set()}
-        watch_teamsrelay.watch_round(Fake(), since, state, out.append)
-        self.assertEqual([(r['message_id'], r['account'], r['sent_at']) for r in out],
-                         [('me@msccruises.com/A;messageid=2', 'me@msccruises.com', '2026-11-04T11:00:00.000Z')])
-        reads.clear()
-        watch_teamsrelay.watch_round(Fake(), since, state, out.append)
-        self.assertEqual(reads, [])  # no list row changed: no chat read
-        chats['B'].append({'id': '4', 'time': '2026-11-04T12:00:00.000Z', 'author': 'Eve', 'text': 'hi'})
-        rows['B'] = ('12:00', 'hi')
-        watch_teamsrelay.watch_round(Fake(), since, state, out.append)
-        self.assertEqual((reads, out[-1]['text'], len(out)), (['B'], 'hi', 2))
+        relay = mock.Mock()
+        account = {'slot': 2, 'email': 'me@msccruises.com', 'scan_at': 1793830000, 'messages': [
+            {'chat': 'A', 'id': '1', 'time': '2026-11-04T09:00:00.000Z', 'author': 'Bob', 'text': 'old'},
+            {'chat': 'A', 'id': '2', 'time': '2026-11-04T11:00:00.000Z', 'author': 'Bob', 'text': 'new'}]}
+        relay.snapshot.return_value = {'accounts': [account], 'errors': []}
+        out, state = [], {}
+        watch_teamsrelay.watch_round(relay, since, state, out.append)
+        watch_teamsrelay.watch_round(relay, since, state, out.append)
+        messages = [r for r in out if 'message_id' in r]
+        self.assertEqual([(r['message_id'], r['account']) for r in messages],
+                         [('me@msccruises.com/A;messageid=2', 'me@msccruises.com')])
+        self.assertIn('checkpoint', out[-1])
+        account['messages'].append({'chat': 'B', 'id': '4', 'time': '2026-11-04T12:00:00.000Z',
+                                     'author': 'Eve', 'text': 'hi'})
+        watch_teamsrelay.watch_round(relay, since, state, out.append)
+        self.assertEqual([r['text'] for r in out if 'message_id' in r], ['new', 'hi'])
 
     def test_turn_collects_text_after_prompt(self):
         pages = [{'data': [{'type': 'idle', 'id': 'i', 'outcome': 'succeeded'},

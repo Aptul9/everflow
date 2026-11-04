@@ -1,5 +1,8 @@
 # Paths are relative to this file.
 
+[mode]
+shadow = true
+
 [db]
 path = "data/dispatcher.db"
 
@@ -32,6 +35,15 @@ gchat = 120
 # Catch-up for a source with no cursor yet.
 lookback_minutes = 0
 
+[approval]
+# Observe session/self-chat decisions only after shadow review. Silence never authorizes delivery.
+enabled = false
+notes_account = ""
+
+[delivery]
+# Shadow mode: even an explicit approval cannot invoke an outbound transport.
+enabled = false
+
 [[watchers]]
 source = "outlook"
 command = ["{python}", "-m", "dispatcher.watch_outlook"]
@@ -41,8 +53,7 @@ command = ["{python}", "-m", "dispatcher.watch_outlook"]
 source = "teams"
 command = ["{python}", "C:/Users/Antonio/Downloads/teams-mcp/teams_mcp.py", "watch"]
 
-# Teams accounts held by the teamsrelay server (Npo, MSC, Zurich, AGAP2, ...): read tools of its /mcp only.
-# Token: data/teamsrelay.token (MCP_TOKEN of /opt/teamsrelay/.env on oe-vm) or INBOX_TEAMSRELAY_TOKEN.
+# Teams accounts held by the relay: read-only SSH snapshots of its saved stores. No MCP or account changes.
 [[watchers]]
 source = "teamsrelay"
 command = ["{python}", "-m", "dispatcher.watch_teamsrelay"]
