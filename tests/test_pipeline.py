@@ -185,7 +185,27 @@ class Pipeline(unittest.TestCase):
             with open(path, 'w', encoding='utf-8') as f:
                 f.write('---\n%s\n---\n\n# t\n' % head)
         self.assertEqual(vault.client_notes(self.tmp.name, ['msc']),
-                         ['02_Areas/msc/msc.md', '02_Areas/msc/tickets/concierge.md'])
+                          ['02_Areas/msc/msc.md', '02_Areas/msc/tickets/concierge.md'])
+
+    def test_vault_cards_include_nested_project_workflows(self):
+        paths = ['01_Projects/roar/azure-mail-tracking-log.md', '01_Projects/roar/_closed/old.md',
+                 '01_Projects/.unison.temporary/roar.md']
+        for rel in paths:
+            path = os.path.join(self.tmp.name, *rel.split('/'))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'w', encoding='utf-8') as stream:
+                stream.write('---\nstatus: active\n---\n\n# Azure mail workflow\n\n## Status\nCanonical workbook only.\n')
+        found = vault.client_notes(self.tmp.name, ['roar'])
+        self.assertIn(paths[0], found)
+        self.assertNotIn(paths[1], found)
+        self.assertNotIn(paths[2], found)
+
+    def test_worker_prompt_requires_canonical_files_and_shared_write_approval(self):
+        self.assertIn('canonical path', work.RULES)
+        self.assertIn('do not substitute', work.RULES)
+        self.assertIn('Client-synced', work.RULES)
+        app.ingest(self.db, line())
+        self.assertIn('canonical path', work.next_prompt(work._row(self.db, 'conversation', 1), [], []))
 
     def test_correlate(self):
         app.ingest(self.db, line())

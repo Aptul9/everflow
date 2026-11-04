@@ -3,6 +3,10 @@
 [mode]
 shadow = true
 
+[dispatch]
+# Observe-only containment: ingest sources, but do not start/recover work or consume approval controls.
+enabled = false
+
 [db]
 path = "data/dispatcher.db"
 

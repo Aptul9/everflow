@@ -29,6 +29,11 @@ POLL_SECONDS = 10
 RULES = """This session was opened by the inbox dispatcher, in shadow mode, for messages Antonio received. \
 Work it under your normal rules: find out, do the part that is yours, keep the vault note current. \
 Tier 2 and anything another person will read still go to Antonio, here in this session.
+Before editing any tracker or document, search the vault for its file name and read its project workflow, \
+including Traps and destination rules. Use the canonical path exactly. If that file is absent, report blocked; \
+do not substitute a synced, stale or similarly named copy.
+Client-synced and shared documents are outward-facing, even when their local paths are writable. \
+Propose exact changes here and wait for Antonio's approval before editing them.
 Nothing leaves this session. Send, reply, forward and calendar tools are denied, and no message goes out by \
 any other route (no script, no COM, no browser). The dispatcher sends only text Antonio approved.
 Antonio may be at the keyboard: never start, focus or close a desktop app (Outlook, Teams, browser). If one you \
@@ -219,9 +224,7 @@ def next_prompt(conv, msgs, soft):
     if soft:
         lines.append('Possibly related, not routed here (soft link): ' + '; '.join(
             '#%d "%s"' % (s['id'], s['title']) for s in soft))
-    return '\n'.join(lines + ['', messages_block(conv, msgs), '',
-                              'Same rules as before: a DRAFT block if the other side needs an answer, '
-                              'never a meeting, and the STATUS line at the end.'])
+    return '\n'.join(lines + ['', RULES, '', messages_block(conv, msgs)])
 
 
 def client(cfg):

@@ -45,13 +45,15 @@ def client_notes(vault, keywords, limit=12):
             rel = path.relative_to(vault).as_posix()
             if rel not in found and not CLOSED.search(_head(path)):
                 notes[rel] = path.stat().st_mtime
-    for path in (vault / '01_Projects').glob('*.md'):
+    for path in (vault / '01_Projects').rglob('*.md'):
         name = path.name.lower()
-        if _skipped(name):
+        parts = path.relative_to(vault / '01_Projects').parts
+        if _skipped(name) or any(p.startswith(('_', '.')) for p in parts[:-1]):
             continue
+        rel = path.relative_to(vault).as_posix()
         head = _head(path)
-        if CLOSED.search(head) or not any(k in name or k in head.lower() for k in keywords):
+        if CLOSED.search(head) or not any(k in rel.lower() or k in head.lower() for k in keywords):
             continue
-        notes['01_Projects/' + path.name] = path.stat().st_mtime
+        notes[rel] = path.stat().st_mtime
     found += [rel for rel, _ in sorted(notes.items(), key=lambda kv: kv[1], reverse=True)]
     return found[:limit]

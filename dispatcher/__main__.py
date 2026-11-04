@@ -192,13 +192,16 @@ def _run(cfg):
     db = connect(cfg['db']['path'])
     lines, stop, processes = queue.Queue(), threading.Event(), {}
     cfg['_stop'] = stop
-    resumed = work.recover(cfg, db)
+    automatic_work = cfg.get('dispatch', {}).get('enabled') is True
+    resumed = work.recover(cfg, db) if automatic_work else []
+    if not automatic_work:
+        log.info('observe-only: source ingestion active, automatic work and approval handling paused')
     if resumed:
         log.info('collecting replies of batches delivered before the restart: %s', resumed)
     stop_file = Path(cfg['db']['path'] + '.stop')
     stop_file.unlink(missing_ok=True)
     watchers = []
-    if cfg.get('approval', {}).get('enabled') is True:
+    if automatic_work and cfg.get('approval', {}).get('enabled') is True:
         thread = threading.Thread(target=approval.loop, args=(cfg, stop), daemon=True, name='approval')
         watchers.append(thread)
         thread.start()
@@ -220,19 +223,19 @@ def _run(cfg):
                         m = json.loads(line)
                         if not isinstance(m, dict) or m.get('source') != source:
                             raise ValueError('source mismatch')
-                        if not approval.notes_control(cfg, db, m):
+                        if not automatic_work or not approval.notes_control(cfg, db, m):
                             ingest(db, m)
                     except (ValueError, KeyError, TypeError) as e:
                         log.warning('bad %s watcher line: %s', source, e)
             except queue.Empty:
                 pass
-            for conversation in due(cfg, db):
+            for conversation in (due(cfg, db) if automatic_work else []):
                 if conversation in runs and runs[conversation].is_alive():
                     continue
                 runs[conversation] = threading.Thread(target=work.run, args=(cfg, conversation), daemon=True)
                 runs[conversation].start()
             runs = {c: t for c, t in runs.items() if t.is_alive()}
-            if time.time() - archived_at > 600:
+            if automatic_work and time.time() - archived_at > 600:
                 archived_at = time.time()
                 work.archive_idle(cfg, db)
     except KeyboardInterrupt:
@@ -250,6 +253,7 @@ def _run(cfg):
 
 def status(cfg, limit):
     db = connect(cfg['db']['path'])
+    print('dispatch   ' + ('enabled' if cfg.get('dispatch', {}).get('enabled') is True else 'observe-only (work paused)'))
     for table, column in (('batch', 'state'), ('work_item', 'status'), ('draft', 'status')):
         counts = db.execute('SELECT %s, COUNT(*) FROM %s GROUP BY 1' % (column, table)).fetchall()
         print('%-10s %s' % (table, ', '.join('%s %d' % (r[0], r[1]) for r in counts) or '-'))

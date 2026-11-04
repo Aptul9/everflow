@@ -1,6 +1,6 @@
 # inbox-dispatcher
 
-Incoming Outlook mail and Teams messages (Google Chat to follow) start agent work in opencode, one session per work item. Phase 1 is shadow mode: messages are triaged, correlated and worked, replies are drafted, nothing is sent.
+Incoming Outlook mail and Teams messages (Google Chat to follow) can start work in opencode, one session per work item. The checked-in configuration currently observes sources only: incoming data is stored, automatic work is paused, and no replies are sent.
 
 ## Pipeline
 
@@ -34,7 +34,11 @@ Watchers in `config.toml`:
 
 ## Shadow controls
 
-The checked-in configuration has `mode.shadow = true`, `approval.enabled = false`, and `delivery.enabled = false`. Both an explicit `mode.shadow = false` and a literal `delivery.enabled = true` are required before any reply transport can run. Session send tools stay denied regardless of these dispatcher switches.
+The checked-in configuration has `dispatch.enabled = false`, `mode.shadow = true`, `approval.enabled = false`, and `delivery.enabled = false`. Only a literal `dispatch.enabled = true` starts or recovers automatic work, handles approvals or archives sessions. Missing or string flags stay observe-only. Source ingestion continues independently.
+
+Automatic work is held after a worker selected a forbidden stale corporate OneDrive workbook instead of its canonical local tracker. The nested project workflow had been omitted from candidate discovery. Recursive project discovery and canonical-path/shared-write instructions are now included on every turn. These instructions are not a filesystem sandbox. Existing user-controlled sessions retain their configured tools. Keep automatic work off until the incident and write boundaries have been reviewed.
+
+Both an explicit `mode.shadow = false` and a literal `delivery.enabled = true` are required before any reply transport can run. Session send tools stay denied regardless of these dispatcher switches. Those mail-send gates do not govern shared document writes.
 
 `draft N` shows exact text, receiving account and target conversation for local inspection. `reply N "Make it shorter"` records a revision request. Local CLI input cannot approve delivery. Approval comes from a direct user message in the work-item session or the configured own `48:notes` chat. Session presentation binds the actual completed assistant draft message id and timestamp, not the observer's polling time. A bare `ok` requires one unambiguous shown draft; `ok N` names one. A later text or target change invalidates consent. The self-chat account must be selected explicitly. Observation and self-chat notification remain off during shadow mode.
 
