@@ -1,0 +1,75 @@
+# Paths are relative to this file.
+
+[db]
+path = "data/dispatcher.db"
+
+[vault]
+path = "C:/Users/Antonio/OneDrive/Documenti/Vault"
+
+[opencode]
+# Empty url: the shared opencode service, port and password from ~/.config/opencode/service.json.
+# INBOX_OPENCODE_PASSWORD overrides the password.
+url = ""
+directory = "C:/Users/Antonio/OneDrive/Documenti/Vault"
+model = "meridian-notarify/claude-opus-5-5"
+
+[triage]
+# An opencode provider id: base URL, key and headers are read from ~/.config/opencode/opencode.jsonc.
+provider = "meridian-notarify"
+model = "claude-haiku-5-5"
+min_confidence = 0.75
+
+[windows]
+# Seconds a conversation stays quiet before its batch runs. Floors from the design: chat 120, email 300.
+outlook = 300
+teams = 120
+gchat = 120
+
+[start]
+# Catch-up for a source with no cursor yet.
+lookback_minutes = 0
+
+[[watchers]]
+source = "outlook"
+command = ["{python}", "-m", "dispatcher.watch_outlook"]
+
+# A receiving account names its client; for an account that is no client's (bandpey), the sender
+# domains and the addresses quoted in the text decide. Keywords pick the client's vault notes.
+[clients.msc]
+domains = ["msccruises.com"]
+keywords = ["msc"]
+
+[clients.roar]
+accounts = ["antonio.maritato@roarinc.com"]
+domains = ["roarinc.com"]
+keywords = ["roar"]
+
+[clients.notarify]
+accounts = ["antonio.maritato@notarify.io"]
+domains = ["notarify.io"]
+keywords = ["notarify", "notaridrive", "coin"]
+
+[clients.serco]
+accounts = ["antonio.maritato@serco.eu"]
+domains = ["serco.eu", "serco.com"]
+keywords = ["serco"]
+
+[clients.avvale]
+domains = ["avvale.com", "ariston.com"]
+keywords = ["avvale", "ariston"]
+
+[clients.bip]
+domains = ["bip-group.com", "snam.it"]
+keywords = ["bip", "dmm", "snam"]
+
+[clients.vection]
+domains = ["vection-technologies.com", "ext.vection-technologies.com", "prysmian.com"]
+keywords = ["vection", "prysman"]
+
+[clients.tesco]
+domains = ["tesco.com"]
+keywords = ["tesco"]
+
+[clients.itv]
+domains = ["itv.com"]
+keywords = ["itv"]
