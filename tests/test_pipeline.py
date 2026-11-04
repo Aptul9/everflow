@@ -201,8 +201,11 @@ class Pipeline(unittest.TestCase):
                   'cursor': {'next': 'c'}},
                  {'data': [{'type': 'user', 'id': 'msg_p'}, {'type': 'assistant', 'id': 'old'}], 'cursor': {}}]
         oc = Opencode('http://x', 'p')
-        with mock.patch.object(oc, 'call', side_effect=pages):
+        with mock.patch.object(oc, 'call', side_effect=pages) as calls:
             self.assertEqual(oc.turn('ses', 'msg_p'), ('one\ntwo', 'succeeded'))
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(calls.call_args_list[1].args[1]).query)
+        self.assertIn('cursor', query)
+        self.assertNotIn('order', query)
         with mock.patch.object(oc, 'call', return_value={'data': [{'type': 'user', 'id': 'other'}], 'cursor': {}}):
             self.assertIsNone(oc.turn('ses', 'msg_p'))
 
@@ -244,7 +247,7 @@ class Pipeline(unittest.TestCase):
         prompts = []
         with mock.patch.object(triage, 'ask', return_value=answer) as ask, \
                 mock.patch.object(Opencode, 'create', return_value='ses_1') as create, \
-                mock.patch.object(Opencode, 'prompt', side_effect=lambda s, t: prompts.append(t) or 'msg_1'), \
+                mock.patch.object(Opencode, 'prompt', side_effect=lambda s, t, prompt_id=None, **kw: prompts.append(t) or prompt_id), \
                 mock.patch.object(Opencode, 'turn', return_value=(REPLY, 'succeeded')):
             work.run(self.cfg, 1)
         self.assertIn('note:01_Projects/roar-k8s.md', ask.call_args[0][1])
@@ -261,7 +264,7 @@ class Pipeline(unittest.TestCase):
         app.ingest(self.db, line(message_id='<2>', text='Thanks'))
         turns = [None, ('', None), ('ok\nSTATUS: closed', 'succeeded')]
         with mock.patch.object(triage, 'ask') as ask, \
-                mock.patch.object(Opencode, 'prompt', side_effect=lambda s, t: prompts.append(t) or 'msg_2'), \
+                mock.patch.object(Opencode, 'prompt', side_effect=lambda s, t, prompt_id=None, **kw: prompts.append(t) or prompt_id), \
                 mock.patch.object(Opencode, 'queued', return_value=['msg_2']), \
                 mock.patch.object(Opencode, 'turn', side_effect=turns) as turn, \
                 mock.patch.object(work, 'POLL_SECONDS', 0):

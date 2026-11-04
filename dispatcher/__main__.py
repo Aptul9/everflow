@@ -27,13 +27,33 @@ def ingest(db, m):
     """Store one watcher line. Returns False for a message already stored."""
     if not isinstance(m, dict):
         raise ValueError('watcher line must be an object')
+    covered = m.get('accounts')
+    if covered is not None:
+        if not isinstance(covered, list) or any(not isinstance(a, str) or not a or a == '*' for a in covered):
+            raise ValueError('invalid source account coverage')
+        covered = {a.lower() for a in covered}
+        if 'checkpoint' not in m:
+            floor = db.execute('SELECT MIN(since) FROM cursor WHERE source=?', (m['source'],)).fetchone()[0]
+            if not floor:
+                raise ValueError('account inventory requires an initial source cursor')
+            with db:
+                db.executemany('INSERT OR IGNORE INTO cursor VALUES (?,?,?)',
+                               [(m['source'], a, floor) for a in sorted(covered)])
+            return True
     if 'checkpoint' in m:
         stamp = parse(m['checkpoint'])
         if not m.get('source') or stamp.tzinfo is None or stamp > dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=5):
             raise ValueError('invalid source checkpoint')
         with db:
-            db.execute("INSERT INTO cursor VALUES (?, '*', ?) ON CONFLICT (source,account) "
-                       'DO UPDATE SET since=MAX(since,excluded.since)', (m['source'], iso(stamp)))
+            if m['source'] == 'teams' and not covered:
+                raise ValueError('Teams checkpoint requires complete account coverage')
+            known = {r[0].lower() for r in db.execute("SELECT account FROM cursor WHERE source=? AND account!='*'",
+                                                     (m['source'],))}
+            if covered is not None and known - covered:
+                raise ValueError('source checkpoint omitted known accounts: ' + ', '.join(sorted(known - covered)))
+            db.executemany('INSERT INTO cursor VALUES (?,?,?) ON CONFLICT (source,account) '
+                           'DO UPDATE SET since=MAX(since,excluded.since)',
+                           [(m['source'], a, iso(stamp)) for a in sorted((covered or set()) | {'*'})])
         return True
     if any(k not in m for k in REQUIRED):
         log.warning('watcher line without %s', [k for k in REQUIRED if k not in m])
@@ -59,9 +79,21 @@ def ingest(db, m):
             'sender_is_me, sent_at, text, attachments, ref, stored_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
             (m['source'], m['message_id'], conv, person, sender, m.get('sender_name'), bool(m['sender_is_me']),
              sent_at, m.get('text'), json.dumps(m.get('attachments') or []), json.dumps(m.get('ref') or {}),
-             now())).rowcount
+              now())).rowcount
         if not stored:
-            return False
+            previous = db.execute('SELECT * FROM message WHERE source=? AND message_id=?',
+                                  (m['source'], m['message_id'])).fetchone()
+            before = (previous['sender'], bool(previous['sender_is_me']), previous['sent_at'], previous['text'] or '',
+                      json.loads(previous['attachments'] or '[]'), json.loads(previous['ref'] or '{}').get('deleted', False))
+            after = (sender, bool(m['sender_is_me']), sent_at, m.get('text') or '', m.get('attachments') or [],
+                     (m.get('ref') or {}).get('deleted', False))
+            if previous['conversation'] != conv or before == after:
+                return False
+            # Source edits retain their native id. Requeue the changed version and invalidate prior drafts.
+            db.execute('UPDATE message SET person=?,sender=?,sender_name=?,sender_is_me=?,sent_at=?,text=?, '
+                       'attachments=?,ref=?,batch=NULL,stored_at=? WHERE id=?',
+                       (person, sender, m.get('sender_name'), bool(m['sender_is_me']), sent_at, m.get('text'),
+                        json.dumps(m.get('attachments') or []), json.dumps(m.get('ref') or {}), now(), previous['id']))
         # The cursor moves in the same transaction as the store, never before it.
         db.execute('INSERT INTO cursor (source, account, since) VALUES (?,?,?) ON CONFLICT (source, account) '
                    'DO UPDATE SET since=MAX(since, excluded.since)', (m['source'], m['account'], sent_at))
@@ -103,6 +135,8 @@ def due(cfg, db):
 def watcher_start(cfg, db, source):
     saved = db.execute("SELECT since FROM cursor WHERE source=? AND account='*'", (source,)).fetchone()
     oldest = saved[0] if saved else db.execute('SELECT MIN(since) FROM cursor WHERE source=?', (source,)).fetchone()[0]
+    if source == 'teams':
+        oldest = db.execute('SELECT MIN(since) FROM cursor WHERE source=?', (source,)).fetchone()[0]
     current = dt.datetime.now(dt.timezone.utc)
     start = max(parse(oldest), current - MAX_CATCH_UP) if oldest else (
         current - dt.timedelta(minutes=cfg['start']['lookback_minutes']))
@@ -119,6 +153,10 @@ def watcher(cfg, spec, lines, stop, processes):
             try:
                 start = watcher_start(cfg, db, spec['source'])
                 command = [sys.executable if c == '{python}' else c for c in spec['command']] + ['--since', iso(start)]
+                if spec['source'] in ('teams', 'outlook'):
+                    for account in db.execute("SELECT account FROM cursor WHERE source=? AND account!='*' ORDER BY account",
+                                              (spec['source'],)):
+                        command += ['--expected-account', account[0]]
                 log.info('%s watcher starting from %s', spec['source'], iso(start))
                 p = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, text=True, encoding='utf-8',
                                      errors='strict')
@@ -236,9 +274,8 @@ def retry(cfg, batch):
     db = connect(cfg['db']['path'])
     try:
         b = work._row(db, 'batch', batch)
-        if b and b['state'] in ('failed', 'interrupted') and b['delivered_at']:
-            with work.session_lock(b['work_item']):
-                work.collect(cfg, db, batch)
+        if b and b['state'] in ('failed', 'interrupted') and (b['delivered_at'] or b['prompt_id']):
+            work.resume_batch(cfg, db, batch)
             print('reply of batch %d collected without resending' % batch)
             return
         with db:

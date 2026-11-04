@@ -36,9 +36,11 @@ def _outlook():
 def read(cfg, db, d):
     if d['source'] not in ('outlook', 'teams'):
         raise RuntimeError('live source reread unavailable for %s; delivery held' % d['source'])
-    after = db.execute('SELECT MIN(sent_at) FROM message WHERE conversation=? AND batch=?',
-                       (d['conversation'], d['batch'])).fetchone()[0]
-    after = parse(after or d['created_at'])
+    # Revisions have no new source messages. Keep the conversation's original context boundary.
+    after = db.execute('SELECT MIN(sent_at) FROM message WHERE conversation=?', (d['conversation'],)).fetchone()[0]
+    if not after:
+        raise RuntimeError('source context unavailable; delivery held')
+    after = parse(after)
     if d['source'] == 'outlook':
         import pythoncom
         from . import watch_outlook as outlook
@@ -69,7 +71,8 @@ def read(cfg, db, d):
     me, messages = remote._jwt(account['ic3']).get('oid'), []
     for message in raw:
         kind = message.get('messagetype') or ''
-        if not kind or kind.startswith(module.WATCH_SKIP_TYPES) or (message.get('properties') or {}).get('deletetime'):
+        deleted = bool((message.get('properties') or {}).get('deletetime'))
+        if not deleted and (not kind or kind.startswith(module.WATCH_SKIP_TYPES)):
             continue
         stamp = remote.iso_ms(message.get('originalarrivaltime'))
         if stamp < cutoff:
@@ -80,8 +83,10 @@ def read(cfg, db, d):
                          'sender': sender, 'sender_name': message.get('imdisplayname') or '',
                          'sender_is_me': bool(me) and sender == me,
                          'sent_at': dt.datetime.fromtimestamp(stamp / 1000, dt.timezone.utc).isoformat(),
-                         'text': module.message_text(remote.norm_message(message, d['native_id'])),
-                         'attachments': [], 'ref': {'chat': d['native_id'], 'id': message['id'], 'account': d['account']}})
+                         'text': '' if deleted else module.message_text(remote.norm_message(message, d['native_id'])),
+                         'attachments': [] if deleted else [
+                             {'name': a['name'] or a['kind'], 'size': None} for a in module.extract_attachments(message)],
+                         'ref': {'chat': d['native_id'], 'id': message['id'], 'account': d['account'], 'deleted': deleted}})
     return {'complete': True, 'messages': messages}
 
 

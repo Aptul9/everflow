@@ -52,11 +52,14 @@ CREATE TABLE IF NOT EXISTS approval_event (
 CREATE TABLE IF NOT EXISTS send_attempt (
     draft INTEGER PRIMARY KEY REFERENCES draft, idempotency_key TEXT NOT NULL UNIQUE,
     state TEXT NOT NULL, result TEXT, error TEXT, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS prompt_submission (
+    batch INTEGER PRIMARY KEY REFERENCES batch, session_id TEXT NOT NULL, prompt_id TEXT NOT NULL UNIQUE,
+    text TEXT NOT NULL, state TEXT NOT NULL, updated_at TEXT NOT NULL, error TEXT);
 """
 
 
 def now():
-    return dt.datetime.now(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z')
 
 
 def parse(stamp):

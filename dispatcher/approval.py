@@ -36,7 +36,9 @@ def present(db, draft_id, channel, target, anchor, at=None):
     if channel not in ('session', 'notes', 'local') or (channel == 'session' and target != d['session_id']):
         raise ValueError('invalid approval channel or session')
     with db:
-        db.execute('INSERT OR IGNORE INTO approval_request VALUES (?,?,?,?,?,?)',
+        db.execute('INSERT INTO approval_request VALUES (?,?,?,?,?,?) ON CONFLICT(draft,channel,target) '
+                   'DO UPDATE SET anchor=excluded.anchor,shown_at=excluded.shown_at '
+                   "WHERE approval_request.anchor LIKE 'draft:%' AND approval_request.fingerprint=excluded.fingerprint",
                    (draft_id, channel, target, fingerprint(d), anchor, at or now()))
     return d
 
@@ -51,7 +53,7 @@ def decide(db, draft_id, *, channel, target, event_id, text, actor_is_me, at):
             return 'duplicate'
         shown = db.execute('SELECT * FROM approval_request WHERE draft=? AND channel=? AND target=?',
                            (draft_id, channel, target)).fetchone()
-        if not shown or event_id == shown['anchor'] or parse(at) < parse(shown['shown_at']):
+        if not shown or event_id == shown['anchor'] or parse(at) <= parse(shown['shown_at']):
             return 'rejected'
         if channel == 'session' and db.execute('SELECT 1 FROM batch WHERE prompt_id=?', (event_id,)).fetchone():
             return 'rejected'
@@ -65,6 +67,8 @@ def decide(db, draft_id, *, channel, target, event_id, text, actor_is_me, at):
         if explicit and int(explicit.group(1)) != draft_id:
             return 'rejected'
         approved = text.strip().casefold() == 'ok' or bool(explicit)
+        if approved and channel not in ('session', 'notes'):
+            return 'rejected'
         db.execute('INSERT INTO approval_event (draft,channel,target,event_id,action,body,fingerprint,state,at) '
                    'VALUES (?,?,?,?,?,?,?,?,?)', (draft_id, channel, target, event_id,
                     'approve' if approved else 'revise', text.strip(), shown['fingerprint'], 'pending', at))
@@ -107,31 +111,59 @@ def notes_control(cfg, db, message):
 def poll_sessions(cfg, db, oc):
     if cfg.get('approval', {}).get('enabled') is not True:
         return
-    rows = db.execute("SELECT d.id,w.session_id FROM draft d JOIN work_item w ON w.id=d.work_item "
-                      "WHERE d.status='pending' AND w.session_id IS NOT NULL").fetchall()
-    for row in rows:
-        present(db, row['id'], 'session', row['session_id'], 'draft:%d' % row['id'])
+    from .work import DRAFT_RX
+    rows = db.execute('SELECT d.*,w.session_id,c.native_id,b.prompt_id,b.created_at AS batch_created_at '
+                      'FROM draft d JOIN work_item w ON w.id=d.work_item JOIN conversation c ON c.id=d.conversation '
+                      "JOIN batch b ON b.id=d.batch WHERE d.status='pending' AND w.session_id IS NOT NULL "
+                      'AND b.prompt_id IS NOT NULL').fetchall()
     for session in {r['session_id'] for r in rows}:
-        since = db.execute("SELECT MIN(r.shown_at) FROM approval_request r JOIN draft d ON d.id=r.draft "
-                           "WHERE r.channel='session' AND r.target=? AND d.status='pending'", (session,)).fetchone()[0]
-        since_ms = parse(since).timestamp() * 1000
-        cursor, users = None, []
+        pending = [r for r in rows if r['session_id'] == session]
+        since_ms = min(parse(r['batch_created_at']).timestamp() * 1000 for r in pending)
+        cursor, messages = None, []
         for _ in range(100):
-            query = {'order': 'desc', 'limit': '50'}
+            query = {'limit': '50'}
             if cursor:
                 query['cursor'] = cursor
+            else:
+                query['order'] = 'desc'
             page = oc.call('GET', '/api/session/%s/message?%s' % (session, urllib.parse.urlencode(query)))
-            for message in page['data']:
-                if message.get('type') == 'user' and message.get('time', {}).get('created', 0) >= since_ms:
-                    users.append(message)
+            messages.extend(page['data'])
             cursor = (page.get('cursor') or {}).get('next')
             if not cursor or any(m.get('time', {}).get('created', 0) < since_ms for m in page['data']):
                 break
         else:
             raise RuntimeError('approval message pagination limit reached')
-        for message in reversed(users):
+        timeline = list(reversed(messages))
+        for row in pending:
+            start = next((i for i, m in enumerate(timeline) if m.get('id') == row['prompt_id']), None)
+            if start is None:
+                continue
+            turn = []
+            for message in timeline[start + 1:]:
+                if message.get('type') == 'user':
+                    break
+                turn.append(message)
+            outcomes = [m.get('outcome') for m in turn if m.get('type') == 'idle']
+            if not outcomes or outcomes[-1] != 'succeeded':
+                continue
+            for message in reversed(turn):
+                completed = message.get('time', {}).get('completed')
+                if message.get('type') != 'assistant' or not completed or not message.get('id', '').startswith('msg_'):
+                    continue
+                text = '\n'.join(c['text'] for c in message.get('content') or [] if c.get('type') == 'text')
+                matches = [(target.strip().strip('"\''), body.strip()) for target, body in DRAFT_RX.findall(text)]
+                if not any(target in (str(row['conversation']), row['native_id']) and body == row['text']
+                           for target, body in matches):
+                    continue
+                stamp = dt.datetime.fromtimestamp(completed / 1000, dt.timezone.utc)
+                present(db, row['id'], 'session', session, message['id'],
+                        at=stamp.isoformat(timespec='microseconds').replace('+00:00', 'Z'))
+                break
+        for message in timeline:
+            if message.get('type') != 'user':
+                continue
             stamp = dt.datetime.fromtimestamp(message['time']['created'] / 1000, dt.timezone.utc)
-            result = control(db, 'session', session, message['id'], message['text'], True,
+            result = control(db, 'session', session, message['id'], message.get('text') or '', True,
                              stamp.isoformat().replace('+00:00', 'Z'))
             if result != 'duplicate':
                 log.info('session %s decision %s: %s', session, message['id'], result)
@@ -154,8 +186,10 @@ def revise(cfg, db, event_id):
                 return
             if db.execute("SELECT 1 FROM batch WHERE work_item=? AND state='running'", (d['work_item'],)).fetchone():
                 return
-            batch = db.execute("INSERT INTO batch (conversation,work_item,state,created_at) VALUES (?,?,'running',?)",
-                               (d['conversation'], d['work_item'], now())).lastrowid
+            direct = event['channel'] == 'session'
+            batch = db.execute("INSERT INTO batch (conversation,work_item,state,created_at,prompt_id,delivered_at) "
+                               "VALUES (?,?,'running',?,?,?)", (d['conversation'], d['work_item'], now(),
+                                event['event_id'] if direct else None, now() if direct else None)).lastrowid
             db.execute("UPDATE approval_event SET batch=?,state='delivering' WHERE id=?", (batch, event_id))
         try:
             if event['channel'] == 'session':
@@ -165,7 +199,7 @@ def revise(cfg, db, event_id):
                         'Previous draft:\n%s\nAntonio\'s revision:\n%s\n'
                         'End with the replacement DRAFT block and STATUS line.' % (
                             d['id'], d['conversation'], work.local_time(), work.RULES, d['text'], event['body']))
-                prompt_id = work.client(cfg).prompt(d['session_id'], text)
+                prompt_id = work.submit(db, work.client(cfg), batch, d['work_item'], d['session_id'], text)
             with db:
                 db.execute('UPDATE batch SET prompt_id=?,delivered_at=? WHERE id=?', (prompt_id, now(), batch))
                 db.execute("UPDATE approval_event SET state='running' WHERE id=?", (event_id,))
@@ -186,10 +220,25 @@ def deliver(cfg, db, draft_id, reader, sender):
         if previous and previous['state'] in ('sent', 'sending', 'uncertain', 'checking'):
             return previous['state'] if previous['state'] != 'sending' else 'uncertain'
         d = draft(db, draft_id)
-        consent = db.execute("SELECT fingerprint FROM approval_event WHERE draft=? AND action='approve' "
-                             "AND state!='shadow' ORDER BY id DESC LIMIT 1", (draft_id,)).fetchone()
-        if d['status'] != 'approved' or not consent or consent['fingerprint'] != fingerprint(d):
-            return d['status'] if d['status'] != 'approved' else 'stale'
+        consent = db.execute('SELECT e.fingerprint,e.channel,e.target,e.at,r.anchor,r.shown_at FROM approval_event e '
+                             'JOIN approval_request r ON r.draft=e.draft AND r.channel=e.channel AND r.target=e.target '
+                             "WHERE e.draft=? AND e.action='approve' AND e.channel IN ('session','notes') "
+                             "AND e.state!='shadow' ORDER BY e.id DESC LIMIT 1",
+                             (draft_id,)).fetchone()
+        if d['status'] != 'approved':
+            return d['status']
+        if not consent:
+            return 'blocked'
+        if parse(consent['at']) <= parse(consent['shown_at']):
+            return 'blocked'
+        if consent['channel'] == 'session' and (consent['target'] != d['session_id'] or
+                                                not consent['anchor'].startswith('msg_')):
+            return 'blocked'
+        if consent['channel'] == 'notes' and consent['target'] != (
+                (cfg.get('approval', {}).get('notes_account') or '').lower() + '/48:notes'):
+            return 'blocked'
+        if consent['fingerprint'] != fingerprint(d):
+            return 'stale'
         db.execute('INSERT INTO send_attempt VALUES (?,?,\'checking\',NULL,NULL,?) ON CONFLICT(draft) '
                    "DO UPDATE SET state='checking',error=NULL,updated_at=excluded.updated_at",
                    (draft_id, d['idempotency_key'], now()))

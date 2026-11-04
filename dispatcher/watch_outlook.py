@@ -87,8 +87,8 @@ def emit(item, account, mine, sent, seen):
             return
         rec = record(item, account, mine, sent)
     except pythoncom.com_error as e:
-        log('skipped one item in %s: %s' % (account, e))
-        return
+        log('item read failed in %s: %s' % (account, e))
+        raise
     if rec['message_id'] in seen:
         return
     seen.add(rec['message_id'])
@@ -105,26 +105,29 @@ class Events:
 def watch(state, poll, once, seen):
     app = win32com.client.GetActiveObject('Outlook.Application')
     ns = app.GetNamespace('MAPI')
-    folders, stores = [], {}
-    for acct in ns.Accounts:
-        account = acct.SmtpAddress.lower()
-        try:
-            store = acct.DeliveryStore
-            folders += [(account, store.GetDefaultFolder(INBOX), False), (account, store.GetDefaultFolder(SENT), True)]
-            stores[store.StoreID] = account
-        except pythoncom.com_error as e:
-            log('no folders for %s: %s' % (account, e))
-    mine = set(stores.values())
     events = None if once else win32com.client.WithEvents(app, Events)  # the sink lives as long as this reference
-    log('watching %s from %s' % (', '.join(sorted(mine)), iso(state['since'])))
-    state.pop('failing', None)
     while True:
         started = dt.datetime.now(dt.timezone.utc)
+        accounts = list(ns.Accounts)
+        mine = {a.SmtpAddress.lower() for a in accounts}
+        expected = state.setdefault('accounts', set())
+        expected.update(mine)
+        if not mine or expected - mine:
+            raise RuntimeError('Outlook account coverage incomplete: ' + ', '.join(sorted(expected - mine)))
+        folders, stores = [], {}
+        for acct in accounts:
+            account, store = acct.SmtpAddress.lower(), acct.DeliveryStore
+            folders += [(account, store.GetDefaultFolder(INBOX), False), (account, store.GetDefaultFolder(SENT), True)]
+            stores[store.StoreID] = account
+        if state.get('listed') != mine:
+            log('watching %s from %s' % (', '.join(sorted(mine)), iso(state['since'])))
+            state['listed'] = set(mine)
         for account, folder, sent in folders:
             for item in folder.Items.Restrict(since_filter(sent, state['since'] - OVERLAP)):
                 emit(item, account, mine, sent, seen)
         state['since'] = started
-        print(json.dumps({'source': 'outlook', 'checkpoint': iso(started)}), flush=True)
+        state.pop('failing', None)
+        print(json.dumps({'source': 'outlook', 'checkpoint': iso(started), 'accounts': sorted(mine)}), flush=True)
         if once:
             return
         deadline = time.time() + poll
@@ -147,21 +150,24 @@ def main():
     ap.add_argument('--since', required=True, help='ISO time; UTC when it has no offset')
     ap.add_argument('--poll', type=int, default=60, help='seconds between re-scans')
     ap.add_argument('--once', action='store_true', help='catch up and exit')
+    ap.add_argument('--expected-account', action='append', default=[], help='persisted account whose coverage is required')
     args = ap.parse_args()
     sys.stdout.reconfigure(encoding='utf-8', newline='\n')
     pythoncom.CoInitialize()
-    state, seen = {'since': parse_iso(args.since)}, set()
+    state, seen = {'since': parse_iso(args.since), 'accounts': {a.lower() for a in args.expected_account}}, set()
     while True:
         try:
             watch(state, args.poll, args.once, seen)
             if args.once:
                 return
-        except pythoncom.com_error as e:
+        except (pythoncom.com_error, RuntimeError) as e:
             # Once per outage: a closed Outlook otherwise writes a line every 30 s all night. watch() clears it on attach.
             if str(e) != state.get('failing'):
                 log('Outlook not reachable (%s); retrying every 30 s. Classic Outlook must be open; '
                     'after a scripted start click into its window once.' % e)
             state['failing'] = str(e)
+            if args.once:
+                raise SystemExit(1)
             time.sleep(30)
 
 

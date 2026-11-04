@@ -65,9 +65,14 @@ class Opencode:
             body['model'] = {'providerID': provider, 'id': model_id}
         return self.call('POST', '/api/session', body)['data']['id']
 
-    def prompt(self, session, text):
+    def prompt(self, session, text, prompt_id=None, metadata=None):
         """Queue a turn. A busy session keeps it in its inbox until the running turn ends."""
-        out = self.call('POST', '/api/session/%s/prompt' % session, {'text': text, 'delivery': 'queue'})
+        body = {'text': text, 'delivery': 'queue'}
+        if prompt_id:
+            body['id'] = prompt_id
+        if metadata:
+            body['metadata'] = metadata
+        out = self.call('POST', '/api/session/%s/prompt' % session, body)
         return out['data']['id']
 
     def queued(self, session):
@@ -81,9 +86,11 @@ class Opencode:
         is idle again. None while the message is still waiting in the session's inbox."""
         texts, outcome, cursor = [], None, None
         while True:
-            q = {'order': 'desc', 'limit': '50'}
+            q = {'limit': '50'}
             if cursor:
                 q['cursor'] = cursor
+            else:
+                q['order'] = 'desc'
             page = self.call('GET', '/api/session/%s/message?%s' % (session, urllib.parse.urlencode(q)))
             for m in page['data']:
                 if m.get('id') == prompt_id:

@@ -4,8 +4,8 @@ Incoming Outlook mail and Teams messages (Google Chat to follow) start agent wor
 
 ## Pipeline
 
-1. A watcher per source talks to the source directly and prints one JSON line per message: `source`, `account`, `conversation_id`, `conversation_title`, `message_id`, `sender`, `sender_name`, `sender_is_me`, `sent_at`, `text`, `attachments`, `ref`. A completed scan also prints `{"source":"...","checkpoint":"<UTC time>"}` after its messages. The dispatcher owns the cursors and starts the watcher with `--since`. Source checkpoint rows use account `*`; a quiet source retains its first start across restarts.
-2. A message is stored once per `(source, message_id)` and the cursor moves in the same transaction. A message from the user drops the pending draft of its conversation; any other message marks it stale.
+1. A watcher per source talks to the source directly and prints one JSON line per message: `source`, `account`, `conversation_id`, `conversation_title`, `message_id`, `sender`, `sender_name`, `sender_is_me`, `sent_at`, `text`, `attachments`, `ref`. Completed Outlook and Teams scans append a checkpoint with the complete `accounts` list. Teams also declares account inventory before scanning. The dispatcher persists inventory, rejects missing coverage, and passes `--since` plus known `--expected-account` values back to the watcher. Source checkpoint rows use account `*`; quiet periods retain durable progress.
+2. A message is stored once per `(source, message_id)` and the cursor moves in the same transaction. Changed text or attachments under an existing id update that row and requeue its changed version. A message from the user drops the conversation's pending draft; any other new or changed message marks it stale.
 3. A conversation runs once it has been quiet for its window (`[windows]`), one run at a time. Messages arriving meanwhile form the next batch.
 4. A conversation not attached to a work item goes through the triage gate: a small model on the provider opencode uses (Meridian) gets the batch, the receiving account and short vault cards of the client's notes and open work items, and answers JSON only. It has no tools. `ignore` and `fyi` stop there and stay in `triage_log` with their reason.
 5. Correlation: a Jira key or pull request link shared with exactly one open work item attaches directly. Otherwise a confident `attach` attaches, and an unsure one opens a new work item with a soft link to the candidate.
@@ -20,7 +20,7 @@ python -m venv .venv
 .venv\Scripts\python -m dispatcher status
 .venv\Scripts\python -m dispatcher retry <batch>
 .venv\Scripts\python -m dispatcher draft <draft>
-.venv\Scripts\python -m dispatcher reply <draft> "ok"
+.venv\Scripts\python -m dispatcher reply <draft> "Make it shorter"
 .venv\Scripts\python -m dispatcher stop
 ```
 
@@ -28,19 +28,19 @@ Needs Classic Outlook open, Meridian on `127.0.0.1:3456`, and OpenChamber runnin
 
 Watchers in `config.toml`:
 
-- `outlook`: `dispatcher.watch_outlook`, every account of Classic Outlook over COM (`NewMailEx` plus a re-scan with `Items.Restrict`).
+- `outlook`: `dispatcher.watch_outlook`, every account of Classic Outlook over COM (`NewMailEx` plus a re-scan with `Items.Restrict`). Missing accounts, unreadable folders or failed item reads hold the checkpoint; `--once` fails rather than acknowledging partial coverage.
 - `teams`: the `watch` subcommand of [Teams-MCP](https://github.com/Aptul9/Teams-MCP), every account the Teams desktop client holds a token for. Never restarts Teams.
-- `teamsrelay`: `dispatcher.watch_teamsrelay`, read-only SQLite snapshots of owned relay stores over existing SSH access to `oe-vm`. No MCP token, deployment or chat refresh. The configured owner limits account selection. Every saved chat is read, including pinned chats. The relay still limits saved text to 2000 characters and history to its saved window. Tesco is absent from the current relay inventory and cannot be watched.
+- `teamsrelay`: `dispatcher.watch_teamsrelay`, read-only SQLite snapshots of owned relay stores over existing SSH access to `oe-vm`. No MCP token, deployment or chat refresh. The configured owner limits account selection. Saved history is replayed from a fixed initial source floor; SQLite deduplicates across restarts. Relay list-scan timestamps do not prove message-body completeness, so this floor does not advance with the list scan. Control lines carry a separate `observed_at` heartbeat. Catch-up retains the dispatcher's seven-day ceiling; relay text remains capped at 2000 characters and its saved-history window. Tesco is absent from the current relay inventory.
 
 ## Shadow controls
 
 The checked-in configuration has `mode.shadow = true`, `approval.enabled = false`, and `delivery.enabled = false`. Both an explicit `mode.shadow = false` and a literal `delivery.enabled = true` are required before any reply transport can run. Session send tools stay denied regardless of these dispatcher switches.
 
-`draft N` shows the exact text, receiving account and target conversation and records that local presentation. `reply N "ok"` records approval of that displayed version; other text requests a revision. A later text or target change invalidates the approval. In session or `48:notes`, a bare `ok` is accepted only when exactly one pending draft was shown there; `ok N` names a draft. The self-chat account must be configured explicitly. Observation and self-chat notification remain off during shadow mode.
+`draft N` shows exact text, receiving account and target conversation for local inspection. `reply N "Make it shorter"` records a revision request. Local CLI input cannot approve delivery. Approval comes from a direct user message in the work-item session or the configured own `48:notes` chat. Session presentation binds the actual completed assistant draft message id and timestamp, not the observer's polling time. A bare `ok` requires one unambiguous shown draft; `ok N` names one. A later text or target change invalidates consent. The self-chat account must be selected explicitly. Observation and self-chat notification remain off during shadow mode.
 
-Delivery re-reads the source before writing. A new incoming message marks the draft stale; an own reply drops it. A durable send-attempt marker prevents automatic retry after an unknown network outcome. Outlook receipts mean submission to Outlook, not delivery to the recipient. Live sends have not been tested during shadow mode. Relay delivery is held because a saved-store snapshot cannot prove live conversation freshness.
+Delivery re-reads the source from the target conversation's original context boundary, including after revisions. New incoming messages, edits and deletion tombstones invalidate drafts; own replies drop them. A durable send-attempt marker prevents automatic retry after an unknown network outcome. Outlook receipts mean submission to Outlook, not delivery to the recipient. Live sends have not been tested during shadow mode. Relay delivery is held because a saved-store snapshot cannot prove live conversation freshness.
 
-Only one daemon can hold a database's OS lock. `stop` requests watcher-child cleanup without interrupting the OpenCode session itself; delivered turns remain recoverable at the next start. `retry` re-collects a delivered batch instead of sending its prompt again.
+Only one daemon can hold a database's OS lock. `stop` requests watcher-child cleanup without interrupting the OpenCode session itself. Prompt identity and exact text are committed in `prompt_submission` before HTTP submission. Recovery checks the session timeline and inbox before replaying the same id, which OpenCode admits once. An allocated input is never released as a fresh source batch. Legacy inputs with unknown acceptance remain claimed for reconciliation.
 
 ## Tests
 

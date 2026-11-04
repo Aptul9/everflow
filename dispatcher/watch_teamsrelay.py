@@ -51,19 +51,21 @@ def record(email, slot, chat, m):
 
 def watch_round(relay, since, state, emit):
     result = relay.snapshot(since)
-    seen = state.setdefault('seen', set())
+    seen = state.setdefault('seen', {})
     for account in result['accounts']:
         for m in account['messages']:
             key = (account['slot'], m['chat'], m['id'])
-            if key not in seen and parse_iso(m['time']) >= since:
-                emit(record(account['email'], account['slot'], m['chat'], m))
-                seen.add(key)
+            row = record(account['email'], account['slot'], m['chat'], m)
+            content = json.dumps(row, sort_keys=True, ensure_ascii=False)
+            if seen.get(key) != content and parse_iso(m['time']) >= since:
+                emit(row)
+                seen[key] = content
     if result.get('errors'):
         raise RuntimeError('; '.join(result['errors']))
-    # Relay saves chat bodies after its list scan. Keep a restart overlap for that lag.
-    safe = min([a['scan_at'] for a in result['accounts']] + [time.time()]) - 120
-    emit({'source': 'teamsrelay', 'checkpoint': dt.datetime.fromtimestamp(safe, dt.timezone.utc).isoformat()
-          .replace('+00:00', 'Z')})
+    # List scans precede detached body saves. Replay the fixed source floor; SQLite deduplicates across restarts.
+    emit({'source': 'teamsrelay', 'checkpoint': since.isoformat().replace('+00:00', 'Z'),
+          'coverage': 'saved-history-replay',
+          'observed_at': dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z')})
     return result
 
 

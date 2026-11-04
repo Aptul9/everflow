@@ -6,6 +6,7 @@ import logging
 import re
 import threading
 import time
+import uuid
 
 from . import config, triage, vault
 from .db import connect, now, parse
@@ -220,6 +221,60 @@ def client(cfg):
     return Opencode(oc['url'], oc['password'], oc.get('openchamber', False))
 
 
+def submit(db, oc, batch, work_item, session, text):
+    """Commit identity and exact input before I/O. OpenCode admits the same id only once."""
+    with db:
+        db.execute('BEGIN IMMEDIATE')
+        saved = db.execute('SELECT * FROM prompt_submission WHERE batch=?', (batch,)).fetchone()
+        existing = saved is not None
+        if saved is None:
+            prompt_id = 'msg_' + uuid.uuid4().hex
+            db.execute('INSERT INTO prompt_submission VALUES (?,?,?,?,?,?,NULL)',
+                       (batch, session, prompt_id, text, 'prepared', now()))
+            db.execute('UPDATE batch SET work_item=?,prompt_id=? WHERE id=?', (work_item, prompt_id, batch))
+            saved = db.execute('SELECT * FROM prompt_submission WHERE batch=?', (batch,)).fetchone()
+    prompt_id, session, text = saved['prompt_id'], saved['session_id'], saved['text']
+    admitted = existing and (oc.turn(session, prompt_id) is not None or prompt_id in oc.queued(session))
+    if not admitted:
+        try:
+            returned = oc.prompt(session, text, prompt_id=prompt_id,
+                                 metadata={'inbox_dispatcher': {'batch': batch}})
+            if returned != prompt_id:
+                raise RuntimeError('OpenCode did not preserve the committed prompt identity')
+        except Exception as error:
+            with db:
+                db.execute("UPDATE prompt_submission SET state='uncertain',error=?,updated_at=? WHERE batch=?",
+                           ('%s: %s' % (type(error).__name__, error), now(), batch))
+            raise
+    with db:
+        db.execute("UPDATE prompt_submission SET state='admitted',error=NULL,updated_at=? WHERE batch=?", (now(), batch))
+        db.execute("UPDATE batch SET state='running',delivered_at=COALESCE(delivered_at,?) WHERE id=?", (now(), batch))
+        db.execute("UPDATE approval_event SET state='running',error=NULL WHERE batch=?", (batch,))
+    return prompt_id
+
+
+def resume_batch(cfg, db, batch):
+    b = _row(db, 'batch', batch)
+    if not b or not b['prompt_id'] or not b['work_item']:
+        raise RuntimeError('batch has no reconcilable prompt identity')
+    work = _row(db, 'work_item', b['work_item'])
+    with session_lock(work['id']):
+        if not b['delivered_at']:
+            oc = client(cfg)
+            saved = db.execute('SELECT * FROM prompt_submission WHERE batch=?', (batch,)).fetchone()
+            if saved:
+                submit(db, oc, batch, work['id'], saved['session_id'], saved['text'])
+            elif oc.turn(work['session_id'], b['prompt_id']) is not None or b['prompt_id'] in oc.queued(work['session_id']):
+                with db:
+                    db.execute('UPDATE batch SET delivered_at=? WHERE id=?', (now(), batch))
+            else:
+                raise RuntimeError('legacy prompt acceptance unknown; source messages remain claimed')
+        with db:
+            db.execute("UPDATE batch SET state='running' WHERE id=?", (batch,))
+            db.execute("UPDATE approval_event SET state='running' WHERE batch=?", (batch,))
+        collect(cfg, db, batch)
+
+
 def deliver(cfg, db, work, conv, batch, msgs, soft):
     oc = client(cfg)
     with session_lock(work['id']):
@@ -238,10 +293,7 @@ def deliver(cfg, db, work, conv, batch, msgs, soft):
                 with db:
                     db.execute("UPDATE work_item SET status='open' WHERE id=?", (work['id'],))
             text = next_prompt(conv, msgs, soft)
-        prompt_id = oc.prompt(session, text)
-        with db:
-            db.execute('UPDATE batch SET work_item=?, prompt_id=?, delivered_at=? WHERE id=?',
-                       (work['id'], prompt_id, now(), batch))
+        submit(db, oc, batch, work['id'], session, text)
         log.info('batch %d delivered to work item %d, session %s', batch, work['id'], session)
         collect(cfg, db, batch)
 
@@ -335,12 +387,16 @@ def recover(cfg, db):
     """After a restart: undelivered batches give their messages back, delivered ones get their reply collected."""
     resume = []
     with db:
-        for b in db.execute("SELECT * FROM batch WHERE state='running'").fetchall():
-            if b['delivered_at']:
+        for b in db.execute("SELECT b.* FROM batch b LEFT JOIN prompt_submission s ON s.batch=b.id "
+                            "WHERE b.state='running' OR (s.state IN ('prepared','uncertain') "
+                            "AND b.state IN ('failed','interrupted'))").fetchall():
+            if b['delivered_at'] or b['prompt_id']:
                 resume.append(b['id'])
             else:
                 db.execute('UPDATE message SET batch=NULL WHERE batch=?', (b['id'],))
                 db.execute("UPDATE batch SET state='interrupted', done_at=? WHERE id=?", (now(), b['id']))
+                db.execute("UPDATE approval_event SET state='pending',batch=NULL WHERE batch=? AND action='revise' "
+                           "AND state='delivering'", (b['id'],))
     for batch in resume:
         threading.Thread(target=_collect_later, args=(cfg, batch), daemon=True).start()
     return resume
@@ -349,7 +405,7 @@ def recover(cfg, db):
 def _collect_later(cfg, batch):
     db = connect(cfg['db']['path'])
     try:
-        collect(cfg, db, batch)
+        resume_batch(cfg, db, batch)
     except Exception as e:
         log.exception('collecting batch %d failed', batch)
         _finish(db, batch, 'failed', '%s: %s' % (type(e).__name__, e))
