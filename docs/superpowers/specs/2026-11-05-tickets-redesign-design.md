@@ -1,6 +1,6 @@
 # Inbox dispatcher v2: tickets, approval, chats
 
-Status: approved on 2026-11-05. Implementation plan pending.
+Status: approved on 2026-11-05. Stack amendment approved later the same day: all TypeScript, including watchers and CLI; Next.js, Tailwind and shadcn UI. No Python runtime or Python subprocess wrappers. Implementation plan is being revised to this amendment; all other behavioral decisions remain.
 
 ## Context
 
@@ -21,7 +21,8 @@ Target load is about 100 tickets per day across clients. On 2026-11-05 at 20:28 
 | Channels | No Teams, WhatsApp or similar channel for approvals or alerts |
 | Processed marker | The dispatcher database is the queue and the processed marker for every source. Source read state is never changed |
 | Approach | Evolve v1 in place with an own job layer on SQLite. DBOS rejected: its SQLite backend is positioned for prototyping and testing, waits inside versioned workflows conflict with long ticket lifetimes, and it adds `dbos` plus six dependencies |
-| Page technology | Standard library HTTP server and one HTML file with plain JavaScript. No React, no build step |
+| Implementation | TypeScript throughout the daemon, source watchers, CLI and tests. No Python runtime or Python subprocess wrappers |
+| Page technology | Next.js App Router, React, Tailwind CSS and shadcn/ui. Local build and bundled assets; no external browser resources |
 | Providers | Generic handling: exponential backoff on provider errors, providers tried in configured order. No quota endpoints, no autostart, no provider-specific logic |
 | Supervision | Manual start and stop. The daemon runs detached from the calling process tree. No automatic restart |
 
@@ -43,26 +44,26 @@ Target load is about 100 tickets per day across clients. On 2026-11-05 at 20:28 
 
 ### Processes
 
-- One daemon process, started with `python -m dispatcher start`, detached from the calling process tree so that a restart of OpenChamber or of a terminal does not end it. No automatic restart: Antonio starts and stops it. The existing OS lock keeps one instance per database.
-- Daemon threads: one reader per watcher subprocess, ingest, scheduler (quiet batches to jobs), job runner, page server on `127.0.0.1`.
-- Watcher subprocesses: `outlook` (COM), `teams` (Teams-MCP `watch`), `teamsrelay` (SSH snapshots). Unchanged. The daemon timestamps their stderr lines and feeds them into source health.
+- One Node.js daemon process, started with `npm run inbox -- start`, detached from the calling process tree so that a restart of OpenChamber or of a terminal does not end it. No automatic restart: Antonio starts and stops it. An OS-owned lock keeps one instance per database and is released on process exit.
+- Daemon tasks: one stdout/stderr reader per watcher subprocess, ingest, scheduler (quiet batches to jobs), job runner and the Next.js server on `127.0.0.1`. A custom Node server owns startup/shutdown and validates Host before handing requests to Next.js; no standalone Next output or separate service is required.
+- Watcher subprocesses: TypeScript/Node implementations of `outlook` (attach-only Classic Outlook COM), `teams` (read-only Teams token replay) and `teamsrelay` (read-only SSH snapshots). Port the existing source semantics; do not invoke the Python implementations. The daemon timestamps their stderr lines and feeds them into source health.
 - External dependencies: the model providers configured in opencode (Meridian today) for the triage agent and the chats, the OpenChamber opencode server for the chats, the vault as read-only knowledge base for the triage agent. No provider-specific logic.
 
 ### Modules
 
 | Module | Status | Role |
 |---|---|---|
-| `watch_outlook.py`, `watch_teamsrelay.py`, `relay_store.py`, `runtime.py`, `config.py` | keep | Sources, instance lock, configuration |
-| `db.py` | change | Schema v2 and a migration that keeps cursors, conversations and messages |
-| `__main__.py` | change | Ingest and batching stay. CLI gains `start`, `ticket show/merge/relink/close`, `job list/retry/park` and `quarantine replay` |
-| `opencode.py` | change | Session rename for the stage prefix. The deny list is removed |
-| `jobs.py` | new | Job layer: `enqueue(kind, key, payload)`, leases, attempts, backoff, parking, one job at a time per ticket, concurrency per kind, dependency health |
-| `kb_agent.py` | new, replaces `triage.py` | Small-model tool loop with `vault_search` and `vault_read`, vault root only, read only, step cap. Returns a structured decision |
-| `tickets.py` | new, from `work.py` | Ticket create and update, timeline, reference extraction (Jira, ServiceNow INC/CHG/RITM/TASK, GitHub/GitLab/ADO PR and MR links), stage, linking rules |
-| `chat.py` | new, from `work.py` | Chat creation on Start or Open chat, brief, forward turns, turn collection and `STATUS:` line, recovery turn after restarts, archive of idle chats |
-| `web.py`, `web/index.html` | new | Overview page and JSON API |
-| `approval.py`, `channels.py`, draft/consent/send tables, `draft` and `reply` CLI, DRAFT parsing | delete | Chats send on their own after Antonio's yes in chat |
-| `vault.py` | change | Implements the two vault tools |
+| `src/watchers/*.ts`, `src/windows/*.ts` | port | Read-only sources and native Windows bridges; no desktop launch/restart fallback and no Python bridge |
+| `src/dispatcher/db.ts` | new | SQLite schema v2 and migration preserving cursors, conversations and messages |
+| `src/dispatcher/ingest.ts`, `src/cli.ts`, `src/dispatcher/runtime.ts` | new | Ingest/batching semantics, manual detached start/stop, `ticket show/merge/relink/close`, `job list/retry/park`, `quarantine replay` |
+| `src/dispatcher/opencode.ts` | new | Typed OpenCode transport, tag lookup, structured turn errors and stage rename; no deny list |
+| `src/dispatcher/jobs.ts` | new | `enqueue(kind, key, payload)`, leases, attempts, backoff, parking, per-ticket ordering, concurrency and dependency health |
+| `src/dispatcher/kb-agent.ts` | new | Small-model read-only vault tool loop and validated structured decision |
+| `src/dispatcher/tickets.ts` | new | Ticket lifecycle, timeline, references, computed stage and ordered linking rules |
+| `src/dispatcher/chat.ts` | new | Approved chat creation, briefs/forwards, collection, STATUS, recovery, sync and archive |
+| `src/app`, `src/components`, `src/server.ts` | new | Next.js route handlers and React overview using Tailwind/shadcn; localhost server lifecycle |
+| `src/dispatcher/vault.ts`, `src/dispatcher/config.ts` | new | Read-only vault tools, TOML configuration and shared typed contracts |
+| `dispatcher/*.py`, Python runtime/tests/requirements, draft/consent/send tables, `draft` and `reply` CLI, DRAFT parsing | delete after port coverage | No Python in the final application. Chats send on their own after Antonio's yes in chat |
 
 ### Trust boundaries
 
@@ -111,7 +112,7 @@ Applied in order to each new batch.
 3. The triage agent picks among open tickets of the same client, tickets that share people with the batch, and tickets of the last 14 days. `update N` with confidence 0.75 or higher links the conversation; a lower confidence creates a new proposed ticket shown as "maybe #N".
 4. Otherwise: a batch that is on us creates a proposed ticket. A batch that is not on us gets outcome `not_on_us`, stays in `triage_log`, and appears on the page under Skipped.
 
-Corrections run through `python -m dispatcher ticket relink|merge|close`, by Antonio or by the chat. Each correction writes a timeline entry.
+Corrections run through `npm run inbox -- --config PATH ticket relink|merge|close`, by Antonio or by the chat. The brief supplies the absolute repository/config/interpreter paths, so scratch chats never fall back to the held live database. Each correction writes a timeline entry.
 
 ### People
 
@@ -150,7 +151,7 @@ The first turn carries the ticket id, title, client, summary, ask and proposal, 
 - End every turn with `STATUS: <working|needs_you|waiting_them|blocked|done> | <one line>`.
 - Never start, focus or close a desktop app.
 - After a recovery note, check what already happened (sent items, pull requests, files) before repeating any outside action.
-- Ticket corrections go through `python -m dispatcher ticket relink|merge|close`.
+- Ticket corrections go through the explicit TypeScript CLI command and instance config supplied in the brief.
 
 ## 4. Failure handling
 
@@ -214,7 +215,7 @@ A watcher line that fails validation goes to the `quarantine` table instead of b
 
 ### Supervision and logs
 
-- `python -m dispatcher start` launches the daemon detached from the calling process tree. Antonio starts and stops it; there is no automatic restart. `dispatcher stop` stops it gracefully.
+- `npm run inbox -- start` launches the built Node daemon detached from the calling process tree. Antonio starts and stops it; there is no automatic restart. `npm run inbox -- stop` stops it gracefully. Tests always pass an explicit scratch config.
 - The daemon writes a heartbeat to `health` every 10 s. The page shows it; an open tab shows "dispatcher unreachable since HH:MM" when requests fail.
 - Watcher stderr is read through a pipe and logged with a timestamp and the source name. Error lines update the source's health.
 - Log rotation at 10 MB, 5 files.
@@ -235,15 +236,15 @@ A watcher line that fails validation goes to the `quarantine` table instead of b
 
 ### Server
 
-- `web.py` runs `http.server.ThreadingHTTPServer` in a daemon thread on `127.0.0.1`, port from `[web] port`.
+- A custom TypeScript Node HTTP server owns the Next.js request handler on `127.0.0.1`, port from `[web] port`. Next.js App Router route handlers perform only local reads/actions. The daemon owns the per-start token and instance config; no global/server autostart hook is installed.
 - A request whose Host header is not `127.0.0.1:<port>` or `localhost:<port>` gets 403, which blocks DNS rebinding.
-- `GET /` serves `web/index.html` with the token of the current daemon start embedded. `GET /api/state` returns tickets grouped by stage, health, problems and skipped batches, with an ETag. `GET /api/ticket/<id>` returns timeline, messages and references.
+- `GET /` dynamically renders the Next.js page with the current daemon-start token supplied to the client UI. `GET /api/state` returns tickets grouped by stage, health, problems and skipped batches, with an ETag. `GET /api/ticket/<id>` returns timeline, messages and references.
 - POST actions require the header `X-Token` and a same-origin `Origin`: `/api/ticket/<id>/start`, `/api/ticket/<id>/chat` with the note, `/api/ticket/<id>/dismiss` with the reason, `/api/batch/<id>/ticket` (Make ticket), `/api/job/<id>/retry`. Each action writes a timeline entry and enqueues its job; the request does no other work.
 - No CORS headers.
 
 ### Page
 
-- One file with inline CSS and plain JavaScript, no external resources.
+- Next.js React components, Tailwind CSS and shadcn/ui, with locally bundled scripts/styles/icons and system fonts. No external browser resources. Framework build output is generated; source edits land in TypeScript/TSX/CSS.
 - Header: daemon heartbeat, sources (Outlook, each Teams account, relay), OpenChamber and providers, each with state and time since.
 - Problems line: parked jobs with error and Retry, quarantined lines, triage failures.
 - Tabs with counts: Needs you, Working, Waiting on them, Failed, Done today, Skipped. Proposed tickets come first in Needs you. Working lists the stages Working and Idle; idle tickets carry the label idle.
@@ -252,7 +253,7 @@ A watcher line that fails validation goes to the `quarantine` table instead of b
 - Ticket detail: timeline, newest first.
 - Keyboard: `j` and `k` move, `s` Start, `c` note and Open chat, `d` Dismiss, `/` search.
 - Refresh: `/api/state` every 10 s with `If-None-Match`. On failure the page keeps the last state and shows "dispatcher unreachable since HH:MM".
-- Message text is third-party content and is always rendered as text, never as HTML.
+- Message text is third-party content and is always rendered through React's text escaping, never as HTML. Application code never uses `dangerouslySetInnerHTML` or raw DOM HTML insertion for source/model content.
 
 ### Out of scope
 
@@ -262,7 +263,7 @@ Phone access, notifications, and approval of outward text, which stays in the ch
 
 ### Tests
 
-The suite stays on `unittest` (`python -m unittest discover -s tests`).
+Stack amendment: the v2 suite uses TypeScript/Vitest (`npm test -- --run`), React Testing Library for client components and real Next.js HTTP/browser checks for async server components. Port the existing behavior contracts; no Python runner is part of v2. Each phase remains test-first and green before the next.
 
 | Area | Tests |
 |---|---|
@@ -272,11 +273,11 @@ The suite stays on `unittest` (`python -m unittest discover -s tests`).
 | References | Jira keys; ServiceNow INC, CHG, RITM, TASK; GitHub and ADO pull requests; GitLab merge requests; the existing exclusion list |
 | Triage agent | Scripted model: tool loop, step cap, timeout, vault path escapes rejected (`..`, absolute paths, links), invalid JSON with one repair, instructions injected in messages leave the answer schema unchanged |
 | Chat | Brief contents and the third-party block, `STATUS:` parsing including malformed lines, stage rename, recovery turn text, own messages that start no turn, reopening within and after 14 days |
-| Page | Host check, token and Origin on every POST, JSON shape, no `innerHTML` in `web/index.html` |
+| Page | Host check before Next routing, token and Origin on every POST, JSON shape, React text escaping, no application raw-HTML insertion, client interactions and actual Next.js HTTP/browser behavior |
 | Migration | A v1 fixture database migrates with cursors, conversations, messages and `triage_log` intact; the backup file exists |
 | Watchers | Stderr lines timestamped and mapped to health; quarantine and replay |
 
-Kept with changes: `test_outlook.py`, `test_relay_store.py`, `test_relay_replay.py`, `test_runtime.py`, `test_daemon.py`. Rewritten: `test_pipeline.py`, `test_recovery.py`, `test_triage_contract.py`. Deleted: `test_approval.py`, `test_channels.py`.
+Port the source/runtime contracts of `test_outlook.py`, `test_relay_store.py`, `test_relay_replay.py`, `test_runtime.py`, `test_daemon.py` to TypeScript, and rewrite pipeline/recovery/triage contracts for v2. Delete Python code/tests after their retained contracts pass in Vitest. Approval/channel/draft/send contracts are removed. Historical v1 schema remains a SQL migration fixture, not an executable Python dependency.
 
 ### Live checks before done
 
@@ -290,7 +291,7 @@ Kept with changes: `test_outlook.py`, `test_relay_store.py`, `test_relay_replay.
 
 | Check | Method | Passes when |
 |---|---|---|
-| Detached start | `dispatcher start` from an OpenChamber shell, then inspect the process: parent chain and job membership (`IsProcessInJob`) | The daemon is outside OpenChamber's process tree and job object |
+| Detached start | An inert Node launch probe before code; actual scratch `npm run inbox -- start` after CLI exists. Inspect parent chain and `IsProcessInJob` | Node process is outside OpenChamber's process tree and job object; final command-level proof is recorded separately |
 | Session tag lookup | Create a session with `metadata.inbox_dispatcher.ticket`, then list sessions through the API | The tag comes back and identifies the session |
 | Title rename | `PATCH /api/session/{id}` with a title after the first turn | The title stays; OpenChamber's session-title plugin does not overwrite it |
 | Instructions in API sessions | First turn of an API-created session asks which instruction files are loaded | The session carries the same instructions as a session opened in OpenChamber |
@@ -301,6 +302,8 @@ Kept with changes: `test_outlook.py`, `test_relay_store.py`, `test_relay_replay.
 | OpenChamber link | Look for a URL that opens a given session | Found: the page links to it. Not found: the page shows the session title |
 
 Results go to the vault project page, section Pre-code checks, as on 2026-11-04.
+
+The all-TypeScript amendment also requires native-source feasibility before application code: attach-only Outlook COM with no creation fallback, Teams cookie/DPAPI access without Python or restarting Teams, and relay snapshots without executing remote Python. Native libraries are allowed; application source, watchers and subprocess entry points are TypeScript/compiled JavaScript. Record these bridge results alongside the nine checks. A failed bridge is a blocker, never a silent Python or desktop-restart fallback.
 
 ### Rollout
 
