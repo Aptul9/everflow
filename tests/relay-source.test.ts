@@ -9,9 +9,9 @@ import { createRelayState, readRelay, relayCommand, scanRelay, shellQuote, sqlLi
 import type { RelayOptions, RelayQuery, SshSpawn } from '../src/watchers/relay.ts';
 import { safeSourceDiagnostic } from '../src/watchers/source.ts';
 import type { SourceMessage, SourceRecord } from '../src/watchers/source.ts';
-import { openDb } from '../src/dispatcher/db.ts';
+import { migrate, openDb } from '../src/dispatcher/db.ts';
 import { ingest, sourceStart } from '../src/dispatcher/ingest.ts';
-import { scratch } from './support.ts';
+import { scratch, snapshot } from './support.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
 import * as native from '../src/windows/kernel.ts';
 
@@ -151,6 +151,45 @@ test('known saved-message edit and deletion emit again in the same process', asy
   { using db = new DatabaseSync(fixture.storePath); db.prepare('UPDATE chat_messages SET extra=? WHERE idx=0').run('{"deleted":true}'); }
   await scanRelay(relay, state, emit);
   expect(rows.filter((row): row is SourceMessage => 'message_id' in row && row.ref.id === mid).map((row) => row.text)).toEqual(['Saved 0', 'Edited', '']);
+});
+
+test.each([false, true])('exact v1 relay native identity replays against migrated history without requeue or double scope (native column absent: %s)', async (withoutNative) => {
+  const fixture = relayFixture(), path = join(fixture.root, 'migration-fixture.db');
+  { using saved = new DatabaseSync(fixture.storePath); saved.exec('DELETE FROM chat_messages WHERE idx<>0'); }
+  const relay = { snapshot: (floor: number) => readRelay(options, floor, undefined, fixture.query) };
+  const record = (await relay.snapshot(Date.parse(since))).accounts[0]!.messages[0]!;
+  const native = `me@example.invalid/Saved chat 0;messageid=${mid}`;
+  expect(record.message_id).toBe(native);
+  {
+    using legacy = new DatabaseSync(path);
+    legacy.exec(fs.readFileSync(new URL('./fixtures/v1.sql', import.meta.url), 'utf8'));
+    legacy.exec('PRAGMA user_version=0');
+    legacy.prepare('INSERT INTO conversation(id,source,account,native_id,title,last_message_at) VALUES (7,?,?,?,?,?)')
+      .run('teamsrelay', 'me@example.invalid', 'Saved chat 0', 'Saved chat 0', record.sent_at);
+    legacy.prepare("INSERT INTO batch(id,conversation,state,created_at) VALUES (18,7,'done',?)").run(since);
+    legacy.prepare(`INSERT INTO message(id,source,message_id,native_id,conversation,sender,sender_name,sender_is_me,sent_at,text,attachments,ref,batch,stored_at)
+      VALUES (29,'teamsrelay',?,?,7,'bob','Bob',0,?,?,?,?,18,?)`)
+      .run(native, native, record.sent_at, record.text!, JSON.stringify(record.attachments), JSON.stringify(record.ref), since);
+    for (const account of ['*', 'me@example.invalid']) legacy.prepare("INSERT INTO cursor VALUES ('teamsrelay',?,?)").run(account, since);
+    if (withoutNative) legacy.exec('ALTER TABLE message DROP COLUMN native_id');
+  }
+  const backup = await migrate(path);
+  expect(backup).toBeTypeOf('string');
+  const tables = ['cursor', 'conversation', 'person', 'message', 'batch', 'ticket', 'job', 'turn'];
+  let before;
+  for (let round = 0; round < 2; round++) {
+    using db = openDb(path);
+    before ??= snapshot(db, tables);
+    const replayed: boolean[] = [];
+    await scanRelay(relay, createRelayState(sourceStart(db, { start: { lookback_minutes: 0 } }, 'teamsrelay')), (row) => {
+      const changed = ingest(db, row); if ('message_id' in row) replayed.push(changed);
+    });
+    expect(replayed).toEqual([false]);
+    expect(snapshot(db, tables)).toEqual(before);
+    expect(db.prepare('SELECT id,native_id,message_id,batch FROM message').get())
+      .toEqual({ id: 29, native_id: native, message_id: JSON.stringify(['me@example.invalid', native]), batch: 18 });
+    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+  }
 });
 
 test('saved relay text cap preserves2000 Unicode characters already returned by SQLite substr', async () => {

@@ -209,10 +209,23 @@ test('P09 chats-on unreachable history holds an otherwise eligible later queued 
     const batch = await f.until(() => f.read((db) => db.prepare("SELECT b.id FROM batch b JOIN message m ON m.batch=b.id WHERE m.native_id='eligible-later' AND b.state='pending'").get()), 'later source batch ready');
     expect((await f.run('stop')).status).toBe(0);
     let laterJob: number;
+    let correctionTarget: number;
     {
       using db = new DatabaseSync(f.path);
       laterJob = enqueue(db, 'forward', 'review:eligible-later-input', { batch_ids: [Number(batch.id)] }, Number(f.proposed.id));
+      correctionTarget = Number(db.prepare("INSERT INTO ticket(title,created_at) VALUES ('Unapproved correction target',?)").run(new Date().toISOString()).lastInsertRowid);
     }
+    const immutable = f.read((db) => ({ turn: db.prepare('SELECT * FROM turn WHERE id=?').get(original.id!),
+      input: db.prepare('SELECT * FROM job WHERE id=?').get(old.id!), tail: db.prepare('SELECT * FROM job WHERE id=?').get(laterJob),
+      messages: db.prepare('SELECT id,batch FROM message ORDER BY id').all(), links: db.prepare('SELECT * FROM ticket_conversation ORDER BY ticket,conversation').all() }));
+    const conversation = f.read((db) => db.prepare('SELECT conversation FROM batch WHERE id=?').get(batch.id!)!.conversation)!;
+    for (const args of [['ticket', 'relink', String(conversation), String(correctionTarget)], ['ticket', 'merge', String(f.proposed.id), String(correctionTarget)]]) {
+      const refused = await f.run(...args);
+      expect(refused.status).not.toBe(0); expect(refused.stderr).toContain('ticket.conflict');
+    }
+    expect(f.read((db) => ({ turn: db.prepare('SELECT * FROM turn WHERE id=?').get(original.id!),
+      input: db.prepare('SELECT * FROM job WHERE id=?').get(old.id!), tail: db.prepare('SELECT * FROM job WHERE id=?').get(laterJob),
+      messages: db.prepare('SELECT id,batch FROM message ORDER BY id').all(), links: db.prepare('SELECT * FROM ticket_conversation ORDER BY ticket,conversation').all() }))).toEqual(immutable);
     f.peer.state.historyStatus = 503;
     expect((await f.run('start', '--port', '0')).status).toBe(0);
     await f.until(() => f.read((db) => db.prepare("SELECT id FROM job WHERE id=? AND state='queued' AND failures>?").get(old.id!, old.failures!)), 'unreachable original history');
@@ -229,7 +242,7 @@ test('P09 chats-on unreachable history holds an otherwise eligible later queued 
     expect(f.peer.calls.filter((call) => call.method === 'POST' && call.url.pathname.endsWith('/prompt') && call.body.id === original.prompt_id)).toHaveLength(1);
     f.peer.finish(String(later.session_id), String(later.prompt_id), 'STATUS: done | Later FIFO input complete');
     await f.until(() => f.read((db) => db.prepare("SELECT id FROM turn WHERE id=? AND state='done'").get(later.id!)), 'later collection');
-    f.proof({ requirement: 'P09-eligible-fifo', old, original, laterJob, laterQueued, later, originalPosts: 1 });
+    f.proof({ requirement: 'P09-eligible-fifo', old, original, laterJob, laterQueued, later, correctionTarget, immutableCorrectionRefusals: 2, originalPosts: 1 });
   } finally { await f.close(); }
 });
 

@@ -174,6 +174,40 @@ test('collects only completed text inside exact target interval across all pages
   expect(await api.turnDetail('ses_1', 'msg_target')).toMatchObject({ state: 'running', text: '', outcome: null, assistant_id: null });
 });
 
+test('P06 paged exact input concatenates two completed assistants in order and excludes tool, earlier and later text', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg } = config(peer.url);
+  peer.sessions.set('ses_1', remoteSession('ses_1', cfg.opencode.directory));
+  const first = answer('asst_one', 'one'), second = answer('asst_two', 'two');
+  if (first.type !== 'assistant' || second.type !== 'assistant') throw new Error('Expected assistant fixtures');
+  const tool = { type: 'tool' as const, id: 'tool_synthetic', name: 'synthetic_read', time: { created: PEER_AT, completed: PEER_AT + 50 },
+    state: { status: 'completed' as const, input: {}, content: [{ type: 'text' as const, text: 'TOOL OUTPUT MUST NOT LEAK' }] as [{ type: 'text'; text: string }] } };
+  first.content.unshift(tool); second.content.push({ ...tool, id: 'tool_second' });
+  const newest: SessionMessageInfo[] = [
+    { id: 'idle_later', type: 'idle', time: { created: PEER_AT + 500 }, outcome: 'failed' },
+    answer('asst_later', 'LATER OUTPUT'), user('msg_later'),
+    { id: 'idle_target', type: 'idle', time: { created: PEER_AT + 101 }, outcome: 'succeeded' }, second,
+  ];
+  const oldest: SessionMessageInfo[] = [first, user('msg_target'),
+    { id: 'idle_earlier', type: 'idle', time: { created: PEER_AT - 1 }, outcome: 'succeeded' }, answer('asst_earlier', 'EARLIER OUTPUT'), user('msg_earlier')];
+  peer.state.hook = (call, response) => {
+    if (!call.url.pathname.endsWith('/message')) return false;
+    const cursor = call.url.searchParams.get('cursor');
+    peer.json(response, { data: cursor ? oldest : newest, cursor: cursor ? {} : { next: 'opaque-target-page' } }); return true;
+  };
+  const api = transport.connect(cfg);
+  expect(await api.turnDetail('ses_1', 'msg_target')).toEqual({ state: 'terminal', prompt_id: 'msg_target', prompt_at: PEER_AT,
+    text: 'one\ntwo', outcome: 'succeeded', error: null, assistant_id: 'asst_two', completed_at: PEER_AT + 100 });
+  expect(await api.turnDetail('ses_1', 'msg_missing')).toEqual({ state: 'absent', prompt_id: 'msg_missing', prompt_at: null,
+    text: '', outcome: null, error: null, assistant_id: null, completed_at: null });
+  const history = peer.calls.filter((call) => call.url.pathname.endsWith('/message'));
+  expect(history).toHaveLength(4);
+  for (const [index, call] of history.entries()) {
+    expect(call.url.searchParams.get('cursor')).toBe(index % 2 ? 'opaque-target-page' : null);
+    expect(call.url.searchParams.get('order')).toBe(index % 2 ? null : 'desc');
+  }
+});
+
 test('distinguishes inbox waiting, proven absent, running and structured terminal failure', async () => {
   await using peer = await scriptedPeer();
   const { cfg } = config(peer.url);

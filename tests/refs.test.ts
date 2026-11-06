@@ -26,6 +26,13 @@ test.each(['UTF', 'ISO', 'SHA', 'RFC', 'TLS', 'SSL', 'AES', 'RSA', 'HTTP', 'WIN'
   },
 );
 
+test('base64 and base64url payloads are not decoded into ticket references or confused with encoding labels', () => {
+  const plain = 'RCA-12 INC0012345 https://github.com/a/b/pull/3';
+  const encoded = [Buffer.from(plain).toString('base64'), Buffer.from(plain).toString('base64url')];
+  expect(extractRefs(`Content-Transfer-Encoding: base64\n${encoded.join('\n')}\nUTF-8 ISO-8601 SHA-256 AES-256`, 'message')).toEqual([]);
+  expect(extractRefs(`${encoded.join(' ')} RCA-12`, 'message')).toEqual([{ kind: 'jira', key: 'RCA-12', url: null, seen_in: 'message' }]);
+});
+
 test('extracts ServiceNow kinds without losing zero padding and deduplicates repeats', () => {
   expect(extractRefs('inc0012345 CHG000123 RITM0000007 task42 INC0012345 XINC123 INC-123', 'chat'))
     .toEqual([

@@ -38,6 +38,32 @@ test('recursive search is literal, bounded and includes project and area workflo
   expect(search(vault, 'does not exist', 10)).toEqual([]);
 });
 
+test('P05 literal search and read reach a nested project workflow without opening or walking Unison content', () => {
+  const { vault, note } = fixture();
+  const path = '01_Projects/client/workflows/workflow.md';
+  const text = '# Canonical workflow\n\nNested-project-marker: use the canonical local tracker.\n';
+  note(path, text);
+  note('01_Projects/.unison.temporary/client/workflows/workflow.md', '# Unison\nNested-project-marker: never open.\n');
+  const opened = vi.spyOn(fs, 'openSync'), walked = vi.spyOn(fs, 'opendirSync');
+  expect(search(vault, 'nested-project-marker', 10)).toEqual([
+    { path, title: 'Canonical workflow', line: 3, snippet: 'Nested-project-marker: use the canonical local tracker.' },
+  ]);
+  expect(read(vault, path)).toEqual({ path, title: 'Canonical workflow', text, truncated: false });
+  expect(opened.mock.calls.length).toBeGreaterThan(0);
+  expect(walked.mock.calls.length).toBeGreaterThan(0);
+  expect(opened.mock.calls.every(([path]) => !String(path).toLowerCase().includes('.unison.'))).toBe(true);
+  expect(walked.mock.calls.every(([path]) => !String(path).toLowerCase().includes('.unison.'))).toBe(true);
+});
+
+test('literal KB tools retain historical _closed and status-closed reference notes without automatic card selection', () => {
+  const { vault, note } = fixture();
+  const paths = ['01_Projects/client/_closed/reference.md', '02_Areas/client/workflows/closed.md'];
+  const text = '---\nstatus: closed\n---\n# Historical workflow\n\nHistorical-reference-marker.\n';
+  for (const path of paths) note(path, text);
+  expect(search(vault, 'historical-reference-marker', 10)?.map((hit) => hit.path).sort()).toEqual(paths);
+  for (const path of paths) expect(read(vault, path)).toEqual({ path, title: 'Historical workflow', text, truncated: false });
+});
+
 test.each([
   '../outside.md', '01_Projects/../../outside.md', '/etc/passwd', 'C:/outside.md', 'C:\\outside.md',
   'C:outside.md', '\\\\server\\share\\outside.md', '//server/share/outside.md', '\\outside.md',

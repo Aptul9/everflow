@@ -1,5 +1,7 @@
 # inbox-dispatcher
 
+Historical v1 description below. Its Python commands have been removed. TypeScript runtime documentation is scheduled for Phase 9.
+
 Incoming Outlook mail and Teams messages (Google Chat to follow) can start work in opencode, one session per work item. The checked-in configuration currently observes sources only: incoming data is stored, automatic work is paused, and no replies are sent.
 
 ## Pipeline
@@ -14,15 +16,10 @@ Incoming Outlook mail and Teams messages (Google Chat to follow) can start work 
 ## Run
 
 ```powershell
-python -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python -m dispatcher run
-.venv\Scripts\python -m dispatcher status
-.venv\Scripts\python -m dispatcher retry <batch>
-.venv\Scripts\python -m dispatcher draft <draft>
-.venv\Scripts\python -m dispatcher reply <draft> "Make it shorter"
-.venv\Scripts\python -m dispatcher stop
+npm run inbox -- --help
 ```
+
+Runtime commands require an explicit completed source-only build receipt (`--artifact`) and absolute instance configuration (`--config`). No default configuration or checkout artifact fallback exists.
 
 Needs Classic Outlook open, Meridian on `127.0.0.1:3456`, and OpenChamber running: sessions are created on OpenChamber's own opencode server through its fixed local port, so they show up there live with OpenChamber's plugins. `[opencode] url` points the dispatcher at a plain `opencode serve` instead.
 
@@ -50,6 +47,4 @@ Automatic self-chat notification and `link`/`unlink`/`merge` correction commands
 
 ## Tests
 
-```powershell
-.venv\Scripts\python -m unittest discover -s tests
-```
+Vitest runs from a completed source-only stage with `TEST_BUILD_RECEIPT`, `INBOX_DISPATCHER_ARTIFACT` and `TEST_TRACKED_LEGACY_PATHS` supplied explicitly. The last variable is a JSON string array from the source checkout's read-only Git index, not a staged filesystem scan. Missing metadata fails closed. Full runner instructions follow in Phase 9.

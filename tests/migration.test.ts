@@ -4,6 +4,7 @@ import sqlite, { DatabaseSync } from 'node:sqlite';
 import { setImmediate } from 'node:timers/promises';
 import { afterEach, expect, test, vi } from 'vitest';
 import { migrate, openDb } from '../src/dispatcher/db.ts';
+import { ingest } from '../src/dispatcher/ingest.ts';
 import { createV1, OLD_AT, scratch, snapshot } from './support.ts';
 
 const retained = ['cursor', 'conversation', 'person', 'message', 'triage_log'] as const;
@@ -224,6 +225,38 @@ test('version 0 format rollback does not wrap an already scoped identity twice',
   using db = openDb(path);
   expect(db.prepare('PRAGMA user_version').get()?.user_version).toBe(2);
   expect(snapshot(db, retained)).toEqual(before);
+});
+
+test.each([0, 1])('identical source replay immediately after v%s migration preserves every retained row and historical batch', async (version) => {
+  const { path } = scratch('phase8-migration-replay-');
+  createV1(path);
+  if (version === 0) {
+    using legacy = new DatabaseSync(path);
+    legacy.exec('PRAGMA user_version=0; UPDATE message SET message_id=native_id; ALTER TABLE message DROP COLUMN native_id');
+  }
+  const replay = { source: 'teams', account: 'me@example.invalid', conversation_id: 'conversation-41', conversation_title: 'Synthetic 41',
+    message_id: 'native-552', sender: 'sender@example.invalid', sender_name: 'Synthetic sender', sender_is_me: false, sent_at: OLD_AT,
+    text: 'Synthetic message 552', attachments: [{ name: 'synthetic.txt' }], ref: { synthetic: true } };
+  const backup = await migrate(path);
+  expect(backup).toBeTypeOf('string');
+  const tables = [...retained, 'batch', 'ticket', 'job', 'turn'];
+  let before;
+  {
+    using db = openDb(path);
+    before = snapshot(db, tables);
+    const changes = db.prepare('SELECT total_changes() AS n').get()!.n;
+    expect(ingest(db, replay)).toBe(false);
+    expect(snapshot(db, tables)).toEqual(before);
+    expect(db.prepare('SELECT total_changes() AS n').get()!.n).toBe(changes);
+    expect(db.prepare('SELECT id,native_id,message_id,batch FROM message WHERE id=552').get())
+      .toEqual({ id: 552, native_id: 'native-552', message_id: '["me@example.invalid","native-552"]', batch: 81 });
+    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+  }
+  using reopened = openDb(path);
+  expect(ingest(reopened, replay)).toBe(false);
+  expect(snapshot(reopened, tables)).toEqual(before);
+  using saved = new DatabaseSync(backup!, { readOnly: true });
+  expect(saved.prepare('SELECT id,batch,text FROM draft WHERE id=111').get()).toEqual({ id: 111, batch: 81, text: 'Synthetic draft, never send' });
 });
 
 test.each([false, true])('new empty database creates schema without a migration backup (existing file: %s)', async (exists) => {
