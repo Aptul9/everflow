@@ -200,7 +200,7 @@ Jobs for one ticket preserve FIFO order. A parked job blocks later work. A parke
 
 A failed chat turn gets at most 2 nondependency recovery turns for its original input. Dependency recovery uses backoff without consuming or resetting that budget. Recovery notes require checking sent items, pull requests and files before repeating outside actions. Budget exhaustion parks the collector and shows the ticket as Failed.
 
-Session lookup uses durable store/ticket metadata, including archived sessions in the same directory. Duplicate tag matches are rejected. Prompt id, exact text and target are committed before HTTP submission. Restart reconciles existing ids against reachable history and inbox before retrying a proven-absent prepared prompt. Admitted inputs are collected. Unreachable history retains the reservation and blocks later input. This does not prove universal exactly-once session creation across every crash boundary; the later crash harness remains required.
+Session lookup uses durable store/ticket metadata, including archived sessions in the same directory. Duplicate tag matches are rejected. Prompt id, exact text and target are committed before HTTP submission. Restart reconciles existing ids against reachable history and inbox before retrying a proven-absent prepared prompt. Admitted inputs are collected. Unreachable history retains the reservation and blocks later input. [crash-matrix.test.ts](tests/crash-matrix.test.ts) injects real SQLite faults, lost acknowledgements and lease handoffs at triage, start, forward, recovery, collect, sync, archive and purge boundaries, then reopens the store and checks the shared invariants. A session create still in flight when its lease expires is not modeled; the 30-second client timeout is shorter than the 120-second lease.
 
 Dependency health becomes failing after 3 consecutive errors and retains the first error's time. One success clears it. Source errors are visible immediately. A failed source scan does not acknowledge complete coverage. Invalid input enters quarantine without advancing a cursor for that line; that source remains blocked behind its unreplayed quarantine rows.
 
@@ -306,9 +306,17 @@ try {
 
 [readme.test.ts](tests/readme.test.ts) checks the supplied README hash, real compiled help/defaults, native verify-only, actual PowerShell CLI examples on owned scratch instances, loopback page/source health, local corrections/replay, backlog promotion and Git metadata edge cases. [build-isolation.test.ts](tests/build-isolation.test.ts) checks the named README supply without broadening the source boundary. Synthetic starts explicitly disable all sources and both rollout switches. They establish no live-source, browser or model acceptance.
 
+## Live checks
+
+[live-checks.ts](scripts/live-checks.ts) drives acceptance on owned scratch instances. Every command requires `--opt-in`, a `--scenario` name and a `--run-root` under `C:/Users/Antonio/AppData/Local/Temp/opencode/inbox-dispatcher-v2/live-checks`. Run it with Node from the completed stage, never from the checkout.
+
+Before any connection, spawn or file read, the guard refuses the held database, its sidecars and the relay token. It also refuses case, stream, trailing-dot and short-name spellings, traversal, paths outside the run root, link or junction components, hard-linked state and existing databases not recorded in the run manifest. The only accepted seed is `data/backups/pre-review-resume-20261104-234928.db`, copied into a fresh run. A final-component symlink among read-only inputs is resolved to its declared target, which then passes the same checks.
+
+`init` writes an owned config whose triage routes start with a known-closed loopback route. `start`, `stop`, `status` and `kill` act on recorded identities only. `state`, `detail` and `inspect` read the page, API and scratch database. `approve` and `make-ticket` use the page token and Origin. `remote`, `interrupt` and `archive` act only on sessions tagged with the run's store and directory; `archive` skips running sessions and sessions with queued input.
+
 ## Later rollout gates
 
-- Phase 10 crash harness and guarded live acceptance remain separate work. Held database/backup access, migration or a live copy requires explicit approval before any operation.
+- Live checks touch only owned scratch instances. Held database access, migration or a live copy requires explicit approval before any operation.
 - Live source startup and source/profile acceptance require their own approved scope. Google Chat and absent relay accounts remain blocked until actual evidence changes that status.
 - The review period uses tickets on and chats off. It ends only on Antonio's explicit decision. Chat activation and any harmless real-chat proof require separate approval.
 - Default-branch merge remains a separate decision. Passing implementation tests do not authorize it.
@@ -316,4 +324,4 @@ try {
 
 Code rollback uses revert commits. A database rollback uses a new parallel instance restored from a retained backup and a separately selected config, preserving the original instance. No database deletion or destructive overwrite is required.
 
-Earlier unassigned startup timeout, receipt-publication errno/holder failures and the original tracing incident remain recorded. Passing documentation examples or later tests do not diagnose or clear them. No claim is made that protected state has historically remained untouched, that staging is an OS sandbox or that live/browser acceptance is complete.
+Earlier unassigned startup timeout, receipt-publication errno/holder failures and the original tracing incident remain recorded. Passing documentation examples or later tests do not diagnose or clear them. No claim is made that protected state has historically remained untouched or that staging is an OS sandbox. Live Outlook acceptance has not run: Classic Outlook was not running during the recorded live checks, so only its explicit not-running failure was observed.
