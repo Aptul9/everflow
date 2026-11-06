@@ -802,21 +802,4 @@ export function parseStatus(text: string): { report: Report; line: string } {
   return { report: match[1] as Report, line: match[2]!.trimEnd() };
 }
 
-export function approve(cfg: Config, db: DatabaseSync, ticket: number, note = ''): number {
-  if (typeof note !== 'string') throw new TicketError('ticket.invalid-input', 'Approval note must be a string');
-  return transaction(db, () => {
-    const owner = ticketRow(db, ticket);
-    if (!cfg.tickets.enabled || !cfg.chats.enabled) return ticket;
-    if (owner.approved_at) {
-      if (owner.approval_note !== note) throw new TicketError('ticket.conflict', 'Ticket already approved with a different note');
-      return ticket;
-    }
-    if (owner.lifecycle !== 'proposed') throw new TicketError('ticket.conflict', 'Only a proposed ticket can be approved');
-    const now = utc();
-    db.prepare("UPDATE ticket SET lifecycle='active',approved_at=?,approval_note=?,last_activity_at=? WHERE id=?").run(now, note, now, ticket);
-    db.prepare("INSERT INTO timeline(ticket,at,kind,actor,body,event_key) VALUES (?,?,'approval','you',?,?)")
-      .run(ticket, now, note, `approval:ticket:${ticket}`);
-    enqueue(db, 'start_chat', `start:ticket:${ticket}`, {}, ticket);
-    return ticket;
-  });
-}
+export { approve } from './approval.ts';

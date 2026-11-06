@@ -66,7 +66,7 @@ export type Config = z.infer<typeof configSchema> & { _config_path: string };
 export function loadConfig(path: string): Config {
   const absolute = resolve(path);
   const root = dirname(absolute);
-  const raw = parseToml(readFileSync(absolute, 'utf8'));
+  const raw = parseToml(readFileSync(/* turbopackIgnore: true */ absolute, 'utf8'));
   for (const obsolete of ['mode', 'dispatch', 'approval', 'delivery', 'watchers']) delete raw[obsolete];
   const cfg = configSchema.parse(raw);
   return {
@@ -79,7 +79,7 @@ export function loadConfig(path: string): Config {
 
 export function readJsonc(path: string): unknown {
   const errors: ParseError[] = [];
-  const value: unknown = parseJsonc(readFileSync(path, 'utf8'), errors, { allowTrailingComma: true });
+  const value: unknown = parseJsonc(readFileSync(/* turbopackIgnore: true */ path, 'utf8'), errors, { allowTrailingComma: true });
   if (errors.length) {
     throw new SyntaxError(`Invalid JSONC in ${path}: ${errors.map((error) => `${printParseErrorCode(error.error)} at ${error.offset}`).join(', ')}`);
   }
