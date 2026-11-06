@@ -256,6 +256,55 @@ test('purge changes only old unowned not_on_us text and commits completion under
   expect(db.prepare('SELECT state FROM job WHERE id=?').get(job.id)?.state).toBe('done');
 });
 
+test('purge rolls back on a late completion fault, fences the stale owner and commits once after durable reopen', async () => {
+  const { path, cfg } = fixture();
+  const tables = ['message', 'conversation', 'cursor', 'batch', 'ticket', 'ticket_conversation', 'health'];
+  const options = { buildReceipt: process.env.TEST_BUILD_RECEIPT };
+  const later = '2026-11-06T10:02:01.000000Z';
+  let before: ReturnType<typeof snapshot>, first: jobs.Job;
+  {
+    using db = openDb(path);
+    prepareStart(db, undefined, AT);
+    const ticket = owner(db, null);
+    for (const i of [0, 1, 2, 3, 4]) {
+      ingest(db, message({ message_id: `g9-${i}`, conversation_id: `g9-${i}` }));
+      const c = db.prepare('SELECT id FROM conversation WHERE native_id=?').get(`g9-${i}`)!.id!;
+      const batch = db.prepare("INSERT INTO batch(conversation,state,outcome,ticket,created_at) VALUES (?,'done',?,?,?)")
+        .run(c, i === 4 ? 'backlog' : 'not_on_us', i === 1 ? ticket : null, AT).lastInsertRowid;
+      if (i === 2) db.prepare(`INSERT INTO ticket_conversation(ticket,conversation,kind,"by",created_at) VALUES (?,?,'primary','you',?)`).run(ticket, c, AT);
+      db.prepare('UPDATE message SET batch=?,stored_at=? WHERE conversation=?').run(batch, i === 3 ? AT : '2026-09-01T00:00:00Z', c);
+    }
+    before = snapshot(db, tables);
+    db.exec(`CREATE TRIGGER g9_fault BEFORE UPDATE OF state ON job WHEN NEW.kind='purge' AND NEW.state='done'
+      BEGIN SELECT RAISE(ABORT, 'g9 injected completion fault'); END`);
+    jobs.enqueue(db, 'purge', 'purge:ticket:none:2026-11-06', {});
+    first = jobs.claim(db, cfg, 'g9-first', AT)!;
+    await expect(runtime.runJob(cfg, db, first, { ...options, clock: () => AT })).rejects.toThrow('g9 injected completion fault');
+    expect(snapshot(db, tables)).toEqual(before);
+    expect(db.prepare('SELECT state,run_id FROM job WHERE id=?').get(first.id)).toMatchObject({ state: 'running', run_id: 'g9-first' });
+    db.exec('DROP TRIGGER g9_fault');
+  }
+  {
+    using db = openDb(path);
+    const fresh = jobs.claim(db, cfg, 'g9-second', later)!;
+    expect(fresh.id).toBe(first.id);
+    await runtime.runJob(cfg, db, first, { ...options, clock: () => later });
+    expect(snapshot(db, tables)).toEqual(before);
+    expect(db.prepare('SELECT state,run_id FROM job WHERE id=?').get(first.id)).toMatchObject({ state: 'running', run_id: 'g9-second' });
+    await runtime.runJob(cfg, db, fresh, { ...options, clock: () => later });
+  }
+  using db = openDb(path);
+  const after = snapshot(db, tables);
+  expect(after.message!.map((row) => row.text)).toEqual([null, ...before.message!.slice(1).map((row) => row.text)]);
+  expect(before.message!.slice(1).every((row) => typeof row.text === 'string')).toBe(true);
+  expect(after.message!.map(({ text: _text, ...row }) => row)).toEqual(before.message!.map(({ text: _text, ...row }) => row));
+  for (const table of ['conversation', 'cursor', 'batch', 'ticket', 'ticket_conversation']) expect(after[table]).toEqual(before[table]);
+  const job = db.prepare('SELECT state,run_id,lease_token,next_at FROM job WHERE id=?').get(first.id)!;
+  expect(job).toMatchObject({ state: 'done', run_id: null, lease_token: null });
+  expect(Date.parse(String(job.next_at))).toBe(Date.parse(later) + 86400_000);
+  expect(db.prepare("SELECT COUNT(*) AS n FROM job WHERE kind='purge'").get()?.n).toBe(1);
+});
+
 test('runtime source argv uses staged Node entries, explicit floors, account inventory and owned Teams destinations', () => {
   const { path, cfg } = fixture();
   using db = openDb(path);
