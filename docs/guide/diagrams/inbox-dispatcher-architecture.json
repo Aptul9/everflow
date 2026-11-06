@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Inbox dispatcher: sources, triage, page and chats",
+    "quality_profile": "showcase",
+    "viewBox": [1380, 660]
+  },
+  "components": [
+    { "id": "outlook", "type": "external", "label": "Outlook watcher", "sublabel": "COM, Classic Outlook", "pos": [40, 100], "size": [220, 64] },
+    { "id": "teams", "type": "external", "label": "Teams watcher", "sublabel": "signed-in profile", "pos": [40, 300], "size": [220, 64] },
+    { "id": "relay", "type": "external", "label": "Relay watcher", "sublabel": "SSH, read-only", "pos": [40, 500], "size": [220, 64] },
+    { "id": "page", "type": "frontend", "label": "Local page", "sublabel": "127.0.0.1:8789", "pos": [460, 100], "size": [220, 64] },
+    { "id": "store", "type": "database", "label": "SQLite", "sublabel": "messages, tickets, job queue", "pos": [460, 296], "size": [220, 72] },
+    { "id": "triage", "type": "backend", "label": "Triage", "sublabel": "Haiku via Meridian", "pos": [800, 100], "size": [220, 64] },
+    { "id": "collector", "type": "backend", "label": "Collector", "sublabel": "every 10 s per turn", "pos": [800, 500], "size": [220, 64] },
+    { "id": "vault", "type": "database", "label": "Vault", "sublabel": "notes, read-only", "pos": [1120, 100], "size": [220, 64] },
+    { "id": "chat", "type": "cloud", "label": "OpenChamber chat", "sublabel": "Opus, one per ticket", "pos": [1120, 296], "size": [220, 72] }
+  ],
+  "connections": [
+    { "id": "c1", "from": "outlook", "to": "store", "label": "Inbox and Sent", "fromSide": "right", "toSide": "left" },
+    { "id": "c2", "from": "teams", "to": "store", "label": "chat messages", "fromSide": "right", "toSide": "left", "labelAt": [310, 318] },
+    { "id": "c3", "from": "relay", "to": "store", "label": "saved history", "fromSide": "right", "toSide": "left" },
+    { "id": "c4", "from": "page", "to": "store", "label": "Start, Dismiss, Make ticket", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "labelAt": [570, 230] },
+    { "id": "c5", "from": "triage", "to": "store", "label": "batch in, proposal out", "variant": "dashed", "fromSide": "left", "toSide": "right" },
+    { "id": "c6", "from": "triage", "to": "vault", "label": "search and read", "variant": "dashed", "fromSide": "right", "toSide": "left" },
+    { "id": "c7", "from": "store", "to": "chat", "label": "brief, then new messages", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "c8", "from": "chat", "to": "collector", "label": "STATUS in, title out", "variant": "dashed", "fromSide": "bottom", "toSide": "right" },
+    { "id": "c9", "from": "collector", "to": "store", "label": "ticket report", "fromSide": "left", "toSide": "bottom" }
+  ]
+}
