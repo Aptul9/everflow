@@ -115,10 +115,11 @@ function batchRefs(db: DatabaseSync, batch: Batch): TicketRef[] {
   return extractRefs([batch.title ?? '', ...batchMessages(db, batch.id).map((message) => message.text ?? '')].join('\n'), 'message');
 }
 
-function inputAt(db: DatabaseSync, batch: Batch): string {
+function inputAt(db: DatabaseSync, batch: Batch, target: number): string {
   const stamps = batchMessages(db, batch.id).map((message) => utc(message.stored_at));
-  const manual = db.prepare('SELECT at FROM timeline WHERE event_key=?').get(`make-ticket:batch:${batch.id}`);
-  if (manual) stamps.push(utc(String(manual.at)));
+  const intents = db.prepare('SELECT at FROM timeline WHERE ticket=? AND (event_key=? OR event_key GLOB ?)')
+    .all(target, `make-ticket:batch:${batch.id}`, `correction:batch:${batch.id}:ticket:${target}:*`);
+  stamps.push(...intents.map((intent) => utc(String(intent.at))));
   return stamps.sort().at(-1) ?? utc(batch.created_at);
 }
 
@@ -230,7 +231,7 @@ export function route(db: DatabaseSync, batch: number, at?: string, reopenDays =
     const row = getBatch(db, batch);
     const linked = db.prepare("SELECT ticket FROM ticket_conversation WHERE conversation=? AND kind IN ('primary','linked')").get(row.conversation);
     let owner = linked ? getTicket(db, Number(linked.ticket)) : null;
-    if (owner?.closed_at && inputAt(db, row) <= utc(owner.closed_at) && !owner.merged_into) {
+    if (owner?.closed_at && inputAt(db, row, owner.id) <= utc(owner.closed_at) && !owner.merged_into) {
       db.prepare("UPDATE batch SET ticket=?,state='done',outcome='closed',done_at=? WHERE id=?").run(owner.id, now, batch);
       const context = db.prepare("SELECT ticket FROM ticket_conversation WHERE conversation=? AND kind='context' ORDER BY ticket").all(row.conversation).map((link) => Number(link.ticket));
       return { ticket: owner.id, mode: 'closed', candidates: [], context };
@@ -366,7 +367,7 @@ export function applyDecision(db: DatabaseSync, batch: number, input: unknown): 
         const candidate = getTicket(db, decision.ticket);
         if (decision.confidence >= scope.min_confidence && (candidate.lifecycle === 'proposed' || candidate.lifecycle === 'active')) owner = candidate.id;
         else if (decision.confidence >= scope.min_confidence && candidate.lifecycle === 'done' && !candidate.merged_into
-          && candidate.closed_at && utc(candidate.closed_at) >= daysBefore(now, scope.reopen_days) && inputAt(db, row) > utc(candidate.closed_at)) {
+          && candidate.closed_at && utc(candidate.closed_at) >= daysBefore(now, scope.reopen_days) && inputAt(db, row, candidate.id) > utc(candidate.closed_at)) {
           db.prepare('UPDATE ticket SET lifecycle=?,report=NULL,last_activity_at=? WHERE id=?').run(candidate.approved_at ? 'active' : 'proposed', now, candidate.id);
           owner = candidate.id;
         } else maybe = candidate.id;
@@ -456,6 +457,11 @@ function cancelReboundFuture(db: DatabaseSync, source: number | null, at: string
   }
 }
 
+function correctionIntent(db: DatabaseSync, batch: number, target: number, at: string): void {
+  const seq = Number(db.prepare('SELECT COALESCE(MAX(id),0)+1 AS seq FROM timeline').get()!.seq);
+  history(db, target, at, 'triage', 'rule', `Pending batch ${batch} transferred by correction`, `correction:batch:${batch}:ticket:${target}:${seq}`);
+}
+
 function moveFuture(db: DatabaseSync, source: number | null, target: number, at: string, conversation?: number): void {
   const own = source === null ? [] : ownContext(db, source).batch_ids;
   for (const row of db.prepare("SELECT id,conversation,ticket,state,outcome FROM batch WHERE state='pending' OR outcome='answered'").all()) {
@@ -470,9 +476,11 @@ function moveFuture(db: DatabaseSync, source: number | null, target: number, at:
       db.prepare('UPDATE message SET batch=? WHERE batch=?').run(replacement, id);
       db.prepare("UPDATE batch SET state='done',outcome='corrected',done_at=? WHERE id=?").run(at, id);
       attachBatch(db, replacement, target, at);
+      correctionIntent(db, replacement, target, at);
       continue;
     } else db.prepare("UPDATE batch SET outcome='pending',done_at=NULL WHERE id=?").run(id);
     attachBatch(db, id, target, at);
+    if (row.outcome !== 'answered') correctionIntent(db, id, target, at);
   }
 }
 

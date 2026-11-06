@@ -127,7 +127,7 @@ export function ingest(db: DatabaseSync, record: unknown): boolean {
   return transaction(db, () => {
     const now = utc();
     const identity = JSON.stringify([message.account.toLowerCase(), message.message_id]);
-    const previous = db.prepare('SELECT m.*,c.native_id AS conversation_id FROM message m JOIN conversation c ON c.id=m.conversation WHERE m.source=? AND m.message_id=?')
+    const previous = db.prepare('SELECT m.*,c.native_id AS conversation_id,c.title AS conversation_title FROM message m JOIN conversation c ON c.id=m.conversation WHERE m.source=? AND m.message_id=?')
       .get(message.source, identity);
     if (previous && previous.conversation_id !== message.conversation_id) throw new IngestError('message identity already belongs to another conversation');
     const previousRef = previous ? JSON.parse(String(previous.ref ?? '{}')) as Record<string, unknown> : {};
@@ -141,7 +141,8 @@ export function ingest(db: DatabaseSync, record: unknown): boolean {
     if (previous) {
       const before = [previous.sender ?? '', previous.sender_name ?? '', previous.sender_is_me === 1, utc(String(previous.sent_at)), previous.text ?? '',
         JSON.parse(String(previous.attachments ?? '[]')), JSON.parse(String(previous.ref ?? '{}'))];
-      if (stable(before) === stable(after)) return false;
+      const title = message.conversation_title || previous.conversation_title;
+      if (stable(before) === stable(after) && title === previous.conversation_title) return false;
     }
     let conversation = db.prepare('SELECT id,last_message_at FROM conversation WHERE source=? AND lower(account)=? AND native_id=?')
       .get(message.source, message.account.toLowerCase(), message.conversation_id);

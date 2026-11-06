@@ -416,3 +416,104 @@ test('non-JSON attachment metadata and cyclic refs return useful typed source er
   }
   expect(db.prepare('SELECT COUNT(*) AS n FROM message').get()?.n).toBe(0);
 });
+
+test('I2 title-only source edit preserves identity and precision, requeues input and routes its new title reference', () => {
+  const { path, cfg } = enabledFixture();
+  cfg.chats.enabled = false;
+  using db = openDb(path);
+  const original = line({ conversation_title: 'Original title', text: 'Body without a ticket reference' });
+  ingest(db, original);
+  const oldBatch = Number(db.prepare("INSERT INTO batch(conversation,state,created_at,outcome) VALUES (1,'done',?,'backlog')").run(AT).lastInsertRowid);
+  db.prepare("UPDATE message SET batch=?,sent_at='2026-11-05T23:50:00.123456+00:00'").run(oldBatch);
+  const before = db.prepare('SELECT * FROM message').get()!;
+  const owner = Number(db.prepare("INSERT INTO ticket(title,created_at) VALUES ('Title reference match',?)").run(AT).lastInsertRowid);
+  tickets.addRefs(db, owner, tickets.extractRefs('RCA-12', 'message'), AT);
+  vi.setSystemTime(new Date('2026-11-06T00:10:00Z'));
+  const edited = { ...original, conversation_title: 'RCA-12 incident' };
+  expect(ingest(db, edited)).toBe(true);
+  expect(db.prepare('SELECT title FROM conversation').get()?.title).toBe('RCA-12 incident');
+  const after = db.prepare('SELECT * FROM message').get()!;
+  expect(after).toMatchObject({ id: before.id, message_id: before.message_id, native_id: before.native_id,
+    conversation: before.conversation, sent_at: before.sent_at, batch: null, stored_at: '2026-11-06T00:10:00.000000Z' });
+  const { batch: _oldBatch, stored_at: _oldStored, ...sourceBefore } = before;
+  const { batch: _newBatch, stored_at: _newStored, ...sourceAfter } = after;
+  expect(sourceAfter).toEqual(sourceBefore);
+  const unchanged = snapshot(db, ['conversation', 'person', 'message', 'cursor', 'batch', 'ticket', 'timeline']);
+  const writes = db.prepare('SELECT total_changes() AS n').get()!.n;
+  vi.setSystemTime(new Date('2026-11-06T00:11:00Z'));
+  expect(ingest(db, edited)).toBe(false);
+  expect(snapshot(db, ['conversation', 'person', 'message', 'cursor', 'batch', 'ticket', 'timeline'])).toEqual(unchanged);
+  expect(db.prepare('SELECT total_changes() AS n').get()!.n).toBe(writes);
+  expect(api.schedule(db, cfg, '2026-11-06T00:11:00Z')).toHaveLength(1);
+  const assessment = db.prepare("SELECT ticket,payload FROM job WHERE kind='triage'").get()!;
+  expect(assessment.ticket).toBe(owner);
+  expect(JSON.parse(String(assessment.payload))).toMatchObject({ mode: 'update', ticket: owner });
+  expect(db.prepare('SELECT kind,"by" FROM ticket_conversation WHERE ticket=?').get(owner)).toEqual({ kind: 'linked', by: 'rule' });
+  expect(tickets.detail(db, owner).conversations).toMatchObject([{ title: 'RCA-12 incident' }]);
+  expect(db.prepare('SELECT batch FROM message').get()?.batch).not.toBe(oldBatch);
+  expect(db.prepare('SELECT COUNT(*) AS n FROM turn').get()?.n).toBe(0);
+});
+
+const absentTitles = [
+  { label: 'absent', fields: {} }, { label: 'undefined', fields: { conversation_title: undefined } },
+  { label: 'null', fields: { conversation_title: null } }, { label: 'empty', fields: { conversation_title: '' } },
+];
+test.each(['Original title', null, ''].flatMap((title) => absentTitles.map((incoming) => ({ title, ...incoming }))))
+  ('I2 $label title is a write-free reread with stored title $title', ({ title, fields }) => {
+    using db = openDb(scratch('phase3-title-').path);
+    ingest(db, line({ conversation_title: title }));
+    const id = db.prepare("INSERT INTO batch(conversation,state,created_at,outcome) VALUES (1,'done',?,'backlog')").run(AT).lastInsertRowid;
+    db.prepare('UPDATE message SET batch=?').run(id);
+    const before = snapshot(db, ['conversation', 'person', 'message', 'cursor', 'batch']);
+    const writes = db.prepare('SELECT total_changes() AS n').get()!.n;
+    const { conversation_title: _title, ...record } = line();
+    vi.setSystemTime(new Date('2026-11-06T00:10:00Z'));
+    expect(ingest(db, { ...record, ...fields })).toBe(false);
+    expect(db.prepare('SELECT title FROM conversation').get()?.title).toBe(title);
+    expect(snapshot(db, ['conversation', 'person', 'message', 'cursor', 'batch'])).toEqual(before);
+    expect(db.prepare('SELECT total_changes() AS n').get()!.n).toBe(writes);
+  });
+
+test('I2 title-only edit rolls back conversation, message and cursor on a late cursor write failure', () => {
+  using db = openDb(scratch('phase3-title-').path);
+  const original = line({ conversation_title: 'Original title' });
+  ingest(db, original);
+  const id = db.prepare("INSERT INTO batch(conversation,state,created_at,outcome) VALUES (1,'done',?,'backlog')").run(AT).lastInsertRowid;
+  db.prepare('UPDATE message SET batch=?').run(id);
+  db.prepare("UPDATE cursor SET since='2026-11-05T23:00:00Z'").run();
+  const before = snapshot(db, ['conversation', 'person', 'message', 'cursor', 'batch']);
+  db.exec("CREATE TRIGGER reject_title_cursor BEFORE UPDATE ON cursor BEGIN SELECT RAISE(ABORT,'injected title cursor failure'); END");
+  vi.setSystemTime(new Date('2026-11-06T00:10:00Z'));
+  const edited = { ...original, conversation_title: 'RCA-12 incident' };
+  expect(() => ingest(db, edited)).toThrow('injected title cursor failure');
+  expect(snapshot(db, ['conversation', 'person', 'message', 'cursor', 'batch'])).toEqual(before);
+  expect(db.isTransaction).toBe(false);
+  db.exec('DROP TRIGGER reject_title_cursor');
+  expect(ingest(db, edited)).toBe(true);
+  expect(db.prepare('SELECT title FROM conversation').get()?.title).toBe('RCA-12 incident');
+});
+
+test('I2 title-only edit keeps admitted input immutable and later metadata input behind its collector', () => {
+  const { path, cfg } = enabledFixture();
+  using db = openDb(path);
+  const original = line({ conversation_title: 'Original title' });
+  ingest(db, original);
+  const owner = Number(db.prepare("INSERT INTO ticket(title,lifecycle,approved_at,session_id,created_at) VALUES ('Approved','active',?,'existing-session',?)").run(AT, AT).lastInsertRowid);
+  db.prepare('INSERT INTO ticket_conversation VALUES (?,1,\'primary\',\'you\',?)').run(owner, AT);
+  const oldBatch = Number(db.prepare("INSERT INTO batch(conversation,state,created_at,outcome,ticket) VALUES (1,'running',?,'forward',?)").run(AT, owner).lastInsertRowid);
+  db.prepare('UPDATE message SET batch=?').run(oldBatch);
+  const turn = Number(db.prepare(`INSERT INTO turn(ticket,kind,batch,prompt_id,text,session_id,state,reserved_at,admitted_at,created_at)
+    VALUES (?,'forward',?,'old-title-prompt','Original title and immutable input','existing-session','admitted',?,?,?)`)
+    .run(owner, oldBatch, AT, AT, AT).lastInsertRowid);
+  jobs.enqueue(db, 'collect', 'old-title-collector', { turn }, owner);
+  const immutable = snapshot(db, ['ticket', 'turn', 'job']);
+  vi.setSystemTime(new Date('2026-11-06T00:10:00Z'));
+  expect(ingest(db, { ...original, conversation_title: 'RCA-12 incident' })).toBe(true);
+  expect(api.schedule(db, cfg, '2026-11-06T00:10:00Z')).toEqual([]);
+  expect(db.prepare('SELECT state,outcome,ticket FROM batch WHERE id<>?').get(oldBatch))
+    .toEqual({ state: 'pending', outcome: 'routed', ticket: owner });
+  expect(snapshot(db, ['turn', 'job'])).toEqual({ turn: immutable.turn, job: immutable.job });
+  expect(db.prepare('SELECT lifecycle,approved_at,session_id FROM ticket WHERE id=?').get(owner))
+    .toEqual({ lifecycle: 'active', approved_at: AT, session_id: 'existing-session' });
+  expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+});

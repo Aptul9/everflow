@@ -887,3 +887,159 @@ test('source-local people shared through a context relation are offered without 
   expect(api.route(db, input, AT)).toMatchObject({ mode: 'new', ticket: null });
   expect(db.prepare('SELECT approved_at,session_id FROM ticket WHERE id=?').get(context)).toEqual({ approved_at: OLD, session_id: null });
 });
+
+const CORRECTION_INPUT = '2026-11-06T01:00:00.123000Z';
+const CORRECTION_CLOSED = '2026-11-06T02:00:00.123456+00:00';
+const CORRECTION_AT = '2026-11-06T03:00:00.654321Z';
+
+function correctionSource(db: DatabaseSync) {
+  const rows = snapshot(db, ['message', 'cursor']);
+  return { ...rows, message: rows.message!.map(({ batch: _batch, ...message }) => message) };
+}
+
+function correctionMarkers(db: DatabaseSync, owner: number) {
+  return db.prepare(`SELECT lifecycle,approved_at,approval_note,session_id,closed_at,report,report_line,report_at,report_turn,report_message_id
+    FROM ticket WHERE id=?`).get(owner);
+}
+
+function correctionSetup(db: DatabaseSync, cfg: ReturnType<typeof loadConfig>, triage = false, proposedTarget = false) {
+  vi.setSystemTime(new Date(CORRECTION_INPUT));
+  const oldTarget = batch(db, { text: 'Unrelated target input before its close' });
+  const first = batch(db, { conversation_id: 'corrected-conversation', message_id: 'corrected-first', sent_at: '2026-11-05T23:50:00.123456Z', text: 'Transferred first' });
+  const inputs = [first];
+  if (!triage) inputs.push(batch(db, { conversation_id: 'corrected-conversation', message_id: 'corrected-second', sent_at: '2026-11-05T23:51:00.999999Z', text: 'Transferred second' }));
+  const from = ticket(db, { lifecycle: triage ? 'proposed' : 'active', approved_at: triage ? null : OLD, session_id: triage ? null : 'source-session' });
+  const target = ticket(db, { lifecycle: proposedTarget ? 'proposed' : 'active', approved_at: proposedTarget ? null : OLD,
+    approval_note: proposedTarget ? null : 'Existing approval', session_id: proposedTarget ? null : 'reopened-target-session',
+    closed_at: CORRECTION_CLOSED, report_at: CORRECTION_CLOSED, report: 'waiting_them', report_line: 'Retained target report', report_message_id: 'retained-report-id' });
+  const reportTurn = inputTurn(db, target, 'done');
+  db.prepare('UPDATE ticket SET report_turn=? WHERE id=?').run(reportTurn, target);
+  link(db, target, conversation(db, oldTarget));
+  link(db, from, conversation(db, first));
+  db.prepare('UPDATE batch SET ticket=? WHERE id=?').run(target, oldTarget);
+  for (const id of inputs) db.prepare('UPDATE batch SET ticket=?,outcome=? WHERE id=?').run(from, triage ? 'pending' : 'forward', id);
+  let originalJob: number;
+  if (triage) {
+    expect(ingestApi.schedule(db, cfg, CORRECTION_INPUT)).toHaveLength(1);
+    originalJob = Number(db.prepare("SELECT id FROM job WHERE kind='triage' AND ticket=?").get(from)!.id);
+  } else originalJob = jobs.enqueue(db, 'forward', 'before-correction', { batch_ids: inputs }, from);
+  return { from, target, oldTarget, inputs, originalJob, source: correctionSource(db), markers: correctionMarkers(db, target),
+    originalPayload: db.prepare('SELECT payload FROM job WHERE id=?').get(originalJob)!.payload,
+    turns: snapshot(db, ['turn']) };
+}
+
+function correct(db: DatabaseSync, kind: 'relink' | 'merge', state: ReturnType<typeof correctionSetup>) {
+  vi.setSystemTime(new Date(CORRECTION_AT));
+  return kind === 'relink' ? api.relink(db, conversation(db, state.inputs[0]!), state.target, CORRECTION_AT)
+    : api.merge(db, state.from, state.target, CORRECTION_AT);
+}
+
+test.each(['relink', 'merge'] as const)('I1 %s preserves transferred FIFO input across reopen without reviving target pre-close input', (kind) => {
+  const { path, cfg } = fixture();
+  let state: ReturnType<typeof correctionSetup>;
+  {
+    using db = openDb(path);
+    state = correctionSetup(db, cfg);
+    expect(correct(db, kind, state)).toBe(state.target);
+    expect(correctionSource(db)).toEqual(state.source);
+    expect(correctionMarkers(db, state.target)).toEqual(state.markers);
+    for (const id of state.inputs) expect(db.prepare('SELECT ticket,state,outcome FROM batch WHERE id=?').get(id))
+      .toEqual({ ticket: state.target, state: 'pending', outcome: 'pending' });
+  }
+  using reopened = openDb(path);
+  const scheduled = ingestApi.schedule(reopened, cfg, CORRECTION_AT);
+  expect(scheduled).toHaveLength(1);
+  expect(reopened.prepare('SELECT ticket,state,outcome FROM batch WHERE id=?').get(state.oldTarget))
+    .toEqual({ ticket: state.target, state: 'done', outcome: 'closed' });
+  for (const id of state.inputs) expect(reopened.prepare('SELECT ticket,state,outcome FROM batch WHERE id=?').get(id))
+    .toEqual({ ticket: state.target, state: 'pending', outcome: 'forward' });
+  const job = reopened.prepare('SELECT kind,ticket,payload FROM job WHERE id=?').get(scheduled[0]!)!;
+  expect(job).toMatchObject({ kind: 'forward', ticket: state.target });
+  expect(JSON.parse(String(job.payload))).toEqual({ batch_ids: state.inputs });
+  expect(reopened.prepare('SELECT ticket,state,payload FROM job WHERE id=?').get(state.originalJob))
+    .toEqual({ ticket: state.from, state: 'cancelled', payload: state.originalPayload });
+  expect(ingestApi.schedule(reopened, cfg, CORRECTION_AT)).toEqual([]);
+  expect(reopened.prepare("SELECT COUNT(*) AS n FROM job WHERE state='queued'").get()?.n).toBe(1);
+  expect(correctionSource(reopened)).toEqual(state.source);
+  expect(correctionMarkers(reopened, state.target)).toEqual(state.markers);
+  expect(snapshot(reopened, ['turn'])).toEqual(state.turns);
+  expect(reopened.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+});
+
+test.each(['relink', 'merge'] as const)('I1 %s gives corrected triage replacement its own persistent target intent', (kind) => {
+  const { path, cfg } = fixture();
+  let state: ReturnType<typeof correctionSetup>;
+  let replacement: number;
+  {
+    using db = openDb(path);
+    state = correctionSetup(db, cfg, true);
+    correct(db, kind, state);
+    replacement = Number(db.prepare("SELECT id FROM batch WHERE ticket=? AND state='pending' AND conversation=?")
+      .get(state.target, conversation(db, state.inputs[0]!))!.id);
+    expect(replacement).not.toBe(state.inputs[0]);
+    expect(db.prepare('SELECT ticket,state,outcome FROM batch WHERE id=?').get(state.inputs[0]!))
+      .toEqual({ ticket: state.from, state: 'done', outcome: 'corrected' });
+    expect(correctionSource(db)).toEqual(state.source);
+  }
+  using reopened = openDb(path);
+  expect(ingestApi.schedule(reopened, cfg, CORRECTION_AT)).toHaveLength(1);
+  const job = reopened.prepare("SELECT kind,ticket,payload FROM job WHERE state='queued'").get()!;
+  expect(job).toMatchObject({ kind: 'forward', ticket: state.target });
+  expect(JSON.parse(String(job.payload))).toEqual({ batch_ids: [replacement] });
+  expect(correctionMarkers(reopened, state.target)).toEqual(state.markers);
+  expect(correctionSource(reopened)).toEqual(state.source);
+  expect(snapshot(reopened, ['turn'])).toEqual(state.turns);
+});
+
+test.each(['relink', 'merge'] as const)('I1 %s rolls back intent, transfers and cancellations on a late intent write failure', (kind) => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const state = correctionSetup(db, cfg);
+  const before = snapshot(db, ['ticket', 'ticket_conversation', 'ticket_ref', 'timeline', 'batch', 'message', 'cursor', 'job', 'turn']);
+  db.exec(`CREATE TRIGGER reject_correction_intent BEFORE INSERT ON timeline
+    WHEN NEW.event_key GLOB 'correction:batch:${state.inputs[1]}:ticket:${state.target}:*'
+    BEGIN SELECT RAISE(ABORT,'injected correction intent failure'); END`);
+  expect(() => correct(db, kind, state)).toThrow('injected correction intent failure');
+  expect(snapshot(db, ['ticket', 'ticket_conversation', 'ticket_ref', 'timeline', 'batch', 'message', 'cursor', 'job', 'turn'])).toEqual(before);
+  expect(db.isTransaction).toBe(false);
+  db.exec('DROP TRIGGER reject_correction_intent');
+  expect(correct(db, kind, state)).toBe(state.target);
+  expect(ingestApi.schedule(db, cfg, CORRECTION_AT)).toHaveLength(1);
+});
+
+test.each(['relink', 'merge'] as const)('I1 %s intent retains a proposed target approval boundary', (kind) => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const state = correctionSetup(db, cfg, false, true);
+  correct(db, kind, state);
+  expect(ingestApi.schedule(db, cfg, CORRECTION_AT)).toHaveLength(2);
+  expect(db.prepare("SELECT kind,ticket FROM job WHERE state='queued' ORDER BY id").all())
+    .toEqual(state.inputs.map(() => ({ kind: 'triage', ticket: state.target })));
+  expect(correctionMarkers(db, state.target)).toEqual(state.markers);
+  expect(snapshot(db, ['turn'])).toEqual(state.turns);
+});
+
+test.each(['relink', 'merge'] as const)('I1 %s intent belongs only to its transferred batch and selected target', (kind) => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const state = correctionSetup(db, cfg);
+  correct(db, kind, state);
+  const other = ticket(db, { lifecycle: 'active', approved_at: OLD, closed_at: CORRECTION_CLOSED, report_at: CORRECTION_CLOSED });
+  const conv = conversation(db, state.inputs[0]!);
+  db.prepare("UPDATE ticket_conversation SET kind='context' WHERE conversation=? AND kind IN ('primary','linked')").run(conv);
+  link(db, other, conv, 'linked');
+  expect(api.route(db, state.inputs[0]!, CORRECTION_AT)).toMatchObject({ ticket: other, mode: 'closed' });
+  expect(correctionMarkers(db, state.target)).toEqual(state.markers);
+});
+
+test.each(['relink', 'merge'] as const)('I1 %s intent cannot bypass a later target close marker', (kind) => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const state = correctionSetup(db, cfg);
+  correct(db, kind, state);
+  db.prepare("UPDATE ticket SET closed_at='2026-11-06T04:00:00Z',report_at='2026-11-06T04:00:00Z' WHERE id=?").run(state.target);
+  expect(ingestApi.schedule(db, cfg, '2026-11-06T05:00:00Z')).toEqual([]);
+  for (const id of state.inputs) expect(db.prepare('SELECT state,outcome FROM batch WHERE id=?').get(id)).toEqual({ state: 'done', outcome: 'closed' });
+  expect(db.prepare('SELECT closed_at,report_at FROM ticket WHERE id=?').get(state.target))
+    .toEqual({ closed_at: '2026-11-06T04:00:00Z', report_at: '2026-11-06T04:00:00Z' });
+});
