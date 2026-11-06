@@ -94,6 +94,24 @@ test('end-to-end source, HTTP tool round trip and KB-derived proposal commit und
   expect(db.prepare('SELECT COUNT(*) AS n FROM turn').get()?.n).toBe(0);
 });
 
+test('provider thinking blocks are accepted, echoed unchanged with the tool turn and never parsed as the decision', async () => {
+  const { cfg } = kbFixture();
+  using db = openDb(cfg.db.path);
+  const job = batchJob(db, cfg);
+  const thinking = { type: 'thinking', thinking: 'Synthetic reasoning, never a decision.', signature: 'synthetic-signature' };
+  const call = { ...use('find-workflow'), caller: { type: 'direct' } };
+  await using peer = await scriptedPeer((_request, index) => index === 0
+    ? { body: { content: [thinking, call], stop_reason: 'tool_use' } }
+    : { body: { content: [{ type: 'redacted_thinking', data: 'synthetic-redacted' }, ...text().content], stop_reason: 'end_turn' } });
+  await handle(cfg, db, job, { providers: { first: provider(peer.baseURL) } });
+  expect(peer.errors).toEqual([]);
+  expect(peer.requests).toHaveLength(2);
+  expect(peer.requests[1]!.messages.at(-2)).toEqual({ role: 'assistant', content: [thinking, call] });
+  expect(jobRow(db, job).state).toBe('done');
+  expect(db.prepare('SELECT lifecycle,proposal FROM ticket').get()).toEqual({ lifecycle: 'proposed', proposal: 'Inspect logs' });
+  expect(db.prepare("SELECT COUNT(*) AS n FROM triage_log WHERE action='invalid'").get()?.n).toBe(0);
+});
+
 test('proposed route is reassessed in update mode using the fresh shared title snapshot', async () => {
   const { cfg } = kbFixture();
   using db = openDb(cfg.db.path);

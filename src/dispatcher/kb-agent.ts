@@ -76,9 +76,12 @@ const routeSchema = z.looseObject({
   settings: z.looseObject({ baseURL: z.url().refine((value) => /^https?:\/\//i.test(value), 'HTTP(S) baseURL required'), apiKey: z.string().optional() }),
   headers: z.record(z.string(), z.string()).default({}),
 });
+// Thinking blocks are kept verbatim so the tool turn can be echoed back with its signature; they never carry the decision.
 const blockSchema = z.union([
   z.looseObject({ type: z.literal('text'), text: z.string() }),
   z.looseObject({ type: z.literal('tool_use'), id: z.string().min(1).max(200), name: z.string().min(1).max(100), input: z.unknown() }),
+  z.looseObject({ type: z.literal('thinking'), thinking: z.string(), signature: z.string() }),
+  z.looseObject({ type: z.literal('redacted_thinking'), data: z.string() }),
 ]);
 const responseSchema = z.looseObject({ content: z.array(blockSchema) });
 type Block = z.infer<typeof blockSchema>;
