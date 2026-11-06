@@ -14,7 +14,7 @@ import { Messages, TicketCard } from './ticket-card.tsx';
 import { useOverview } from './use-overview.ts';
 
 export function TicketBoard(props: { initialState: OverviewState; initialEtag: string; token: string; initialNow?: number }) {
-  const { state, now, revision, unreachable, expired, pending, errors, notice, post } = useOverview(props.initialState, props.initialEtag, props.token, props.initialNow);
+  const { state, now, unreachable, expired, pending, errors, notice, post } = useOverview(props.initialState, props.initialEtag, props.token, props.initialNow);
   const [tab, setTab] = useState<Group>('needs_you');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -114,7 +114,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
               {errors[`batch:${batch.id}:ticket`] && <p role="alert" className="text-sm text-destructive">{errors[`batch:${batch.id}:ticket`]}</p>}
             </CardContent>
           </Card>) : state.groups[group].filter((ticket) => matches([ticket.title, ticket.client, ticket.session_title, ticket.summary, ticket.ask, ticket.proposal, ...ticket.refs.map((ref) => ref.key)].join(' '))).map((ticket) =>
-            <TicketCard key={ticket.id} ticket={ticket} enabled={state.tickets_enabled} chats={state.chats_enabled} expired={expired} now={now} revision={revision}
+            <TicketCard key={ticket.id} ticket={ticket} enabled={state.tickets_enabled} chats={state.chats_enabled} expired={expired} now={now}
               selected={selected.has(ticket.id)} onSelect={(checked) => setSelected((previous) => { const next = new Set(previous); if (checked) next.add(ticket.id); else next.delete(ticket.id); return next; })}
               pending={pending} errors={errors} post={post} />)}
           {(group === 'skipped' ? state.skipped.length === 0 : state.groups[group].length === 0) && <p className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">No tickets in {label.toLocaleLowerCase()}.</p>}

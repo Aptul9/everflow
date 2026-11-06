@@ -22,6 +22,7 @@ export function ticketDetail(db: DatabaseSync, id: number): TicketDetail {
   const view = detail(db, id);
   const row = view.ticket;
   const messages = view.messages.map(message);
+  const timeline = view.timeline.map(({ id, at, kind, actor, body, link }) => ({ id, at, kind, actor, body, link }));
   const refs = (view.refs as unknown as (Reference & { ticket: number })[]).map(({ id, kind, key, url, seen_in }) => ({ id, kind, key, url, seen_in }))
     .sort((a, b) => b.id - a.id);
   const ticket: TicketCard = { id: row.id, title: row.title, client: row.client, lifecycle: row.lifecycle,
@@ -29,8 +30,8 @@ export function ticketDetail(db: DatabaseSync, id: number): TicketDetail {
     summary: row.summary, ask: row.ask, proposal: row.proposal, confidence: row.confidence, maybe_ticket: row.maybe_ticket,
     kb_notes: (JSON.parse(row.kb_notes) as unknown[]).filter((value): value is string => typeof value === 'string'),
     created_at: row.created_at, last_activity_at: row.last_activity_at, closed_at: row.closed_at, report: row.report,
-    report_line: row.report_line, session_title: row.session_title, messages, refs };
-  return { ticket, messages, refs, timeline: view.timeline.map(({ id, at, kind, actor, body, link }) => ({ id, at, kind, actor, body, link })) };
+    report_line: row.report_line, session_title: row.session_title, timeline_revision: representation(timeline).etag, messages, refs };
+  return { ticket, messages, refs, timeline };
 }
 
 function health(db: DatabaseSync, cfg: Config): Health[] {

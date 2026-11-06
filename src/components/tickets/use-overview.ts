@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { OverviewState } from '../../lib/web-types.ts';
 
+export const STATE_DEADLINE_MS = 8_000;
+
 export function useOverview(initialState: OverviewState, initialEtag: string, token: string, initialNow = Date.now()) {
   const [state, setState] = useState(initialState);
   const [now, setNow] = useState(initialNow);
-  const [revision, setRevision] = useState(0);
   const [unreachable, setUnreachable] = useState<string | null>(null);
   const [expired, setExpired] = useState(false);
   const [pending, setPending] = useState<Set<string>>(new Set());
@@ -25,23 +26,43 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
     setNow(Date.now());
     const controller = new AbortController();
     controllers.current.add(controller);
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let onAbort = () => {};
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => {
+        if (timer !== undefined) clearTimeout(timer);
+        reject(new Error(timedOut ? 'State request deadline exceeded' : 'State request cancelled'));
+      };
+      controller.signal.addEventListener('abort', onAbort, { once: true });
+    });
+    timer = setTimeout(() => { timedOut = true; controller.abort(); }, STATE_DEADLINE_MS);
     try {
-      const response = await fetch('/api/state', { headers: { 'if-none-match': etag.current }, signal: controller.signal, cache: 'no-store' });
+      const operation = (async () => {
+        const response = await fetch('/api/state', { headers: { 'if-none-match': etag.current }, signal: controller.signal, cache: 'no-store' });
+        const next = response.status === 200 ? await response.json() as OverviewState : null;
+        return { response, next };
+      })();
+      const { response, next } = await Promise.race([operation, aborted]);
+      if (!mounted.current || controller.signal.aborted) return;
       if (response.status === 403) { stale.current = true; if (mounted.current) setExpired(true); throw new Error('Local Host rejected'); }
       if (response.status !== 304) {
         if (!response.ok) throw new Error(`State request failed (${response.status})`);
-        const next = await response.json() as OverviewState;
-        if (typeof next.tickets_enabled !== 'boolean' || !next.groups || !Array.isArray(next.health) || !next.problems) throw new Error('Invalid state response');
+        if (!next || typeof next.tickets_enabled !== 'boolean' || !next.groups || !Array.isArray(next.health) || !next.problems) throw new Error('Invalid state response');
         if (mounted.current) {
           setState(next);
-          setRevision((previous) => previous + 1);
           etag.current = response.headers.get('etag') ?? '';
         }
       }
       if (mounted.current) setUnreachable(null);
     } catch {
-      if (mounted.current && !controller.signal.aborted) setUnreachable((first) => first ?? new Date().toISOString());
-    } finally { controllers.current.delete(controller); polling.current = false; }
+      if (mounted.current && (timedOut || !controller.signal.aborted)) setUnreachable((first) => first ?? new Date().toISOString());
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      controller.signal.removeEventListener('abort', onAbort);
+      controllers.current.delete(controller);
+      polling.current = false;
+    }
   }, []);
 
   useEffect(() => {
@@ -82,5 +103,5 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
     }
   }, [refresh, token]);
 
-  return { state, now, revision, unreachable, expired, pending, errors, notice, post, refresh };
+  return { state, now, unreachable, expired, pending, errors, notice, post, refresh };
 }

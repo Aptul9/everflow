@@ -2,14 +2,19 @@ import { fork } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { request } from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { readBuildReceipt } from '../src/web/build-artifact.ts';
+import { isolatedEnvironment } from '../scripts/build.ts';
 
 export async function serve(config: string) {
   return launch('web-process.ts', [], { TEST_INSTANCE_CONFIG: config });
 }
 
 export async function launch(script: string, args: string[], env: Record<string, string | undefined> = {}) {
+  const receipt = env.TEST_BUILD_RECEIPT ?? process.env.TEST_BUILD_RECEIPT;
+  const artifact = readBuildReceipt(receipt);
   const child = fork(fileURLToPath(new URL(script, import.meta.url)), args, {
-    env: { ...process.env, ...env, NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1' },
+    cwd: artifact.root,
+    env: { ...isolatedEnvironment(artifact.root, process.env), ...env, TEST_BUILD_RECEIPT: receipt!, NODE_ENV: 'production', NEXT_TELEMETRY_DISABLED: '1' },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'], execArgv: [], windowsHide: true,
   });
   let log = '';

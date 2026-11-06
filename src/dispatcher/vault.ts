@@ -1,5 +1,8 @@
 import fs from 'node:fs';
 import { basename, isAbsolute, join, parse, resolve } from 'node:path';
+import { excluded, isNotePath, safeComponent } from './policy.ts';
+
+export { isNotePath } from './policy.ts';
 
 export const VAULT_LIMITS = {
   hits: 50, noteBytes: 32_768, entries: 2_048, files: 256, searchBytes: 1_048_576, depth: 16, queryChars: 256, snippetChars: 240,
@@ -9,21 +12,6 @@ export interface Note { path: string; title: string; text: string; truncated: bo
 export interface SearchHit { path: string; title: string; line: number; snippet: string }
 
 export class VaultError extends Error {}
-
-function excluded(name: string): boolean {
-  return name.toLowerCase() === '_secrets' || name.toLowerCase().startsWith('.unison.');
-}
-
-function safeComponent(name: string): boolean {
-  return name.length > 0 && name.length <= 255 && name !== '.' && name !== '..' && !/[. ]$/.test(name)
-    && !/[\x00-\x1f<>:"|?*%\\/]/.test(name) && !excluded(name)
-    && !/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(name);
-}
-
-export function isNotePath(value: string): boolean {
-  return typeof value === 'string' && value.length <= 1_024 && value.normalize('NFKC') === value
-    && /\.md$/i.test(value) && value.split('/').every(safeComponent);
-}
 
 function numericLimit(value: number, maximum: number): void {
   if (!Number.isSafeInteger(value) || value < 1 || value > maximum) throw new RangeError(`Limit must be an integer from 1 to ${maximum}`);

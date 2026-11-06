@@ -1,13 +1,12 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
-import { clientsFor } from './config.ts';
+import { clientsFor, isNotePath } from './policy.ts';
 import type { Config } from './config.ts';
 import { transaction } from './db.ts';
 import type { Job } from './jobs.ts';
 import { utc } from './time.ts';
 import type { Lifecycle, Report } from './types.ts';
-import { isNotePath } from './vault.ts';
 
 export type Stage = 'Failed' | 'Needs you' | 'Working' | 'Waiting on them' | 'Idle' | 'Done' | 'Dismissed';
 

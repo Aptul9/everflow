@@ -4,6 +4,9 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { TicketBoard } from '../../src/components/tickets/ticket-board.tsx';
 import { uiDetail, uiState } from './fixtures.ts';
+import { DatabaseSync } from 'node:sqlite';
+import { webFixture } from '../web-fixture.ts';
+import { readState, representation, ticketDetail } from '../../src/web/state.ts';
 
 let fetcher: ReturnType<typeof vi.fn>;
 beforeEach(() => {
@@ -226,6 +229,39 @@ test('poll failure preserves last good state and first unreachable time; recover
   expect(screen.queryByRole('alert')).toBeNull();
 });
 
+test.each(['headers', 'body'])('state %s deadline reports first-unreachable, releases single flight and recovers', async (stall) => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-11-06T06:00:00Z'));
+  let signal: AbortSignal | undefined;
+  fetcher.mockImplementationOnce((_url: string, init: RequestInit) => {
+    signal = init.signal as AbortSignal;
+    return stall === 'headers' ? new Promise(() => {}) : Promise.resolve({ status: 200, ok: true, headers: new Headers(), json: () => new Promise(() => {}) });
+  });
+  fetcher.mockResolvedValue(new Response(null, { status: 304 }));
+  board();
+  await act(async () => { await vi.advanceTimersByTimeAsync(18_000); });
+  expect(signal!.aborted).toBe(true);
+  const first = screen.getByRole('alert').textContent;
+  expect(first).toContain('Unreachable since');
+  expect(ticket()).toBeTruthy();
+  await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+test('unmount abort is distinct from timeout and clears the request deadline', async () => {
+  vi.useFakeTimers();
+  let signal: AbortSignal | undefined;
+  fetcher.mockImplementation((_url: string, init: RequestInit) => { signal = init.signal as AbortSignal; return new Promise(() => {}); });
+  const view = board();
+  await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+  await act(async () => { view.unmount(); });
+  expect(signal!.aborted).toBe(true);
+  expect(vi.getTimerCount()).toBe(0);
+  await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+  expect(fetcher).toHaveBeenCalledTimes(1);
+});
+
 test('refresh preserves selection, expanded messages/timeline and focused card', async () => {
   const state = uiState();
   const interval = vi.spyOn(globalThis, 'setInterval');
@@ -261,9 +297,36 @@ test('expanded timeline refreshes its content without collapsing or moving card 
   original.focus();
   detail = { ...detail, timeline: [{ id: 30, at: '2026-11-06T07:00:00Z', kind: 'status', actor: 'chat', body: 'Newly collected event', link: null }, ...detail.timeline] };
   state.groups.needs_you[0]!.summary = 'Updated summary';
+  state.groups.needs_you[0]!.timeline_revision = 'synthetic-new-event';
   const tick = interval.mock.calls.find(([, delay]) => delay === 10_000)![0] as () => void;
   await act(async () => tick());
   expect(await within(original).findByText('Newly collected event')).toBeTruthy();
+  expect(within(original).getByRole('button', { name: 'Timeline' }).getAttribute('aria-expanded')).toBe('true');
+  expect(document.activeElement === original).toBe(true);
+});
+
+test('timeline-only server change invalidates state and refreshes expanded detail without focus loss', async () => {
+  const fixture = webFixture();
+  using db = new DatabaseSync(fixture.path);
+  const interval = vi.spyOn(globalThis, 'setInterval');
+  const initial = readState(db, fixture.cfg);
+  const initialEtag = representation(initial).etag;
+  fetcher.mockImplementation(async (input: string, init?: RequestInit) => {
+    if (input.includes('/api/ticket/')) return Response.json(ticketDetail(db, fixture.proposal));
+    const state = readState(db, fixture.cfg);
+    const { etag } = representation(state);
+    return new Headers(init?.headers).get('if-none-match') === etag ? new Response(null, { status: 304 }) : Response.json(state, { headers: { etag } });
+  });
+  render(<TicketBoard initialState={initial} initialEtag={initialEtag} token="synthetic-token" />);
+  const original = screen.getByRole('article', { name: `Ticket #${fixture.proposal}: Review synthetic access` });
+  await userEvent.click(within(original).getByRole('button', { name: 'Timeline' }));
+  await within(original).findByRole('list', { name: 'Timeline events' });
+  original.focus();
+  db.prepare("INSERT INTO timeline(ticket,at,kind,actor,body,event_key) VALUES (?,?,'failure','chat','Timeline-only new event','rtl-timeline-only')")
+    .run(fixture.proposal, new Date().toISOString());
+  const tick = interval.mock.calls.find(([, delay]) => delay === 10_000)![0] as () => void;
+  await act(async () => tick());
+  expect(await within(original).findByText('Timeline-only new event')).toBeTruthy();
   expect(within(original).getByRole('button', { name: 'Timeline' }).getAttribute('aria-expanded')).toBe('true');
   expect(document.activeElement === original).toBe(true);
 });

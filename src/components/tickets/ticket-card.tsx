@@ -36,7 +36,7 @@ export function Messages({ messages }: { messages: SourceMessage[] }) {
   </div>;
 }
 
-function Timeline({ ticket, revision }: { ticket: number; revision: number }) {
+function Timeline({ ticket, revision }: { ticket: number; revision: string }) {
   const [expanded, setExpanded] = useState(false);
   const [detail, setDetail] = useState<TicketDetail | null>(null);
   const [error, setError] = useState('');
@@ -82,7 +82,6 @@ export function TicketCard(props: {
   errors: Record<string, string>;
   post: (key: string, path: string, input?: Record<string, string>) => Promise<unknown>;
   now: number;
-  revision: number;
 }) {
   const { ticket, post } = props;
   const heading = useId();
@@ -120,7 +119,7 @@ export function TicketCard(props: {
         </div>}
         {ticket.kb_notes.length > 0 && <div className="text-sm"><p className="font-medium">KB paths</p><ul>{ticket.kb_notes.map((path, index) => <li key={`${index}:${path}`}><code>{path}</code></li>)}</ul></div>}
         {ticket.refs.length > 0 && <ul aria-label="References" className="flex flex-wrap gap-x-4 gap-y-1 text-sm">{ticket.refs.map((ref) => <li key={ref.id}><SafeLink url={ref.url}>{ref.key}</SafeLink></li>)}</ul>}
-        <div className="grid gap-1"><Messages messages={ticket.messages} /><Timeline ticket={ticket.id} revision={props.revision} /></div>
+        <div className="grid gap-1"><Messages messages={ticket.messages} /><Timeline ticket={ticket.id} revision={ticket.timeline_revision} /></div>
         {props.enabled && !terminal && <>
           <Separator />
           <div className="flex flex-wrap gap-2">

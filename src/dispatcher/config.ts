@@ -86,10 +86,4 @@ export function readJsonc(path: string): unknown {
   return value;
 }
 
-export function clientsFor(cfg: Pick<Config, 'clients'>, account: string, addresses: readonly string[]): string[] {
-  const clients = Object.entries(cfg.clients);
-  const hit = clients.filter(([, client]) => client.accounts.some((value) => value.toLowerCase() === account.toLowerCase()));
-  if (hit.length) return hit.map(([name]) => name);
-  const domains = new Set([...addresses, account].filter((value) => value.includes('@')).map((value) => value.split('@').at(-1)!.toLowerCase()));
-  return clients.filter(([, client]) => client.domains.some((domain) => domains.has(domain.toLowerCase()))).map(([name]) => name);
-}
+export { clientsFor } from './policy.ts';

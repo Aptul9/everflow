@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { expect, test } from 'vitest';
 import { stateGet, ticketGet, actionPost } from '../src/web/api.ts';
 import { initialize, release } from '../src/web/instance.ts';
-import { canonicalJson, readState, ticketDetail } from '../src/web/state.ts';
+import { canonicalJson, readState, representation, ticketDetail } from '../src/web/state.ts';
 import { webFixture } from './web-fixture.ts';
 
 test('import and direct route handlers fail closed without a context or default DB access', async () => {
@@ -25,6 +25,21 @@ test('import and direct route handlers fail closed without a context or default 
 
 test('canonical JSON sorts nested keys and retains deterministic array order', () => {
   expect(canonicalJson({ z: { b: 2, a: 1 }, a: [{ b: 2, a: 1 }, 3] })).toBe('{"a":[{"a":1,"b":2},3],"z":{"a":1,"b":2}}');
+});
+
+test('timeline-only insert changes deterministic overview ETag without summary or activity changes', () => {
+  const fixture = webFixture();
+  using db = new DatabaseSync(fixture.path);
+  const before = readState(db, fixture.cfg);
+  const previous = representation(before);
+  const ticketBefore = ticketDetail(db, fixture.proposal).ticket;
+  db.prepare("INSERT INTO timeline(ticket,at,kind,actor,body,event_key) VALUES (?,?,'failure','chat','Repeated dependency failure','timeline-only-regression')")
+    .run(fixture.proposal, new Date().toISOString());
+  const after = readState(db, fixture.cfg);
+  expect(ticketDetail(db, fixture.proposal).ticket.summary).toBe(ticketBefore.summary);
+  expect(ticketDetail(db, fixture.proposal).ticket.last_activity_at).toBe(ticketBefore.last_activity_at);
+  expect(representation(after).etag).not.toBe(previous.etag);
+  expect(representation(readState(db, fixture.cfg)).json).toBe(representation(after).json);
 });
 
 test('a missing initialized DB fails closed without creating an empty replacement on POST', async () => {

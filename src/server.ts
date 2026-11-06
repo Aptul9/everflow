@@ -1,17 +1,22 @@
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
-import { isAbsolute } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { NextServer, NextServerOptions, RequestHandler } from 'next/dist/server/next.js';
 import { loadConfig } from './dispatcher/config.ts';
 import { allowedHost, errorResponse, guardPost } from './web/api.ts';
 import { initialize, release } from './web/instance.ts';
 import type { WebInstance } from './web/instance.ts';
+import { readBuildReceipt, samePath } from './web/build-artifact.ts';
 
-const next = createRequire(import.meta.url)('next') as (options: NextServerOptions) => Pick<NextServer, 'prepare' | 'close' | 'getRequestHandler'>;
-
-export async function startServer(options: { configPath: string; port?: number }) {
+export async function startServer(options: { configPath: string; buildReceipt: string; port?: number }) {
+  const artifact = readBuildReceipt(options?.buildReceipt);
+  const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  if (!samePath(moduleRoot, artifact.root) || !samePath(process.cwd(), artifact.root)) throw new Error('Launch the compiled staged server with its staged working directory');
   if (!options || typeof options.configPath !== 'string' || !isAbsolute(options.configPath)) throw new Error('Absolute explicit instance config required');
+  process.env.INBOX_DISPATCHER_BUILD_ROOT = artifact.root;
+  const next = createRequire(import.meta.url)('next') as (options: NextServerOptions) => Pick<NextServer, 'prepare' | 'close' | 'getRequestHandler'>;
   const config = loadConfig(options.configPath);
   const requestedPort = options.port ?? config.web.port;
   if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) throw new Error('Invalid web port');
@@ -50,7 +55,7 @@ export async function startServer(options: { configPath: string; port?: number }
     server.listen(requestedPort, '127.0.0.1', () => { server.off('error', reject); resolve(); });
   });
   const port = (server.address() as { port: number }).port;
-  const app = next({ dev: false, hostname: '127.0.0.1', port, httpServer: server });
+  let app: Pick<NextServer, 'prepare' | 'close' | 'getRequestHandler'> | undefined;
   let closing: Promise<void> | undefined;
   const close = () => closing ??= (async () => {
     handle = undefined;
@@ -58,12 +63,12 @@ export async function startServer(options: { configPath: string; port?: number }
       server.close((error) => error ? reject(error) : resolve());
       server.closeAllConnections();
     });
-    await app.close();
-    if (current) release(current);
+    try { await app?.close(); } finally { if (current) release(current); }
   })();
   try {
     current = { config, configPath: config._config_path, port, token: randomBytes(32).toString('hex') };
     initialize(current);
+    app = next({ dev: false, dir: artifact.root, hostname: '127.0.0.1', port, httpServer: server });
     await app.prepare();
     handle = app.getRequestHandler();
     return { port, close };

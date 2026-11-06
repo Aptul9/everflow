@@ -4,7 +4,7 @@ export const AT = '2026-11-06T06:00:00.000000Z';
 export function card(id: number, fields: Partial<TicketCard> = {}): TicketCard {
   return { id, title: 'Reset access', client: 'North', lifecycle: 'proposed', stage: 'Needs you', summary: 'Source summary', ask: 'Confirm access scope',
     proposal: 'Check membership first', confidence: 0.88, maybe_ticket: 42, kb_notes: ['01_Projects/access.md'], created_at: AT, last_activity_at: AT,
-    closed_at: null, report: null, report_line: null, session_title: null,
+    closed_at: null, report: null, report_line: null, session_title: null, timeline_revision: 'synthetic-initial-timeline',
     refs: [{ id: 2, kind: 'jira', key: 'OPS-123', url: 'https://example.invalid/browse/OPS-123', seen_in: 'message' }],
     messages: [{ id: 2, source: 'outlook', sender: 'Third party', sent_at: AT, text: 'Newest source message' },
       { id: 1, source: 'teams', sender: 'Another sender', sent_at: '2026-11-05T06:00:00Z', text: 'Older source message' }], ...fields };

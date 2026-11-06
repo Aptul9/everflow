@@ -1,9 +1,6 @@
 import type { NextConfig } from 'next';
+import { buildConfiguration } from './src/web/build-artifact.ts';
 
-const config: NextConfig = {
-  serverExternalPackages: ['koffi', 'winax'],
-  poweredByHeader: false,
-  outputFileTracingExcludes: { '/*': ['./data/**/*', './config.toml', './.venv/**/*', './src/dispatcher/**/*'] },
-};
-
-export default config;
+export default function config(phase: string): NextConfig {
+  return buildConfiguration(phase, process.env.INBOX_DISPATCHER_BUILD_ROOT, process.cwd());
+}

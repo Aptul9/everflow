@@ -1,6 +1,8 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from 'vitest';
+import { readBuildReceipt, samePath } from '../src/web/build-artifact.ts';
+import { inspectBuildArtifacts } from '../scripts/build.ts';
 
 function manifests(root: string): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => entry.isDirectory()
@@ -8,6 +10,9 @@ function manifests(root: string): string[] {
 }
 
 test('production traces exclude held data/config and remote model/session runtime', () => {
+  const artifact = readBuildReceipt(process.env.TEST_BUILD_RECEIPT);
+  expect(samePath(process.cwd(), artifact.root)).toBe(true);
+  expect(inspectBuildArtifacts(artifact.root).outsideEntries).toBe(0);
   expect(existsSync('.next/BUILD_ID'), 'Run npm run build before the production artifact checks').toBe(true);
   const files = manifests('.next/server');
   expect(files.length).toBeGreaterThan(0);

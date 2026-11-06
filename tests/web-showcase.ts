@@ -1,11 +1,15 @@
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { pathToFileURL } from 'node:url';
+import { readBuildReceipt } from '../src/web/build-artifact.ts';
 
-const { startServer } = await import(new URL('../dist/server.js', import.meta.url).href) as typeof import('../src/server.ts');
-const { openDb } = await import(new URL('../dist/dispatcher/db.js', import.meta.url).href) as typeof import('../src/dispatcher/db.ts');
-
-const { values } = parseArgs({ options: { root: { type: 'string' } } });
+const { values } = parseArgs({ options: { root: { type: 'string' }, 'build-receipt': { type: 'string' } } });
+const buildReceipt = values['build-receipt'] ?? process.env.TEST_BUILD_RECEIPT;
+const artifact = readBuildReceipt(buildReceipt);
+process.chdir(artifact.root);
+const { startServer } = await import(pathToFileURL(artifact.server).href) as typeof import('../src/server.ts');
+const { openDb } = await import(pathToFileURL(join(artifact.root, 'dist', 'dispatcher', 'db.js')).href) as typeof import('../src/dispatcher/db.ts');
 const scratch = 'C:/Users/Antonio/AppData/Local/Temp/opencode/inbox-dispatcher-v2';
 if (!values.root || !isAbsolute(values.root)) throw new Error('Explicit absolute --root inside approved scratch required');
 const root = resolve(values.root);
@@ -47,8 +51,8 @@ writeFileSync(configPath, '[db]\npath = "showcase.db"\n[tickets]\nenabled = true
   db.prepare("INSERT INTO quarantine(source,line,error,at) VALUES ('synthetic','<invalid source>','Synthetic parse failure',?)").run(now);
   db.prepare("INSERT INTO triage_log(at,action,reason,raw) VALUES (?,'invalid','Expected JSON object','<bad model output>')").run(now);
 }
-const server = await startServer({ configPath, port: 0 });
-console.log(JSON.stringify({ pid: process.pid, config: configPath, url: `http://127.0.0.1:${server.port}`, synthetic: true }));
+const server = await startServer({ configPath, buildReceipt: buildReceipt!, port: 0 });
+console.log(JSON.stringify({ pid: process.pid, config: configPath, buildReceipt, url: `http://127.0.0.1:${server.port}`, synthetic: true }));
 process.send?.({ ready: true, port: server.port, config: configPath });
 let stopping = false;
 const stop = () => {
