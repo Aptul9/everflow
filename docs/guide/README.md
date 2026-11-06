@@ -7,7 +7,7 @@ How the inbox dispatcher collects mail and chat messages, proposes tickets on a 
 - `build.py`: builds the Word file from the Markdown.
 - `diagrams/`: the pictures and their sources.
 
-The text is read on 2026-11-06 from the branch `feat/tickets-v2` at `387d402`, and from the instance folder `%LOCALAPPDATA%\inbox-dispatcher-v2`: its `config.toml` and its four `.ps1` scripts. The database, its sidecars, the log and the relay token are left out on purpose. Client names, accounts and hosts are left out of the text and the pictures. The page is not described in detail, because its layout is being redesigned on `feat/ticket-page-redesign`.
+The text is read on 2026-11-06 from the branch `feat/triage-history` at `ff8373a`, which adds the earlier messages sent to triage on top of `feat/tickets-v2` at `387d402`, and from the instance folder `%LOCALAPPDATA%\inbox-dispatcher-v2`: its `config.toml` and its four `.ps1` scripts. The database, its sidecars, the log and the relay token are left out on purpose. Client names, accounts and hosts are left out of the text and the pictures. The page is not described in detail, because its layout is being redesigned on `feat/ticket-page-redesign`.
 
 ## Building the Word file
 

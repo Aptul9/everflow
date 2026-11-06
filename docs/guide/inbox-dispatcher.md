@@ -26,14 +26,14 @@ Time runs from top to bottom in four phases. A message waits without a batch unt
 
 | Step | Model | Prompt | What the model sees |
 |---|---|---|---|
-| Triage | Haiku | `kb-agent.ts` lines 91 to 95 | The new messages of one conversation since it went quiet, its title, the inferred clients, the candidate tickets with title and summary, the ticket already linked, past Dismiss reasons, and Vault notes on request |
+| Triage | Haiku | `kb-agent.ts` lines 91 to 96 | The new messages of one conversation since it went quiet, the 40 earlier messages before them with send times, the current time, its title, the inferred clients, the candidate tickets with title and summary, the ticket already linked, past Dismiss reasons, and Vault notes on request |
 | Chat brief | Opus | `chat.ts` lines 48 to 53, 123 to 134 and 136 to 160 | The ticket fields, the note given at approval, and every stored message of the conversations linked to the ticket |
 | New messages | Opus, same chat | `chat.ts` lines 180 to 186 | Only the new batches, plus own replies not yet sent to the chat |
 | Recovery | Opus, same chat | `chat.ts` lines 465 to 472 | The error, the original request quoted, and own replies since then |
 
-The files are in `src/dispatcher/`. Triage runs `claude-haiku-5-5` through the provider `meridian-everbright`, and through `meridian-notarify` when the first is unavailable. Its input is built in `kb-agent.ts` lines 322 to 325 and `tickets.ts` lines 297 to 305, and the Vault is reached only through the tools `vault_search` and `vault_read`. The chats run `meridian-everbright/claude-opus-5-5` through OpenChamber.
+The files are in `src/dispatcher/`. Triage runs `claude-haiku-5-5` through the provider `meridian-everbright`, and through `meridian-notarify` when the first is unavailable. Its input is built in `kb-agent.ts` lines 323 to 327 and `tickets.ts` lines 116 to 122 and 306 to 314, and the Vault is reached only through the tools `vault_search` and `vault_read`. The chats run `meridian-everbright/claude-opus-5-5` through OpenChamber.
 
-Triage does not read only the last message, and it does not read the whole history either. It reads the group of messages that arrived in that conversation since the last batch. The chat brief is the step that sees the whole stored history of the ticket.
+Triage decides on the new messages, the ones that arrived in that conversation since the last batch. With them it gets the latest 40 earlier messages of the same conversation, oldest first, each with its send time, sender, whether it is an own reply, and text cut at 2,000 characters. It also gets the current time, so it can tell an old request from a new one and see whether a later own reply already answered it. `[triage] history_messages` in `config.toml` sets the count, from 0 to 100. The chat brief is the step that sees the whole stored history of the ticket.
 
 Triage returns one JSON decision: `new`, `update` or `skip`, with title, client, summary, ask, proposal, Vault paths and a confidence. It attaches the batch to an existing ticket only with a confidence of 0.75 or more; below that the ticket becomes a new proposal with the old one as context. The prompts mark source messages and Vault notes as untrusted data.
 
@@ -69,6 +69,7 @@ All values are the defaults in `src/dispatcher/config.ts`; the running instance 
 | Recovery turns per failed chat turn | 2 |
 | Health shown as failing | After 3 errors in a row |
 | Triage budget | 8 tool calls and 120 s, repair turn included |
+| Earlier messages sent to triage | 40, text cut at 2,000 characters |
 | OpenChamber request timeout | 30 s |
 
 ## Rules
@@ -87,7 +88,7 @@ All values are the defaults in `src/dispatcher/config.ts`; the running instance 
 
 ## Running it
 
-The instance lives in `%LOCALAPPDATA%\inbox-dispatcher-v2`, built from commit `387d402`.
+The instance lives in `%LOCALAPPDATA%\inbox-dispatcher-v2`, built from commit `387d402`. That build predates `ff8373a`, so its triage still sees only the new batch until it is rebuilt.
 
 | File | Use |
 |---|---|

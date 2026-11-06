@@ -17,7 +17,7 @@
         "id": "triage",
         "label": "Triage",
         "focus": ["triage", "vault", "store", "page"],
-        "note": "Triage reads the batch, title, client hints and candidate tickets, searches the Vault and returns one decision."
+        "note": "Triage reads the batch, 40 earlier messages with times, title, client hints and candidate tickets, and returns one decision."
       },
       {
         "id": "start",
