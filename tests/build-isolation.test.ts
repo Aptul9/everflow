@@ -23,6 +23,7 @@ function sourceFixture() {
   fs.mkdirSync(join(root, 'scripts'));
   fs.mkdirSync(join(root, 'tests'));
   for (const [name, text] of Object.entries({
+    'README.md': '# Synthetic operating README\n',
     'package.json': '{"name":"synthetic-build","private":true,"dependencies":{}}',
     'package-lock.json': '{"name":"synthetic-build","lockfileVersion":3,"packages":{"":{}}}',
     'tsconfig.json': '{}', 'tsconfig.server.json': '{}', 'next.config.ts': 'export default {};',
@@ -41,20 +42,34 @@ test('stages only allowlisted source without enumerating or reading synthetic st
   fs.writeFileSync(join(source, 'config.toml'), 'synthetic default config, do not copy');
   fs.writeFileSync(join(source, '.env.local'), 'SYNTHETIC=true');
   fs.writeFileSync(join(source, 'src', 'ignored.db'), 'synthetic non-source');
+  fs.mkdirSync(join(source, 'docs'));
+  fs.writeFileSync(join(source, 'docs', 'private.md'), 'synthetic documentation tree, do not copy');
+  fs.writeFileSync(join(source, 'other.md'), 'synthetic root note, do not copy');
+  fs.writeFileSync(join(source, 'src', 'private.md'), 'synthetic nested note, do not copy');
   const reads = vi.spyOn(fs, 'readFileSync');
   const listings = vi.spyOn(fs, 'readdirSync');
   const stats = vi.spyOn(fs, 'lstatSync');
   const tree = createBuildTree(source);
   expect(tree.root.startsWith(BUILD_PARENT)).toBe(true);
   expect(tree.files.map((file) => file.path)).toContain('src/example.ts');
+  expect(tree.files.filter((file) => file.path.endsWith('.md')).map((file) => file.path)).toEqual(['README.md']);
+  expect(fs.readFileSync(join(tree.root, 'README.md'), 'utf8')).toBe('# Synthetic operating README\n');
   expect(tree.files.every((file) => !/(^|\/)(data|\.venv|\.git|\.next|dist|node_modules)\/|(^|\/)config\.toml$|(^|\/)\.env/.test(file.path))).toBe(true);
   expect(listings.mock.calls.some(([path]) => String(path) === source)).toBe(false);
   const visited = [...reads.mock.calls, ...stats.mock.calls, ...listings.mock.calls].map(([path]) => String(path));
-  for (const name of ['data', '.venv', '.git', '.next', 'dist', 'node_modules', 'config.toml', '.env.local']) {
+  for (const name of ['data', '.venv', '.git', '.next', 'dist', 'node_modules', 'config.toml', '.env.local', 'docs', 'other.md']) {
     expect(visited.some((path) => visitedWithin(path, join(source, name)))).toBe(false);
   }
   expect(fs.existsSync(join(tree.root, 'config.toml'))).toBe(false);
   expect(fs.existsSync(join(tree.root, '.next'))).toBe(false);
+});
+
+test('named README rejects a hard link without reading the linked input', () => {
+  const source = sourceFixture(), readme = join(source, 'README.md'), other = join(source, 'other.md');
+  fs.linkSync(readme, other);
+  const reads = vi.spyOn(fs, 'readFileSync');
+  expect(() => createBuildTree(source)).toThrow(/hard.link|unlinked/i);
+  expect(reads.mock.calls.some(([path]) => String(path) === readme)).toBe(false);
 });
 
 test('rejects source-directory junctions before reading the synthetic target', () => {

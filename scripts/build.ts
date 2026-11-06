@@ -9,7 +9,7 @@ import type { BuildReceipt, BuildTree, SourceFile } from '../src/web/build-artif
 import { nativeBuildEnv } from './setup.ts';
 
 const rootFiles = ['package.json', 'package-lock.json', 'tsconfig.json', 'tsconfig.server.json', 'next.config.ts',
-  'postcss.config.mjs', 'vitest.config.ts', 'components.json'];
+  'postcss.config.mjs', 'vitest.config.ts', 'components.json', 'README.md'];
 const sourceDirs = ['src', 'scripts', 'tests'];
 const excluded = new Set(['data', '.venv', '.git', '.next', 'dist', 'node_modules', '__pycache__', '.cache']);
 
