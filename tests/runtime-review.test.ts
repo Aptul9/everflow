@@ -99,7 +99,7 @@ function fakeWatcher() {
     child.connected = false; child.exitCode = 0; child.stdout.end(); child.stderr.end(); queueMicrotask(() => child.emit('close', 0));
   };
   child.kill = () => { child.send({ type: 'dispatcher.stop' }); return true; };
-  return child as ChildProcess;
+  return child as ChildProcess & { stdout: PassThrough; stderr: PassThrough };
 }
 const watcherIdentity = { pid: 1000000101, created: '134384000000000001', image: 'C:\\synthetic\\node.exe' };
 const original = { pid: 1000000202, created: '134384000000000002', image: 'C:\\synthetic\\ssh.exe' };
@@ -152,14 +152,33 @@ test('I2 stale inactive packet cannot unregister a newer verified owned child wi
 test('I2 source captures identity inside spawn ownership and reuses that exact identity for inactive IPC', async () => {
   fixture(); const child = fakeWatcher(), events: any[] = [];
   const capture = vi.fn(() => ({ ...original, pid: child.pid! }));
-  (trackSourceChild as any)(child, { owner: watcherIdentity, capture, send: (value: unknown) => events.push(value) });
+  const tracking = trackSourceChild(child, { owner: watcherIdentity, capture, send: (value: unknown) => { events.push(value); } });
   child.emit('spawn'); await delay(0);
   capture.mockReturnValue({ ...replacement, pid: child.pid! });
-  Object.assign(child, { exitCode: 0, connected: false }); child.emit('close', 0); await delay(0);
+  Object.assign(child, { exitCode: 0, connected: false }); child.emit('close', 0); await tracking;
   expect(events).toHaveLength(2);
   expect(events.map((value) => value.identity.created)).toEqual([original.created, original.created]);
   expect(events.every((value) => value.owner.created === watcherIdentity.created)).toBe(true);
   expect(capture).toHaveBeenCalledTimes(1);
+});
+
+test.each(['active', 'inactive', 'active-async', 'inactive-async'])('source tracking notification failure rejects its promise without escaping close (%s)', async (mode) => {
+  fixture(); const child = fakeWatcher(), failure = new Error('synthetic notification failure');
+  const capture = vi.fn(() => ({ ...original, pid: child.pid! }));
+  const pending = Promise.resolve(trackSourceChild(child, { owner: watcherIdentity, capture, send: (value: unknown) => {
+    if (mode.startsWith('active') || (value as { active?: boolean }).active === false) {
+      if (mode.endsWith('async')) return Promise.reject(failure);
+      throw failure;
+    }
+  } })).then(() => ({ error: undefined }), (error: unknown) => ({ error }));
+  try {
+    child.emit('spawn'); await delay(0);
+    child.stdout!.end(); child.stderr!.end(); Object.assign(child, { exitCode: 0 });
+    expect(() => child.emit('close', 0)).not.toThrow();
+    expect((await pending).error).toBe(failure);
+    expect(capture).toHaveBeenCalledTimes(1);
+    expect(child.listenerCount('close')).toBe(0); expect(child.listenerCount('error')).toBe(0); expect(child.listenerCount('spawn')).toBe(0);
+  } finally { child.stdout!.destroy(); child.stderr!.destroy(); }
 });
 
 test('I2 native ancestry is queried on the expected-instance handle and mismatched creation never reaches parent lookup', () => {

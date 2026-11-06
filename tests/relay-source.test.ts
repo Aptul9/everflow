@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import { join, posix } from 'node:path';
 import { spawn } from 'node:child_process';
+import { EventEmitter, getEventListeners } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test, vi } from 'vitest';
 import { createRelayState, readRelay, relayCommand, scanRelay, shellQuote, sqlLiteral, sshQuery } from '../src/watchers/relay.ts';
@@ -10,6 +12,8 @@ import type { SourceMessage, SourceRecord } from '../src/watchers/source.ts';
 import { openDb } from '../src/dispatcher/db.ts';
 import { ingest, sourceStart } from '../src/dispatcher/ingest.ts';
 import { scratch } from './support.ts';
+import { readBuildReceipt } from '../src/web/build-artifact.ts';
+import * as native from '../src/windows/kernel.ts';
 
 const since = '2026-11-04T10:00:00.000Z';
 const mid = String(Date.parse('2026-11-04T10:02:00.000Z'));
@@ -179,4 +183,67 @@ test.each(['abort', 'timeout', 'overflow'])('SSH %s closes owned child and all t
   await expect(sshQuery({ ...options, timeoutMs: 200, maxBytes: 1000 }, '/synthetic/db', 'SELECT 1;', controller.signal, childFactory)).rejects.toThrow(/relay.(aborted|timeout|result-limit)/);
   expect(child).toBeDefined();
   expect(child!.exitCode !== null || child!.signalCode !== null).toBe(true);
+});
+
+test.each(['owner-capture', 'owner-dispose', 'child-capture', 'child-dispose', 'owner-capture-sync-close', 'child-notification'])('owner setup tracking failure stops and observes its owned child before rejecting (%s)', async (mode) => {
+  readBuildReceipt(process.env.TEST_BUILD_RECEIPT); const files = scratch('phase7b-owner-setup-');
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  const connected = Object.getOwnPropertyDescriptor(process, 'connected'), send = Object.getOwnPropertyDescriptor(process, 'send');
+  const originalOwner = process.env.INBOX_DISPATCHER_SOURCE_OWNER;
+  Object.defineProperty(process, 'connected', { value: true, configurable: true, writable: true });
+  const notify = vi.fn((_value: unknown, callback?: (error?: Error) => void) => { callback?.(); });
+  Object.defineProperty(process, 'send', { value: notify, configurable: true, writable: true });
+  process.env.INBOX_DISPATCHER_SOURCE_OWNER = String(process.ppid);
+  const controller = new AbortController(), child: any = new EventEmitter();
+  let spawned = 0, kills = 0, closed = false, kernels = 0;
+  const controls: Record<string, unknown>[] = [];
+  const close = () => { if (closed) return; closed = true; child.signalCode = 'SIGTERM'; child.stdout.end('discarded trailing output'); child.stderr.end('discarded trailing stderr'); child.emit('close', null); };
+  Object.assign(child, { pid: 1000000101, stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null, signalCode: null,
+    kill() { kills++; if (mode.endsWith('sync-close')) close(); else setImmediate(close); return true; },
+  });
+  const failure = mode === 'child-notification' ? Object.assign(new Error('synthetic IPC notification failure'), { code: 'ERR_IPC_CHANNEL_CLOSED' })
+    : new native.NativeError(mode.endsWith('dispose') ? 'native.cleanup' : 'native.process-open', 5);
+  if (mode === 'child-notification') notify.mockImplementation((_value, callback) => { callback?.(failure); });
+  const kernel = vi.spyOn(native, 'createKernel').mockImplementation(() => {
+    const phase = ++kernels;
+    return {
+      processIdentity: (pid: number) => {
+        controls.push({ close: child.listenerCount('close'), error: child.listenerCount('error'), stdout: child.stdout.listenerCount('data'), stderr: child.stderr.listenerCount('data'), abort: getEventListeners(controller.signal, 'abort').length, timers: vi.getTimerCount() });
+        if (mode.startsWith('owner-capture') && phase === 1 || mode === 'child-capture' && phase === 2) throw failure;
+        return { pid, created: String(134384000000000000n + BigInt(phase)), image: 'C:\\synthetic\\node.exe' };
+      },
+      [Symbol.dispose]: () => { if (mode === 'owner-dispose' && phase === 1 || mode === 'child-dispose' && phase === 2) throw failure; },
+    } as unknown as ReturnType<typeof native.createKernel>;
+  });
+  let rejected: unknown, snapshot: Record<string, unknown> | undefined;
+  try {
+    try {
+      await sshQuery({ ...options, timeoutMs: 5000 }, '/synthetic/fixture.db', 'SELECT 1', controller.signal, () => {
+        spawned++; queueMicrotask(() => child.emit('spawn'));
+        setImmediate(() => setImmediate(() => {
+          if (closed) return;
+          closed = true; child.exitCode = 0; child.stdout.end('[]'); child.stderr.end(); child.emit('close', 0);
+        }));
+        return child;
+      });
+    } catch (error) { rejected = error; }
+    snapshot = { spawned, kills, closed, abort: getEventListeners(controller.signal, 'abort').length, timers: vi.getTimerCount(),
+      stdoutBuffered: child.stdout.readableLength, stderrBuffered: child.stderr.readableLength,
+      listeners: { error: child.listenerCount('error'), close: child.listenerCount('close'), spawn: child.listenerCount('spawn'), stdout: child.stdout.listenerCount('data'), stderr: child.stderr.listenerCount('data') } };
+    expect(rejected).toBe(failure); expect(snapshot).toMatchObject({ spawned: 1, kills: expect.any(Number), closed: true, abort: 0, timers: 0 }); expect(kills).toBeGreaterThan(0);
+    expect(controls.length).toBeGreaterThan(0);
+    expect(controls.every((state) => Number(state.close) > 0 && Number(state.error) > 0 && Number(state.stdout) > 0 && Number(state.stderr) > 0 && state.abort === 1 && Number(state.timers) > 0)).toBe(true);
+    expect(child.listenerCount('error')).toBe(0); expect(child.listenerCount('close')).toBe(0);
+    expect(child.listenerCount('spawn')).toBe(0); expect(kernels).toBe(mode.startsWith('child-') ? 2 : 1);
+    expect(child.stdout.listenerCount('data')).toBe(0); expect(child.stderr.listenerCount('data')).toBe(0);
+    expect(child.stdout.readableLength).toBe(0); expect(child.stderr.readableLength).toBe(0);
+  } finally {
+    if (!closed) { const exit = new Promise<void>((resolve) => child.once('close', () => resolve())); child.kill(); await exit; }
+    child.stdout.destroy(); child.stderr.destroy(); kernel.mockRestore();
+    if (connected) Object.defineProperty(process, 'connected', connected); else delete (process as any).connected;
+    if (send) Object.defineProperty(process, 'send', send); else delete (process as any).send;
+    if (originalOwner === undefined) delete process.env.INBOX_DISPATCHER_SOURCE_OWNER; else process.env.INBOX_DISPATCHER_SOURCE_OWNER = originalOwner;
+    fs.writeFileSync(join(files.root, 'proof.json'), JSON.stringify({ config: files.config, artifact: process.env.TEST_BUILD_RECEIPT, mode, observedAtQuerySettlement: snapshot, controls, finalClosed: closed, finalTimers: vi.getTimerCount() }, null, 2));
+    vi.useRealTimers();
+  }
 });

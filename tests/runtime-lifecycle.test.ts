@@ -2,20 +2,53 @@ import { fork, spawn } from 'node:child_process';
 import { existsSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { finished } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import { isolatedEnvironment } from '../scripts/build.ts';
 import { loadConfig } from '../src/dispatcher/config.ts';
 import { openDb, prepareStart } from '../src/dispatcher/db.ts';
 import { enqueue, complete } from '../src/dispatcher/jobs.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
 import { createKernel, sameProcess, spawnedIdentity } from '../src/windows/kernel.ts';
+import type { ProcessIdentity } from '../src/windows/kernel.ts';
 import { runSource } from '../src/watchers/source.ts';
 import { scratch } from './support.ts';
 import { bounded } from '../src/dispatcher/daemon.ts';
 
 const module = resolve('src/dispatcher/runtime.ts');
 const runtime: Record<string, any> = existsSync(module) ? await import(pathToFileURL(module).href) : {};
+
+function verifyCleanupTarget(packet: { identity: ProcessIdentity; owner: ProcessIdentity }, expectedOwner: ProcessIdentity,
+  childOf: (identity: ProcessIdentity, owner: ProcessIdentity) => boolean, accept: (identity: ProcessIdentity) => void) {
+  expect(sameProcess(packet.owner, expectedOwner), 'Unverifiable child owner identity').toBe(true);
+  expect(childOf(packet.identity, packet.owner), 'Unverifiable child parent identity').toBe(true);
+  accept(packet.identity);
+}
+
+test.each(['owner-mismatch', 'parent-false', 'parent-throws'])('cleanup target rejected ownership never reaches candidate termination (%s)', (mode) => {
+  readBuildReceipt(process.env.TEST_BUILD_RECEIPT); const f = scratch('phase7b-cleanup-target-');
+  const owner = { pid: 1000000001, created: '134384000000000001', image: 'C:\\synthetic\\watcher.exe' };
+  const candidate = { pid: 1000000002, created: '134384000000000002', image: 'C:\\candidate\\node.exe' };
+  const packet = { identity: candidate, owner: mode === 'owner-mismatch' ? { ...owner, created: '134384000000000099' } : owner };
+  const childOf = vi.fn(() => { if (mode === 'parent-throws') throw new Error('synthetic validation failure'); return mode !== 'parent-false'; });
+  const terminate = vi.fn(); let target: ProcessIdentity | undefined;
+  try { verifyCleanupTarget(packet, owner, childOf, (identity) => { target = identity; }); } catch { /* Rejected ownership is the injected case. */ }
+  finally { if (target) terminate(target); }
+  writeFileSync(join(f.root, 'proof.json'), JSON.stringify({ config: f.config, artifact: process.env.TEST_BUILD_RECEIPT, mode, accepted: target ?? null, parentChecks: childOf.mock.calls.length, terminated: terminate.mock.calls }, null, 2));
+  expect(target).toBeUndefined(); expect(terminate).not.toHaveBeenCalled();
+  if (mode === 'owner-mismatch') expect(childOf).not.toHaveBeenCalled();
+});
+
+test('cleanup target successful exact owner and parent checks permit only the verified identity', () => {
+  readBuildReceipt(process.env.TEST_BUILD_RECEIPT); scratch('phase7b-cleanup-target-');
+  const owner = { pid: 1000000001, created: '134384000000000001', image: 'C:\\synthetic\\watcher.exe' };
+  const candidate = { pid: 1000000002, created: '134384000000000002', image: 'C:\\synthetic\\ssh.exe' };
+  const terminate = vi.fn(), childOf = vi.fn(() => true); let target: ProcessIdentity | undefined;
+  try { verifyCleanupTarget({ identity: candidate, owner }, owner, childOf, (identity) => { target = identity; }); }
+  finally { if (target) terminate(target); }
+  expect(childOf).toHaveBeenCalledWith(candidate, owner); expect(terminate).toHaveBeenCalledExactlyOnceWith(candidate);
+});
 
 test('source lifecycle accepts only the owned stop IPC message and removes its listeners', async () => {
   readBuildReceipt(process.env.TEST_BUILD_RECEIPT);
@@ -45,13 +78,17 @@ test('relay owner disconnect aborts and observes its actual synthetic SSH child 
   const relay = pathToFileURL(join(artifact.root, 'dist/watchers/relay.js')).href;
   const source = pathToFileURL(join(artifact.root, 'dist/watchers/source.js')).href;
   writeFileSync(script, `import {spawn} from 'node:child_process';
+    import {getEventListeners} from 'node:events';
     import {sshQuery} from ${JSON.stringify(relay)};
     import {runSource} from ${JSON.stringify(source)};
     let target;const fallback=new AbortController();process.on('message',value=>{if(value?.type==='fixture.cleanup')fallback.abort();});
     const code=await runSource('teamsrelay',{once:false,poll:30},async(signal)=>{
       try { await sshQuery({host:'synthetic.invalid',root:'/synthetic',owner:'me@example.invalid'},'/synthetic/a.db','SELECT 1',signal,
         (_command,_args,options)=>{target=spawn(process.execPath,['-e','setTimeout(()=>process.stdout.end("[]"),30000)'],options);process.send({type:'fixture.ssh',pid:target.pid});return target;}); }
-      finally {process.stdout.write(JSON.stringify({closed:target?.exitCode!==null||target?.signalCode!==null})+'\\n');}
+      finally {process.stdout.write(JSON.stringify({closed:target?.exitCode!==null||target?.signalCode!==null,
+        abortListeners:getEventListeners(signal,'abort').length,timers:process.getActiveResourcesInfo().filter(value=>value==='Timeout').length,
+        errorListeners:target?.listenerCount('error'),closeListeners:target?.listenerCount('close'),
+        stdoutListeners:target?.stdout.listenerCount('data'),stderrListeners:target?.stderr.listenerCount('data')})+'\\n');}
     },{},fallback.signal);process.exitCode=code;if(process.connected)process.disconnect();`);
   const child = fork(script, [], { cwd: artifact.root, env: { ...isolatedEnvironment(artifact.root, process.env), INBOX_DISPATCHER_SOURCE_OWNER: String(process.pid) }, execArgv: [], windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   using kernel = createKernel();
@@ -61,8 +98,10 @@ test('relay owner disconnect aborts and observes its actual synthetic SSH child 
   child.stderr!.on('data', (part: Buffer) => { stderr += part.toString(); });
   const messages: any[] = [];
   child.on('message', (value) => messages.push(value));
-  const exit = new Promise<void>((resolve, reject) => { child.once('error', reject); child.once('exit', () => resolve()); });
+  const exited = new Promise<void>((resolve, reject) => { child.once('error', reject); child.once('exit', () => { child.off('error', reject); resolve(); }); });
+  const exit = Promise.all([exited, finished(child.stdout!, { cleanup: true }), finished(child.stderr!, { cleanup: true })]).then(() => {});
   let target: ReturnType<ReturnType<typeof createKernel>['processIdentity']> | undefined;
+  let candidate: ProcessIdentity | undefined, teardown: Record<string, unknown> | undefined;
   try {
     const pid = await new Promise<number>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('Synthetic SSH did not start')), 5000);
@@ -74,19 +113,25 @@ test('relay owner disconnect aborts and observes its actual synthetic SSH child 
       const received = (value: any) => { if (value.type === 'dispatcher.child' && value.pid === pid && value.active === true) { child.off('message', received); resolve(value); } };
       child.on('message', received);
     }), 5000, 'fixture.child-registration');
-    target = packet.identity;
-    expect(sameProcess(packet.owner, await watcherIdentity)).toBe(true);
-    expect(kernel.childOf(packet.identity, packet.owner)).toBe(true);
+    candidate = packet.identity;
+    verifyCleanupTarget(packet, await watcherIdentity, (identity, owner) => kernel.childOf(identity, owner), (identity) => { target = identity; });
     child.disconnect();
     await Promise.race([exit, delay(5000).then(() => { throw new Error('Owned relay failed disconnect shutdown'); })]);
     expect(child.exitCode, stderr).toBe(0);
     expect(output).toContain('"closed":true');
+    teardown = JSON.parse(output.trim().split(/\r?\n/).at(-1)!);
+    expect(teardown).toEqual({ closed: true, abortListeners: 0, timers: 0, errorListeners: 0, closeListeners: 0, stdoutListeners: 0, stderrListeners: 0 });
     expect((kernel as any).running?.(target)).toBe(false);
   } finally {
     if (child.connected) child.send({ type: 'fixture.cleanup' });
     await Promise.race([exit, delay(5000).then(() => { child.kill(); })]);
     if (target) (kernel as any).terminate?.(target);
     await exit;
+    writeFileSync(join(f.root, 'proof.json'), JSON.stringify({ config: f.config, artifact: process.env.TEST_BUILD_RECEIPT,
+      candidate: candidate ?? null, fallbackTarget: target ?? null, unverifiableChild: Boolean(candidate && !target),
+      watcherClosed: (child.exitCode !== null || child.signalCode !== null) && child.stdout!.readableEnded && child.stderr!.readableEnded,
+      watcherExitCode: child.exitCode, stdoutEnded: child.stdout!.readableEnded, stderrEnded: child.stderr!.readableEnded,
+      sshRunning: target ? kernel.running(target) : null, teardown }, null, 2));
   }
 });
 

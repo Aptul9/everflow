@@ -110,24 +110,32 @@ export function requiredOption(values: Record<string, unknown>, key: string): st
 
 function sourceOwner(): boolean { return process.connected === true && process.env.INBOX_DISPATCHER_SOURCE_OWNER === String(process.ppid); }
 
-export interface ChildTracker { owner: ProcessIdentity; capture(pid: number): ProcessIdentity; send(value: unknown): void }
-export function trackSourceChild(child: ChildProcess, input?: ChildTracker): void {
+export interface ChildTracker { owner: ProcessIdentity; capture(pid: number): ProcessIdentity; send(value: unknown): void | Promise<void> }
+export async function trackSourceChild(child: ChildProcess, input?: ChildTracker): Promise<void> {
   if (!input && !sourceOwner()) return;
   const owner = input ? { ...input.owner } : (() => { using kernel = createKernel(); return kernel.processIdentity(process.pid); })();
   const capture = input?.capture ?? ((pid: number) => { using kernel = createKernel(); return kernel.processIdentity(pid); });
-  const send = input?.send ?? ((value: unknown) => { if (process.connected) process.send?.(value as Serializable, () => {}); });
+  const send = input?.send ?? ((value: unknown) => new Promise<void>((resolve, reject) => {
+    if (!process.connected || !process.send) { resolve(); return; }
+    process.send(value as Serializable, (error) => { if (error) reject(error); else resolve(); });
+  }));
   let expected: ProcessIdentity | undefined;
   const notify = (active: boolean) => {
-    if (expected) send({ type: 'dispatcher.child', pid: expected.pid, identity: { ...expected }, owner, active });
+    if (expected) return send({ type: 'dispatcher.child', pid: expected.pid, identity: { ...expected }, owner, active });
   };
-  void spawnedIdentity(child, capture).then((identity) => {
-    expected = identity;
-    if (child.exitCode === null && child.signalCode === null) notify(true);
-  }, (error: unknown) => {
+  const exit = Promise.withResolvers<void>();
+  const closed = () => exit.resolve();
+  child.once('close', closed);
+  try {
+    expected = await spawnedIdentity(child, capture);
+    if (child.exitCode === null && child.signalCode === null) await notify(true);
+    await exit.promise;
+    await notify(false);
+  } catch (error) {
+    child.off('close', closed);
     const diagnostic = error instanceof NativeError ? { code: error.code, status: error.status } : { code: 'source.unexpected' };
-    send({ type: 'dispatcher.child-error', ...diagnostic });
-  });
-  child.once('close', () => notify(false));
+    try { await send({ type: 'dispatcher.child-error', ...diagnostic }); } finally { throw error; }
+  }
 }
 
 export async function runSource(source: Source, options: { once: boolean; poll: number }, scan: (signal: AbortSignal) => void | Promise<void>, lifecycle: { wait?: (ms: number, signal: AbortSignal) => Promise<void>; close?: () => void | Promise<void> } = {}, signal?: AbortSignal): Promise<number> {
