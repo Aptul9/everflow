@@ -1,0 +1,132 @@
+# Paths are relative to this file.
+
+[mode]
+shadow = true
+
+[dispatch]
+# Observe-only containment: ingest sources, but do not start/recover work or consume approval controls.
+enabled = false
+
+[db]
+path = "data/dispatcher.db"
+
+[vault]
+path = "C:/Users/Antonio/OneDrive/Documenti/Vault"
+
+[opencode]
+# Empty url: OpenChamber's own opencode server, through OpenChamber's local port with its UI password
+# (desktopLocalPort, desktopUiPassword in ~/.config/openchamber/settings.json). A url here means a plain
+# `opencode serve` with basic auth, password from INBOX_OPENCODE_PASSWORD.
+url = ""
+directory = "C:/Users/Antonio/OneDrive/Documenti/Vault"
+model = "meridian-everbright/claude-opus-5-5"
+
+[triage]
+# opencode provider ids, tried in order on a rate limit: base URL, key and headers are read from
+# ~/.config/opencode/opencode.jsonc.
+providers = ["meridian-everbright", "meridian-notarify"]
+model = "claude-haiku-5-5"
+min_confidence = 0.75
+
+[windows]
+# Seconds a conversation stays quiet before its batch runs. Floors from the design: chat 120, email 300.
+outlook = 300
+teams = 120
+teamsrelay = 120
+gchat = 120
+
+[start]
+# Catch-up for a source with no cursor yet.
+lookback_minutes = 0
+
+[approval]
+# Observe session/self-chat decisions only after shadow review. Silence never authorizes delivery.
+enabled = false
+notes_account = ""
+
+[delivery]
+# Shadow mode: even an explicit approval cannot invoke an outbound transport.
+enabled = false
+
+[[watchers]]
+source = "outlook"
+command = ["{python}", "-m", "dispatcher.watch_outlook"]
+
+# `watch` of Aptul9/Teams-MCP: every account of the Teams desktop client, never restarts Teams.
+[[watchers]]
+source = "teams"
+command = ["{python}", "C:/Users/Antonio/Downloads/teams-mcp/teams_mcp.py", "watch"]
+
+# Teams accounts held by the relay: read-only SSH snapshots of its saved stores. No MCP or account changes.
+[[watchers]]
+source = "teamsrelay"
+command = ["{python}", "-m", "dispatcher.watch_teamsrelay"]
+
+# A receiving account names its client; for an account that is no client's (bandpey), the sender
+# domains and the addresses quoted in the text decide. Keywords pick the client's vault notes.
+[clients.msc]
+domains = ["msccruises.com"]
+keywords = ["msc"]
+
+[clients.roar]
+accounts = ["antonio.maritato@roarinc.com"]
+domains = ["roarinc.com"]
+keywords = ["roar"]
+
+[clients.notarify]
+accounts = ["antonio.maritato@notarify.io"]
+domains = ["notarify.io"]
+keywords = ["notarify", "notaridrive", "coin"]
+
+[clients.serco]
+accounts = ["antonio.maritato@serco.eu"]
+domains = ["serco.eu", "serco.com"]
+keywords = ["serco"]
+
+[clients.avvale]
+accounts = ["antonio.maritato@avvale.com"]
+domains = ["avvale.com", "ariston.com"]
+keywords = ["avvale", "ariston"]
+
+[clients.bip]
+accounts = ["antonio.maritato@bip-group.com"]
+domains = ["bip-group.com", "snam.it"]
+keywords = ["bip", "dmm", "snam"]
+
+[clients.vection]
+accounts = ["antonio.maritato@ext.vection-technologies.com"]
+domains = ["vection-technologies.com", "ext.vection-technologies.com", "prysmian.com"]
+keywords = ["vection", "prysman"]
+
+[clients.cgm]
+accounts = ["antonio.maritato@partner.cgm.com"]
+domains = ["cgm.com"]
+keywords = ["cgm"]
+
+[clients.npo]
+domains = ["nposervices.com", "iveco.com"]
+keywords = ["npo", "iveco"]
+
+[clients.zurich]
+domains = ["zurich.com"]
+keywords = ["zurich"]
+
+[clients.agap2]
+domains = ["agap2.it"]
+keywords = ["agap2", "sisal"]
+
+[clients.aubay]
+domains = ["office.aubay.it", "aubay.it"]
+keywords = ["aubay"]
+
+[clients.fincons]
+domains = ["finconsgroup.com"]
+keywords = ["fincons"]
+
+[clients.tesco]
+domains = ["tesco.com"]
+keywords = ["tesco"]
+
+[clients.itv]
+domains = ["itv.com"]
+keywords = ["itv"]
