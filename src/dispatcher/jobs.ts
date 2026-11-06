@@ -155,7 +155,7 @@ export function claim(db: DatabaseSync, cfg: Config, runId: string, at?: string,
       AND (j.kind<>'triage' OR ?<?)
       AND (j.kind NOT IN ('start_chat','forward') OR j.reserved_at IS NOT NULL OR j.turn_id IS NOT NULL OR ?<?)
       ${options.runtime ? `AND (j.kind<>'triage' OR ?=1)
-        AND (j.kind NOT IN ('start_chat','forward') OR j.turn_id IS NOT NULL OR ?=1)
+        AND (j.kind NOT IN ('start_chat','forward') OR j.turn_id IS NOT NULL OR j.reserved_at IS NOT NULL OR ?=1)
         AND (j.kind NOT IN ('sync','archive','purge') OR j.ticket IS NULL OR NOT ${pendingInputSql('j.ticket', 'j.id')})` : ''}
       ORDER BY j.fifo,j.id LIMIT 1`).get(now, triage, cfg.jobs.triage_concurrency, slots, cfg.jobs.turn_concurrency,
         ...(options.runtime ? [Number(cfg.tickets.enabled), Number(cfg.tickets.enabled && cfg.chats.enabled && options.inputReady !== false)] : []));

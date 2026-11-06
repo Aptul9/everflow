@@ -27,6 +27,25 @@ Commands:
 `;
 
 export class CliError extends Error { readonly code = 'cli.arguments'; }
+const failureStages = new Set(['heartbeat.store', 'heartbeat.receipt', 'runtime.schedule', 'runtime.maintenance', 'runtime.claim', 'runtime.renewal', 'runtime.settle', 'source.reader', 'child.capture', 'child.parent', 'child.packet', 'child.publish', 'runtime.children', 'runtime.close']);
+const failureReasons = new Set(`EACCES EPERM EBUSY ENOENT EEXIST EINVAL EIO EMFILE ENFILE ENOSPC ENOMEM EPIPE ENOTDIR EISDIR ENOTEMPTY ETIMEDOUT ECONNRESET ECONNREFUSED
+ERR_SQLITE_ERROR ERR_INVALID_ARG_TYPE ERR_INVALID_ARG_VALUE ERR_OUT_OF_RANGE ERR_STREAM_PREMATURE_CLOSE ERR_IPC_CHANNEL_CLOSED
+native.process-open native.open-failed native.process-times native.process-image native.process-image-limit native.process-wait native.process-parent native.spawn-identity native.cleanup native.process-inventory native.process-inventory-limit native.invalid-process-identity
+exception exception.type exception.range identity-mismatch invalid-packet`.split(/\s+/));
+const failureOperations = new Set(['rename', 'open', 'read', 'write', 'stat', 'lstat', 'mkdir', 'unlink', 'close', 'scandir']);
+export interface FailureFields { stage?: string; reason?: string; operation?: string; status?: number; os_errno?: number; sqlite_code?: number }
+export function failureFields(error: unknown, stage: unknown): FailureFields {
+  if (typeof stage !== 'string' || !failureStages.has(stage)) return {};
+  const value = error && typeof error === 'object' ? error as Record<string, unknown> : {};
+  const reason = [value.reason, value.code].find((code) => typeof code === 'string' && failureReasons.has(code));
+  const fields: FailureFields = { stage, reason: typeof reason === 'string' ? reason : value.name === 'TypeError' ? 'exception.type' : value.name === 'RangeError' ? 'exception.range' : 'exception' };
+  const operation = value.operation ?? value.syscall;
+  if (typeof operation === 'string' && failureOperations.has(operation)) fields.operation = operation;
+  for (const [input, output] of [['status', 'status'], ['errno', 'os_errno'], ['errcode', 'sqlite_code'], ['os_errno', 'os_errno'], ['sqlite_code', 'sqlite_code']] as const) {
+    if (Number.isSafeInteger(value[input])) fields[output] = Number(value[input]);
+  }
+  return fields;
+}
 export function childEnvironment(): NodeJS.ProcessEnv & Record<string, string> {
   const removed = new Set(['NODE_OPTIONS', 'NODE_PATH', 'NODE_V8_COVERAGE', 'NODE_CHANNEL_FD', 'NODE_CHANNEL_SERIALIZATION_MODE']);
   return { ...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && !removed.has(entry[0].toUpperCase()))), NODE_ENV: process.env.NODE_ENV ?? 'production' };
@@ -65,13 +84,13 @@ export function parseCommand(args: string[], artifactEnvironment = process.env.I
     ...(values.all ? { all: true } : {}), ...(typeof values['run-id'] === 'string' ? { runId: values['run-id'] } : {}) };
 }
 
-export function cliFailure(error: unknown): { error: { code: string; reason?: string; native_status?: number } } {
-  const value = error && typeof error === 'object' ? error as { code?: unknown; message?: unknown; reason?: unknown; status?: unknown } : {};
+export function cliFailure(error: unknown): { error: { code: string; reason?: string; native_status?: number } & FailureFields } {
+  const value = error && typeof error === 'object' ? error as { code?: unknown; message?: unknown; reason?: unknown; status?: unknown; stage?: unknown } : {};
   const code = value.code === 'source.invalid-record' && typeof value.message === 'string' && /^(source|quarantine)\.[a-z0-9.-]+$/.test(value.message) ? value.message
     : typeof value.code === 'string' && /^[a-z][a-z0-9.-]+$/.test(value.code) ? value.code
     : typeof value.message === 'string' && /^(source|quarantine)\.[a-z0-9.-]+$/.test(value.message) ? value.message : 'cli.failed';
   return { error: { code, ...(typeof value.reason === 'string' && /^[A-Z_0-9.-]+$/.test(value.reason) ? { reason: value.reason } : {}),
-    ...(Number.isSafeInteger(value.status) ? { native_status: Number(value.status) } : {}) } };
+    ...(Number.isSafeInteger(value.status) ? { native_status: Number(value.status) } : {}), ...failureFields(value, value.stage) } };
 }
 
 export async function main(args = process.argv.slice(2)): Promise<number> {

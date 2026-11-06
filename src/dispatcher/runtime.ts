@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { once } from 'node:events';
 import fs from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { Readable } from 'node:stream';
@@ -19,10 +18,12 @@ import type { Job } from './jobs.ts';
 import { handleTriage } from './kb-agent.ts';
 import { connect } from './opencode.ts';
 import { utc } from './time.ts';
-import { createKernel } from '../windows/kernel.ts';
+import { createKernel, sameProcess, spawnedIdentity } from '../windows/kernel.ts';
+import type { ProcessIdentity } from '../windows/kernel.ts';
 import { TEAMS_NODE_FLAGS } from '../watchers/teams.ts';
 import type { Source } from '../watchers/source.ts';
 import { inside, plainParents, readBuildReceipt } from '../web/build-artifact.ts';
+import { failureFields } from '../cli.ts';
 
 const sources = ['outlook', 'teams', 'teamsrelay'] as const;
 const entrypoints = { outlook: 'outlook', teams: 'teams', teamsrelay: 'relay' };
@@ -83,6 +84,7 @@ export function createLog(path: string, policy: Pick<Config['jobs'], 'log_files'
     const value: Record<string, unknown> = { at: utc(event.at), source: [...sources, 'daemon', 'jobs', 'next'].includes(event.source) ? event.source : 'daemon',
       code: /^[a-z][a-z0-9.-]{0,79}$/.test(event.code) ? event.code : 'log.invalid-code' };
     for (const key of ['job', 'quarantine', 'pid', 'status', 'count', 'bytes', 'exit_code']) if (Number.isSafeInteger(event[key])) value[key] = event[key];
+    Object.assign(value, failureFields(event, event.stage));
     if (typeof event.run_id === 'string' && /^[a-f0-9-]{36}$/.test(event.run_id)) value.run_id = event.run_id;
     const text = JSON.stringify(value) + '\n', bytes = Buffer.byteLength(text);
     if (bytes > policy.log_max_bytes) return;
@@ -246,6 +248,8 @@ export function scheduleMaintenance(db: DatabaseSync, cfg: Config, at?: string):
       if (hasPendingInput(db, ticket)) continue;
       for (const kind of ['sync', 'archive'] as const) {
         if (db.prepare("SELECT 1 FROM job WHERE kind=? AND ticket=? AND state IN ('queued','running')").get(kind, ticket)) continue;
+        const latest = db.prepare("SELECT next_at FROM job WHERE kind=? AND ticket=? AND state='done' ORDER BY updated_at DESC,id DESC LIMIT 1").get(kind, ticket);
+        if (latest && utc(String(latest.next_at)) > now) continue;
         const key = `${kind}:ticket:${ticket}:${day}`;
         const existing = db.prepare('SELECT id,state,next_at FROM job WHERE key=?').get(key);
         if (!existing) enqueue(db, kind, key, {}, ticket);
@@ -293,23 +297,30 @@ function directory(path: string): void {
 export async function startRuntime(cfg: Config, db: DatabaseSync, options: RuntimeOptions) {
   const { settings } = validateRuntimeConfig(cfg, options.buildReceipt);
   const log = createLog(cfg.db.path, cfg.jobs), registry = new Map<number, OwnedProcess>();
-  const watchers: { child: ChildProcess; identity: OwnedProcess; done: Promise<void> }[] = [];
+  const watchers: { child: ChildProcess; done: Promise<void> }[] = [];
   const inFlight = new Map<number, { controller: AbortController; done: Promise<void> }>();
-  const reconcile = new Set(db.prepare("SELECT id FROM job WHERE state IN ('queued','running','parked') AND (kind='collect' OR turn_id IS NOT NULL OR reserved_at IS NOT NULL)").all().map((row) => Number(row.id)));
+  const reconcile = new Set(db.prepare("SELECT id FROM job WHERE state IN ('queued','running') AND (kind='collect' OR turn_id IS NOT NULL OR reserved_at IS NOT NULL)").all().map((row) => Number(row.id)));
   let native: ReturnType<typeof createKernel> | undefined, closing: Promise<void> | undefined, stopped = false, ticking = false;
   const kernel = () => native ??= createKernel();
   const changed = () => options.onChildren?.([...registry.values()]);
-  const fatal = (error: unknown) => { healthError(db, cfg, 'daemon', 'runtime.failed'); log({ source: 'daemon', code: 'runtime.failed' }); options.onError?.(error); };
+  const fatal = (error: unknown, stage: string) => {
+    const fields = failureFields(error, stage);
+    const failure = Object.assign(new DaemonError('runtime.failed'), fields);
+    healthError(db, cfg, 'daemon', 'runtime.failed'); log({ source: 'daemon', code: 'runtime.failed', ...fields }); options.onError?.(failure);
+  };
   function tick() {
     if (stopped || ticking) return;
     ticking = true;
+    let stage = 'runtime.schedule';
     try {
-      schedule(db, cfg); scheduleMaintenance(db, cfg);
-      for (const id of reconcile) if (['done', 'cancelled'].includes(String(db.prepare('SELECT state FROM job WHERE id=?').get(id)?.state))) reconcile.delete(id);
+      schedule(db, cfg); stage = 'runtime.maintenance'; scheduleMaintenance(db, cfg);
+      for (const id of reconcile) if (['done', 'cancelled', 'parked'].includes(String(db.prepare('SELECT state FROM job WHERE id=?').get(id)?.state))) reconcile.delete(id);
       for (;;) {
+        stage = 'runtime.claim';
         const job = claim(db, cfg, options.runId, undefined, { runtime: true, inputReady: reconcile.size === 0 });
         if (!job) break;
         const controller = new AbortController();
+        stage = 'runtime.renewal';
         const renewal = startRenewal(cfg, job, () => controller.abort());
         const jobOptions = { signal: controller.signal, buildReceipt: options.buildReceipt, ...(options.restartAt ? { restartAt: options.restartAt } : {}) };
         const done = Promise.resolve().then(() => (options.handlers?.[job.kind] ?? runJob)(cfg, db, job, jobOptions))
@@ -318,15 +329,19 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
             try {
               if (controller.signal.aborted && owns(db, job, utc())) defer(db, job, after(utc(), cfg.jobs.collect_seconds));
               const current = db.prepare('SELECT state,failures FROM job WHERE id=?').get(job.id);
-              if (current && (current.state === 'done' || current.state === 'cancelled' || current.state === 'queued' && current.failures === job.failures && !controller.signal.aborted)) reconcile.delete(job.id);
+              if (current && (['done', 'cancelled', 'parked'].includes(String(current.state)) || current.state === 'queued' && current.failures === job.failures && !controller.signal.aborted)) reconcile.delete(job.id);
             } finally { renewal.stop(); inFlight.delete(job.id); if (!stopped) queueMicrotask(tick); }
           });
         inFlight.set(job.id, { controller, done });
       }
-    } catch (error) { fatal(error); } finally { ticking = false; }
+    } catch (error) { fatal(error, stage); } finally { ticking = false; }
   }
   const interval = setInterval(tick, cfg.jobs.collect_seconds * 1000);
-  const beat = () => { try { heartbeat(db, { ...options.metadata, run_id: options.runId }); options.onHeartbeat?.(); } catch (error) { fatal(error); } };
+  const beat = () => {
+    let stage = 'heartbeat.store';
+    try { heartbeat(db, { ...options.metadata, run_id: options.runId }); stage = 'heartbeat.receipt'; options.onHeartbeat?.(); }
+    catch (error) { fatal(error, stage); }
+  };
   const heartbeatTimer = setInterval(beat, cfg.jobs.heartbeat_seconds * 1000);
   interval.unref(); heartbeatTimer.unref();
   const close = () => closing ??= (async () => {
@@ -335,6 +350,7 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
     for (const { child } of watchers) if (child.connected) child.send({ type: 'dispatcher.stop' }, () => {});
     try { await bounded(Promise.allSettled(watchers.map((watcher) => watcher.done)), 5000, 'source.stop-timeout'); }
     catch {
+      for (const { child } of watchers) if (child.exitCode === null && child.signalCode === null) child.kill();
       for (const identity of registry.values()) kernel().terminate(identity);
       await bounded(Promise.allSettled(watchers.map((watcher) => watcher.done)), 5000, 'source.stop-timeout');
     }
@@ -349,25 +365,48 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
       const command = sourceCommand(cfg, db, source, options.buildReceipt);
       const child = options.spawnWatcher ? options.spawnWatcher(command) : spawn(command.executable, command.args, { cwd: command.cwd, env: command.environment, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
       const done = readWatcher(db, cfg, source, child, log, () => stopped);
-      await once(child, 'spawn');
-      const identity: OwnedProcess = { ...kernel().processIdentity(child.pid!), source, kind: 'watcher', owner_pid: process.pid };
+      let identity: OwnedProcess | undefined;
+      const observed = done.catch((error: unknown) => { if (!stopped) fatal(error, 'source.reader'); }).finally(() => {
+        if (!identity) return;
+        for (const childIdentity of registry.values()) if (childIdentity.owner_pid === identity.pid && childIdentity.owner_created === identity.created) { kernel().terminate(childIdentity); registry.delete(childIdentity.pid); }
+        const current = registry.get(identity.pid);
+        if (current && sameProcess(current, identity)) registry.delete(identity.pid);
+        changed();
+      });
+      watchers.push({ child, done: observed });
+      const expected = await spawnedIdentity(child, (pid) => kernel().processIdentity(pid));
+      identity = { ...expected, source, kind: 'watcher', owner_pid: process.pid,
+        owner_created: typeof options.metadata?.created === 'string' ? options.metadata.created : kernel().processIdentity(process.pid).created };
       registry.set(identity.pid, identity); changed();
+      const watcher = identity;
       child.on('message', (value: unknown) => {
         if (!value || typeof value !== 'object') return;
-        const entry = value as { type?: unknown; pid?: unknown; active?: unknown };
-        if (entry.type !== 'dispatcher.child' || !Number.isSafeInteger(entry.pid)) return;
-        const pid = Number(entry.pid);
+        const entry = value as { type?: unknown; identity?: ProcessIdentity; owner?: ProcessIdentity; pid?: unknown; active?: unknown; code?: unknown; status?: unknown };
+        if (entry.type === 'dispatcher.child-error') { log({ source, code: 'source.child-identity', ...failureFields(entry, 'child.capture') }); return; }
+        if (entry.type !== 'dispatcher.child') return;
+        const valid = (item: unknown): item is ProcessIdentity => {
+          if (!item || typeof item !== 'object') return false;
+          const candidate = item as Partial<ProcessIdentity>;
+          return Number.isSafeInteger(candidate.pid) && Number(candidate.pid) > 0 && typeof candidate.created === 'string' && /^\d+$/.test(candidate.created)
+            && typeof candidate.image === 'string' && isAbsolute(candidate.image);
+        };
+        if (!valid(entry.identity) || !valid(entry.owner) || !sameProcess(entry.owner, watcher) || entry.pid !== entry.identity.pid) {
+          log({ source, code: 'source.child-identity', ...failureFields({ reason: 'invalid-packet' }, 'child.packet') }); return;
+        }
+        const expectedChild = entry.identity;
+        let stage = 'child.parent';
         try {
-          if (entry.active === true && kernel().processes().some((row) => row.pid === pid && row.parent === identity.pid)) {
-            registry.set(pid, { ...kernel().processIdentity(pid), source, kind: 'ssh', owner_pid: identity.pid }); changed();
-          } else if (entry.active === false && registry.get(pid)?.owner_pid === identity.pid) { registry.delete(pid); changed(); }
-        } catch { log({ source, code: 'source.child-identity' }); }
+          if (entry.active === true) {
+            if (!kernel().childOf(expectedChild, watcher)) { log({ source, code: 'source.child-identity', ...failureFields({ reason: 'identity-mismatch' }, stage) }); return; }
+            registry.set(expectedChild.pid, { ...expectedChild, source, kind: 'ssh', owner_pid: watcher.pid, owner_created: watcher.created });
+          } else if (entry.active === false) {
+            const registered = registry.get(expectedChild.pid);
+            if (!registered || registered.owner_pid !== watcher.pid || registered.owner_created !== watcher.created || !sameProcess(registered, expectedChild)) return;
+            registry.delete(expectedChild.pid);
+          } else return;
+          stage = 'child.publish'; changed();
+        } catch (error) { log({ source, code: 'source.child-identity', ...failureFields(error, stage) }); }
       });
-      const observed = done.catch((error: unknown) => { if (!stopped) fatal(error); }).finally(() => {
-        for (const childIdentity of registry.values()) if (childIdentity.owner_pid === identity.pid) { kernel().terminate(childIdentity); registry.delete(childIdentity.pid); }
-        registry.delete(identity.pid); changed();
-      });
-      watchers.push({ child, identity, done: observed });
       log({ source, code: 'source.started', pid: identity.pid });
     }
     beat(); tick();

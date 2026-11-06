@@ -13,7 +13,7 @@ export { childEnvironment } from '../cli.ts';
 export class DaemonError extends Error {
   constructor(readonly code: string, readonly reason?: string) { super(code); }
 }
-export interface OwnedProcess extends ProcessIdentity { kind: 'watcher' | 'ssh'; source: Source; owner_pid: number }
+export interface OwnedProcess extends ProcessIdentity { kind: 'watcher' | 'ssh'; source: Source; owner_pid: number; owner_created?: string }
 export interface DaemonReceipt extends ProcessIdentity {
   version: 1; status: 'starting' | 'ready' | 'stopped'; run_id: string; config_path: string; db_path: string;
   artifact: string; port: number; started_at: string; heartbeat_at: string; argv: string[]; children: OwnedProcess[];
@@ -46,7 +46,16 @@ export function instancePaths(path: string, runId?: string) {
 export function atomicJson(path: string, value: unknown): void {
   const temporary = path + `.${randomUUID()}.tmp`;
   fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { flag: 'wx' });
-  fs.renameSync(temporary, path);
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; ; attempt++) {
+    try { fs.renameSync(temporary, path); return; }
+    catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (process.platform !== 'win32' || !['EACCES', 'EPERM', 'EBUSY'].includes(code ?? '') || attempt === 9) throw error;
+      // A Windows reader can temporarily deny replacement. Keep one complete candidate, at most 650ms total wait.
+      Atomics.wait(wait, 0, 0, Math.min(10 * 2 ** attempt, 100));
+    }
+  }
 }
 
 export function readJson(path: string): unknown {
@@ -71,6 +80,7 @@ export function readDaemonReceipt(cfg: Pick<Config, 'db' | '_config_path'>): Dae
     || typeof row.config_path !== 'string' || !samePath(row.config_path, cfg._config_path) || typeof row.db_path !== 'string' || !samePath(row.db_path, paths.db)
     || !Array.isArray(row.children) || row.children.length > 4096 || row.children.some((child: OwnedProcess) => !processIdentity(child)
       || !['watcher', 'ssh'].includes(child.kind) || !['outlook', 'teams', 'teamsrelay'].includes(child.source) || !Number.isSafeInteger(child.owner_pid))) throw new DaemonError('daemon.receipt-identity');
+  if (row.children.some((child) => child.kind === 'ssh' && (typeof child.owner_created !== 'string' || !/^\d+$/.test(child.owner_created)))) throw new DaemonError('daemon.child-identity-unverified');
   return row as DaemonReceipt;
 }
 

@@ -6,8 +6,8 @@ import { isolatedEnvironment } from '../scripts/build.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
 import { scratch } from './support.ts';
 
-export function daemonFixture(settings = '') {
-  const artifact = readBuildReceipt(process.env.TEST_BUILD_RECEIPT);
+export function daemonFixture(settings = '', receipt = process.env.TEST_BUILD_RECEIPT) {
+  const artifact = readBuildReceipt(receipt);
   const f = scratch('phase7b-chain ');
   const input = join(f.root, 'source.ndjson'), starts = join(f.root, 'source-starts.ndjson'), exited = join(f.root, 'source-exits.ndjson');
   fs.writeFileSync(input, ''); fs.writeFileSync(starts, ''); fs.writeFileSync(exited, '');
@@ -16,7 +16,7 @@ export function daemonFixture(settings = '') {
   const env = isolatedEnvironment(artifact.root, process.env), commands: unknown[] = [];
   let sequence = 0;
   const run = (...args: string[]) => new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-    const argv = [join(artifact.root, 'dist/cli.js'), '--artifact', process.env.TEST_BUILD_RECEIPT!, '--config', f.config, ...args];
+    const argv = [join(artifact.root, 'dist/cli.js'), '--artifact', receipt!, '--config', f.config, ...args];
     const child = spawn(process.execPath, argv, { cwd: artifact.root, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     child.stdout!.on('data', (value: Buffer) => { stdout += value.toString(); }); child.stderr!.on('data', (value: Buffer) => { stderr += value.toString(); });
@@ -46,7 +46,7 @@ export function daemonFixture(settings = '') {
   }
   return { ...f, artifact, input, starts, exited, base, commands, run, read, until,
     emit: (...values: unknown[]) => fs.appendFileSync(input, values.map((value) => typeof value === 'string' ? value : JSON.stringify(value)).join('\n') + '\n'),
-    proof: (value: unknown) => fs.writeFileSync(join(f.root, 'proof.json'), JSON.stringify({ config: f.config, artifact: process.env.TEST_BUILD_RECEIPT, commands, value }, null, 2)),
+    proof: (value: unknown) => fs.writeFileSync(join(f.root, 'proof.json'), JSON.stringify({ config: f.config, artifact: receipt, commands, value }, null, 2)),
   };
 }
 

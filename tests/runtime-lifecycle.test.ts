@@ -9,9 +9,10 @@ import { loadConfig } from '../src/dispatcher/config.ts';
 import { openDb, prepareStart } from '../src/dispatcher/db.ts';
 import { enqueue, complete } from '../src/dispatcher/jobs.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
-import { createKernel } from '../src/windows/kernel.ts';
+import { createKernel, sameProcess, spawnedIdentity } from '../src/windows/kernel.ts';
 import { runSource } from '../src/watchers/source.ts';
 import { scratch } from './support.ts';
+import { bounded } from '../src/dispatcher/daemon.ts';
 
 const module = resolve('src/dispatcher/runtime.ts');
 const runtime: Record<string, any> = existsSync(module) ? await import(pathToFileURL(module).href) : {};
@@ -53,6 +54,8 @@ test('relay owner disconnect aborts and observes its actual synthetic SSH child 
       finally {process.stdout.write(JSON.stringify({closed:target?.exitCode!==null||target?.signalCode!==null})+'\\n');}
     },{},fallback.signal);process.exitCode=code;if(process.connected)process.disconnect();`);
   const child = fork(script, [], { cwd: artifact.root, env: { ...isolatedEnvironment(artifact.root, process.env), INBOX_DISPATCHER_SOURCE_OWNER: String(process.pid) }, execArgv: [], windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  using kernel = createKernel();
+  const watcherIdentity = spawnedIdentity(child, (pid) => kernel.processIdentity(pid));
   let output = '', stderr = '';
   child.stdout!.on('data', (part: Buffer) => { output += part.toString(); });
   child.stderr!.on('data', (part: Buffer) => { stderr += part.toString(); });
@@ -60,15 +63,20 @@ test('relay owner disconnect aborts and observes its actual synthetic SSH child 
   child.on('message', (value) => messages.push(value));
   const exit = new Promise<void>((resolve, reject) => { child.once('error', reject); child.once('exit', () => resolve()); });
   let target: ReturnType<ReturnType<typeof createKernel>['processIdentity']> | undefined;
-  using kernel = createKernel();
   try {
     const pid = await new Promise<number>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('Synthetic SSH did not start')), 5000);
       child.on('message', (value: any) => { if (value.type === 'fixture.ssh') { clearTimeout(timeout); resolve(value.pid); } });
     });
-    target = kernel.processIdentity(pid);
-    await delay(100);
-    expect(messages.some((value) => value.type === 'dispatcher.child' && value.pid === pid && value.active === true)).toBe(true);
+    const packet = await bounded(new Promise<any>((resolve) => {
+      const existing = messages.find((value) => value.type === 'dispatcher.child' && value.pid === pid && value.active === true);
+      if (existing) { resolve(existing); return; }
+      const received = (value: any) => { if (value.type === 'dispatcher.child' && value.pid === pid && value.active === true) { child.off('message', received); resolve(value); } };
+      child.on('message', received);
+    }), 5000, 'fixture.child-registration');
+    target = packet.identity;
+    expect(sameProcess(packet.owner, await watcherIdentity)).toBe(true);
+    expect(kernel.childOf(packet.identity, packet.owner)).toBe(true);
     child.disconnect();
     await Promise.race([exit, delay(5000).then(() => { throw new Error('Owned relay failed disconnect shutdown'); })]);
     expect(child.exitCode, stderr).toBe(0);

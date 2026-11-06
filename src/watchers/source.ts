@@ -4,8 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { utc } from '../dispatcher/time.ts';
-import { NativeError } from '../windows/kernel.ts';
-import type { ChildProcess } from 'node:child_process';
+import { createKernel, NativeError, spawnedIdentity } from '../windows/kernel.ts';
+import type { ProcessIdentity } from '../windows/kernel.ts';
+import type { ChildProcess, Serializable } from 'node:child_process';
 
 export type Source = 'outlook' | 'teams' | 'teamsrelay';
 export interface SourceMessage {
@@ -109,12 +110,23 @@ export function requiredOption(values: Record<string, unknown>, key: string): st
 
 function sourceOwner(): boolean { return process.connected === true && process.env.INBOX_DISPATCHER_SOURCE_OWNER === String(process.ppid); }
 
-export function trackSourceChild(child: ChildProcess): void {
-  if (!sourceOwner()) return;
+export interface ChildTracker { owner: ProcessIdentity; capture(pid: number): ProcessIdentity; send(value: unknown): void }
+export function trackSourceChild(child: ChildProcess, input?: ChildTracker): void {
+  if (!input && !sourceOwner()) return;
+  const owner = input ? { ...input.owner } : (() => { using kernel = createKernel(); return kernel.processIdentity(process.pid); })();
+  const capture = input?.capture ?? ((pid: number) => { using kernel = createKernel(); return kernel.processIdentity(pid); });
+  const send = input?.send ?? ((value: unknown) => { if (process.connected) process.send?.(value as Serializable, () => {}); });
+  let expected: ProcessIdentity | undefined;
   const notify = (active: boolean) => {
-    if (process.connected && child.pid) process.send?.({ type: 'dispatcher.child', pid: child.pid, active }, () => {});
+    if (expected) send({ type: 'dispatcher.child', pid: expected.pid, identity: { ...expected }, owner, active });
   };
-  child.once('spawn', () => notify(true));
+  void spawnedIdentity(child, capture).then((identity) => {
+    expected = identity;
+    if (child.exitCode === null && child.signalCode === null) notify(true);
+  }, (error: unknown) => {
+    const diagnostic = error instanceof NativeError ? { code: error.code, status: error.status } : { code: 'source.unexpected' };
+    send({ type: 'dispatcher.child-error', ...diagnostic });
+  });
   child.once('close', () => notify(false));
 }
 

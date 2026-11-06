@@ -1,14 +1,18 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test } from 'vitest';
 import { openDb } from '../src/dispatcher/db.ts';
+import { loadConfig } from '../src/dispatcher/config.ts';
+import { approve } from '../src/dispatcher/approval.ts';
+import { enqueue } from '../src/dispatcher/jobs.ts';
 import { createKernel } from '../src/windows/kernel.ts';
 import { daemonFixture, sourceRecord } from './daemon-support.ts';
 import { scriptedPeer as chatPeer } from './opencode-support.ts';
 import { decision, provider, scriptedPeer as kbPeer, text, tools, use } from './kb-support.ts';
 import { actionHeaders, http, rootToken } from './web-support.ts';
+import { samePath } from '../src/web/build-artifact.ts';
 
 test.each(['missing', 'false', '"true"'])('P01 actual daemon ingests inert source with tickets %s but starts no automatic work', async (flag) => {
   const f = daemonFixture(`${flag === 'missing' ? '' : `[tickets]\nenabled=${flag}\n`}[chats]\nenabled=true\n`);
@@ -89,13 +93,13 @@ test('P04 reopened account inventory uses oldest floor in actual child argv and 
   } finally { expect((await f.run('stop')).status).toBe(0); }
 });
 
-async function pipeline(configure?: (peer: Awaited<ReturnType<typeof chatPeer>>) => void) {
+async function pipeline(configure?: (peer: Awaited<ReturnType<typeof chatPeer>>) => void, receipt = process.env.TEST_BUILD_RECEIPT) {
   const peer = await chatPeer();
   configure?.(peer);
   const kb = await kbPeer((_body, index) => ({ body: index === 0 ? tools(use('search', 'vault_search', { query: 'runtime-fixture' }))
     : index === 1 ? tools(use('read', 'vault_read', { path: '02_Areas/workflow.md' }))
       : text(JSON.stringify(decision({ title: 'Synthetic runtime ticket', client: 'synthetic', kb_notes: ['02_Areas/workflow.md'] }))) }));
-  const f = daemonFixture(`[tickets]\nenabled=true\n[chats]\nenabled=true\n[opencode]\nurl=${JSON.stringify(peer.url)}\ndirectory="kb"\ntimeout_seconds=1\n[triage]\nproviders=["fixture"]\nmodel="synthetic-small"\nprovider_config_path="providers.jsonc"\ntimeout_seconds=5\n[clients.synthetic]\naccounts=["me@synthetic.invalid"]\n`);
+  const f = daemonFixture(`[tickets]\nenabled=true\n[chats]\nenabled=true\n[opencode]\nurl=${JSON.stringify(peer.url)}\ndirectory="kb"\ntimeout_seconds=1\n[triage]\nproviders=["fixture"]\nmodel="synthetic-small"\nprovider_config_path="providers.jsonc"\ntimeout_seconds=5\n[clients.synthetic]\naccounts=["me@synthetic.invalid"]\n`, receipt);
   fs.mkdirSync(join(f.root, 'kb/02_Areas'), { recursive: true });
   fs.writeFileSync(join(f.root, 'kb/02_Areas/workflow.md'), '# Runtime workflow\n\nruntime-fixture: read-only synthetic evidence.\n');
   fs.writeFileSync(join(f.root, 'providers.jsonc'), JSON.stringify({ providers: { fixture: provider(kb.baseURL) } }));
@@ -116,12 +120,17 @@ async function pipeline(configure?: (peer: Awaited<ReturnType<typeof chatPeer>>)
   } catch (error) { await f.run('stop'); await peer[Symbol.asyncDispose](); await kb[Symbol.asyncDispose](); throw error; }
 }
 
-test('P07 built source/triage/proposal/local approval/session/collect/later-forward chain retains immutable inputs and evidence', async () => {
-  const f = await pipeline();
+test.each(['native', 'forward'])('P07 built chain retains terminal report/reference and explicit correction paths (%s receipt)', async (spelling) => {
+  const selectedReceipt = spelling === 'forward' ? process.env.TEST_BUILD_RECEIPT!.replaceAll('\\', '/') : resolve(process.env.TEST_BUILD_RECEIPT!);
+  const f = await pipeline(undefined, selectedReceipt);
   try {
     const first = await f.until(() => f.read((db) => db.prepare("SELECT * FROM turn WHERE state='admitted' ORDER BY id LIMIT 1").get()), 'first admitted immutable input');
     expect(String(first.text)).toContain(f.note); expect(String(first.text)).toContain('ABC-71');
-    expect(String(first.text)).toContain('--artifact'); expect(String(first.text)).toContain(process.env.TEST_BUILD_RECEIPT);
+    const command = String(first.text).split('\n').find((line) => line.startsWith('& '))!;
+    const pathArgument = (name: string) => new RegExp(`${name} '((?:''|[^'])*)'`).exec(command)?.[1]?.replaceAll("''", "'");
+    expect(command).toContain(`& '${process.execPath.replaceAll("'", "''")}' '${join(f.artifact.root, 'dist/cli.js').replaceAll("'", "''")}'`);
+    expect(pathArgument('--artifact')).toBeDefined(); expect(samePath(pathArgument('--artifact')!, selectedReceipt)).toBe(true);
+    expect(pathArgument('--config')).toBeDefined(); expect(samePath(pathArgument('--config')!, f.config)).toBe(true);
     expect(f.read((db) => db.prepare("SELECT raw FROM triage_log WHERE action='new'").get())?.raw).toContain('02_Areas/workflow.md');
     const store = f.read((db) => JSON.parse(String(db.prepare("SELECT detail FROM health WHERE dependency='daemon'").get()!.detail)).store_id);
     expect(f.peer.calls.find((call) => call.method === 'POST' && call.url.pathname === '/api/session')?.body.metadata)
@@ -135,13 +144,92 @@ test('P07 built source/triage/proposal/local approval/session/collect/later-forw
     f.peer.deliver(String(later.session_id), String(later.prompt_id));
     await f.until(() => f.read((db) => db.prepare("SELECT id FROM job WHERE kind='collect' AND json_extract(payload,'$.turn')=? AND state='queued'").get(later.id!)), 'nonterminal collection retained');
     expect(f.read((db) => db.prepare('SELECT state FROM turn WHERE id=?').get(later.id!)!.state)).toBe('admitted');
-    f.peer.finish(String(later.session_id), String(later.prompt_id), 'STATUS: done | Later input complete');
+    f.peer.finish(String(later.session_id), String(later.prompt_id), 'Terminal report reference CHG90077\nSTATUS: done | Later input complete');
     await f.until(() => f.read((db) => db.prepare("SELECT id FROM turn WHERE id=? AND state='done'").get(later.id!)), 'later terminal collection');
     expect(f.peer.calls.filter((call) => call.method === 'POST' && call.url.pathname === '/api/session')).toHaveLength(1);
     expect(f.peer.calls.filter((call) => call.method === 'POST' && call.url.pathname.endsWith('/prompt'))).toHaveLength(2);
     expect(f.kb.requests).toHaveLength(3);
     expect(f.read((db) => db.prepare("SELECT COUNT(*) AS n FROM batch WHERE outcome='forwarded' AND state='done'").get()!.n)).toBe(2);
-    f.proof({ requirement: 'P07', ready: f.ready, first, later, peerCalls: f.peer.calls.map((call) => ({ method: call.method, path: call.url.pathname })), kbRequests: f.kb.requests.length });
+    const terminal = f.read((db) => db.prepare('SELECT lifecycle,report,report_line,report_message_id FROM ticket WHERE id=?').get(f.proposed.id!));
+    expect(terminal).toEqual({ lifecycle: 'done', report: 'done', report_line: 'Later input complete', report_message_id: `asst_${later.prompt_id}` });
+    expect(f.read((db) => db.prepare("SELECT ticket,kind,key,seen_in FROM ticket_ref WHERE key='CHG90077'").get()))
+      .toEqual({ ticket: Number(f.proposed.id), kind: 'snow', key: 'CHG90077', seen_in: 'chat' });
+    f.proof({ requirement: 'P07', spelling, selectedReceipt, ready: f.ready, first, later, terminal, peerCalls: f.peer.calls.map((call) => ({ method: call.method, path: call.url.pathname })), kbRequests: f.kb.requests.length });
+  } finally { await f.close(); }
+});
+
+test('I1 actual CLI stop/restart reconciles accepted pre-turn create with chats off before resuming old then independent fresh input', async () => {
+  const f = await pipeline((peer) => { peer.state.loseCreate = true; });
+  try {
+    const old = await f.until(() => f.read((db) => db.prepare("SELECT * FROM job WHERE kind='start_chat' AND turn_id IS NULL AND state='queued' AND failures>0").get()), 'lost accepted session-create response');
+    expect(old.reserved_at).not.toBeNull(); expect(f.peer.sessions.size).toBe(1);
+    const accepted = [...f.peer.sessions.keys()][0]!;
+    expect((await f.run('stop')).status).toBe(0);
+    let freshTicket: number;
+    {
+      using db = new DatabaseSync(f.path); const cfg = loadConfig(f.config);
+      freshTicket = Number(db.prepare("INSERT INTO ticket(title,created_at) VALUES ('Independent restart input',?)").run(new Date().toISOString()).lastInsertRowid);
+      approve(cfg, db, freshTicket, 'Explicit independent synthetic instruction');
+    }
+    fs.writeFileSync(f.config, fs.readFileSync(f.config, 'utf8').replace('[chats]\nenabled=true', '[chats]\nenabled=false'));
+    expect((await f.run('start', '--port', '0')).status).toBe(0);
+    await f.until(() => f.read((db) => db.prepare("SELECT t.id FROM ticket t JOIN job j ON j.ticket=t.id WHERE t.id=? AND t.session_id=? AND j.id=? AND j.state='queued' AND j.turn_id IS NULL").get(f.proposed.id!, accepted, old.id!)), 'chats-off accepted-tag lookup and durable defer');
+    expect(f.read((db) => db.prepare('SELECT reserved_at,turn_id,state FROM job WHERE id=?').get(old.id!))).toMatchObject({ reserved_at: old.reserved_at, turn_id: null, state: 'queued' });
+    expect(f.read((db) => db.prepare('SELECT COUNT(*) AS n FROM turn').get()!.n)).toBe(0);
+    expect(f.peer.calls.filter((call) => call.method === 'POST' && call.url.pathname === '/api/session')).toHaveLength(1);
+    expect(f.peer.calls.filter((call) => call.method === 'POST' && call.url.pathname.endsWith('/prompt'))).toHaveLength(0);
+    expect((await f.run('stop')).status).toBe(0);
+    fs.writeFileSync(f.config, fs.readFileSync(f.config, 'utf8').replace('[chats]\nenabled=false', '[chats]\nenabled=true'));
+    expect((await f.run('start', '--port', '0')).status).toBe(0);
+    const original = await f.until(() => f.read((db) => db.prepare("SELECT * FROM turn WHERE ticket=? AND state='admitted'").get(f.proposed.id!)), 'old reserved input resumes');
+    const fresh = await f.until(() => f.read((db) => db.prepare("SELECT * FROM turn WHERE ticket=? AND state='admitted'").get(freshTicket)), 'independent fresh input resumes');
+    expect(original.session_id).toBe(accepted);
+    const posts = f.peer.calls.filter((call) => call.method === 'POST' && call.url.pathname.endsWith('/prompt'));
+    expect(posts.map((call) => call.body.id)).toEqual([original.prompt_id, fresh.prompt_id]);
+    expect(f.peer.calls.filter((call) => call.method === 'POST' && call.url.pathname === '/api/session')).toHaveLength(2);
+    for (const turn of [original, fresh]) f.peer.finish(String(turn.session_id), String(turn.prompt_id), 'STATUS: done | Reconciled synthetic input');
+    await f.until(() => f.read((db) => db.prepare("SELECT COUNT(*) AS n FROM turn WHERE state='done'").get()!.n === 2), 'both immutable inputs collected');
+    f.proof({ requirement: 'I1-reserved-restart', old, accepted, original, fresh, originalSessionCreates: 1, chatsOffNewPosts: 0 });
+  } finally { await f.close(); }
+});
+
+test('P09 chats-on unreachable history holds an otherwise eligible later queued input until original reconciliation/collection', async () => {
+  let swallowed = false;
+  const f = await pipeline((peer) => { peer.state.hook = (call) => {
+    if (!swallowed && call.method === 'POST' && call.url.pathname.endsWith('/prompt')) {
+      swallowed = true; const sessionID = decodeURIComponent(call.url.pathname.split('/')[3]!);
+      peer.admissions.set(String(call.body.id), { id: String(call.body.id), sessionID, type: 'user', delivery: 'queue', time: { created: Date.now() }, payload: { text: String(call.body.text) } }); return true;
+    }
+    return false;
+  }; });
+  try {
+    const old = await f.until(() => f.read((db) => db.prepare("SELECT * FROM job WHERE kind='start_chat' AND state='queued' AND failures>0").get()), 'uncertain original acceptance');
+    const original = f.read((db) => db.prepare('SELECT * FROM turn WHERE id=?').get(old.turn_id!))!;
+    f.emit(sourceRecord('eligible-later', 'Eligible later FIFO input'));
+    const batch = await f.until(() => f.read((db) => db.prepare("SELECT b.id FROM batch b JOIN message m ON m.batch=b.id WHERE m.native_id='eligible-later' AND b.state='pending'").get()), 'later source batch ready');
+    expect((await f.run('stop')).status).toBe(0);
+    let laterJob: number;
+    {
+      using db = new DatabaseSync(f.path);
+      laterJob = enqueue(db, 'forward', 'review:eligible-later-input', { batch_ids: [Number(batch.id)] }, Number(f.proposed.id));
+    }
+    f.peer.state.historyStatus = 503;
+    expect((await f.run('start', '--port', '0')).status).toBe(0);
+    await f.until(() => f.read((db) => db.prepare("SELECT id FROM job WHERE id=? AND state='queued' AND failures>?").get(old.id!, old.failures!)), 'unreachable original history');
+    const laterQueued = f.read((db) => db.prepare('SELECT state,next_at,reserved_at,turn_id FROM job WHERE id=?').get(laterJob))!;
+    expect(laterQueued).toMatchObject({ state: 'queued', reserved_at: null, turn_id: null }); expect(Date.parse(String(laterQueued.next_at))).toBeLessThanOrEqual(Date.now());
+    const cfg = loadConfig(f.config); expect(cfg.tickets.enabled && cfg.chats.enabled).toBe(true); expect(cfg.jobs.turn_concurrency).toBeGreaterThan(1);
+    expect(f.read((db) => db.prepare('SELECT state FROM turn WHERE id=?').get(original.id!)!.state)).toBe('prepared');
+    expect(f.peer.calls.filter((call) => call.method === 'POST' && call.url.pathname.endsWith('/prompt'))).toHaveLength(1);
+    f.peer.state.historyStatus = 200; f.peer.finish(String(original.session_id), String(original.prompt_id), 'STATUS: working | Original reconciliation complete');
+    const retried = await f.run('job', 'retry', String(old.id)); expect(retried.status, retried.stderr).toBe(0);
+    await f.until(() => f.read((db) => db.prepare("SELECT id FROM turn WHERE id=? AND state='done'").get(original.id!)), 'original collector releases FIFO');
+    const later = await f.until(() => f.read((db) => db.prepare("SELECT * FROM turn WHERE id>? AND state='admitted'").get(original.id!)), 'later input becomes eligible');
+    expect(later.session_id).toBe(original.session_id);
+    expect(f.peer.calls.filter((call) => call.method === 'POST' && call.url.pathname.endsWith('/prompt') && call.body.id === original.prompt_id)).toHaveLength(1);
+    f.peer.finish(String(later.session_id), String(later.prompt_id), 'STATUS: done | Later FIFO input complete');
+    await f.until(() => f.read((db) => db.prepare("SELECT id FROM turn WHERE id=? AND state='done'").get(later.id!)), 'later collection');
+    f.proof({ requirement: 'P09-eligible-fifo', old, original, laterJob, laterQueued, later, originalPosts: 1 });
   } finally { await f.close(); }
 });
 

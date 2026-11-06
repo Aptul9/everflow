@@ -1,10 +1,29 @@
 import { createRequire } from 'node:module';
 import { isAbsolute, win32 } from 'node:path';
+import type { ChildProcess } from 'node:child_process';
 
 export type NativeBindings = Record<string, (...args: any[]) => any>;
 export type ProcessRow = { pid: number; parent: number; exe: string };
 export type LaunchOptions = { executable: string; args: string[]; cwd: string; environment: Record<string, string>; breakaway?: boolean };
 export type ProcessIdentity = { pid: number; created: string; image: string };
+export function sameProcess(a: ProcessIdentity, b: ProcessIdentity): boolean { return a.pid === b.pid && a.created === b.created && windowsPath(a.image) === windowsPath(b.image); }
+export function spawnedIdentity(child: ChildProcess, capture: (pid: number) => ProcessIdentity): Promise<ProcessIdentity> {
+  return new Promise((resolve, reject) => {
+    const failed = (error: Error) => { child.off('spawn', spawned); reject(error); };
+    const spawned = () => {
+      child.off('error', failed);
+      try {
+        if (!child.pid || child.exitCode !== null || child.signalCode !== null) throw new NativeError('native.spawn-identity');
+        // Node still holds the CreateProcess handle during this synchronous spawn callback.
+        const identity = capture(child.pid);
+        if (identity.pid !== child.pid || !/^\d+$/.test(identity.created) || !isAbsolute(identity.image)
+          || child.exitCode !== null || child.signalCode !== null) throw new NativeError('native.spawn-identity');
+        resolve(Object.freeze({ ...identity }));
+      } catch (error) { reject(error); }
+    };
+    child.once('error', failed); child.once('spawn', spawned);
+  });
+}
 const MiB = 1024 * 1024;
 
 export class NativeError extends Error {
@@ -127,6 +146,7 @@ function kernelBindings(): NativeBindings {
   ];
   bindings = Object.fromEntries(declarations.map((declaration) => [declaration.match(/(\w+)\(/)![1]!, kernel.func(declaration)]));
   bindings.NtQuerySystemInformation = nt.func('int32_t __stdcall NtQuerySystemInformation(uint32_t infoClass, void *buffer, uint32_t size, _Out_ uint32_t *needed)');
+  bindings.NtQueryInformationProcess = nt.func('int32_t __stdcall NtQueryInformationProcess(void *process, uint32_t infoClass, void *buffer, uint32_t size, _Out_ uint32_t *needed)');
   return bindings;
 }
 
@@ -265,6 +285,15 @@ export function createKernel(input?: NativeBindings) {
     launch(options: LaunchOptions): number { return launch(options, false) as number; },
     launchIdentity(options: LaunchOptions): ProcessIdentity { return launch(options, true) as ProcessIdentity; },
     running(identity: ProcessIdentity): boolean { return matching(identity, 0, (handle) => !waiting(handle, 0), false); },
+    childOf(identity: ProcessIdentity, parent: ProcessIdentity): boolean {
+      return matching(identity, 0x400, (handle) => {
+        const basic = Buffer.alloc(48), needed = [0];
+        const status = api.NtQueryInformationProcess!(handle, 0, basic, basic.length, needed) >>> 0;
+        if (status) throw new NativeError('native.process-parent', status);
+        if (needed[0] !== 48 || basic.readBigUInt64LE(32) !== BigInt(identity.pid)) throw new NativeError('native.process-parent');
+        return basic.readBigUInt64LE(40) === BigInt(parent.pid) && this.running(parent) && !waiting(handle, 0);
+      }, false);
+    },
     wait(identity: ProcessIdentity, milliseconds: number): boolean { return matching(identity, 0, (handle) => waiting(handle, milliseconds), true); },
     terminate(identity: ProcessIdentity): boolean {
       if (identity.pid === process.pid) throw new NativeError('native.self-termination');

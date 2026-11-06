@@ -264,8 +264,9 @@ async function input(cfg: Config, db: DatabaseSync, job: Job, kind: 'brief' | 'f
     if (!owner.approved_at || owner.lifecycle === 'proposed' || owner.lifecycle === 'dismissed' && current.turn_id === null || owner.merged_into !== null) {
       complete(db, job, () => {}, now); return;
     }
-    if (current.turn_id === null && (!cfg.tickets.enabled || !cfg.chats.enabled)) { defer(db, job, after(now(), cfg.jobs.collect_seconds), undefined, now); return; }
+    if (current.turn_id === null && current.reserved_at === null && (!cfg.tickets.enabled || !cfg.chats.enabled)) { defer(db, job, after(now(), cfg.jobs.collect_seconds), undefined, now); return; }
     if (current.turn_id === null && kind === 'forward' && owner.lifecycle === 'done') {
+      if (!cfg.tickets.enabled || !cfg.chats.enabled) { defer(db, job, after(now(), cfg.jobs.collect_seconds), undefined, now); return; }
       fenced(db, job, () => { for (const batch of ids(current.payload.batch_ids)) route(db, batch, now(), cfg.jobs.reopen_days); }, now);
       owner = ticketRow(db, current.ticket);
     }
@@ -290,6 +291,7 @@ async function input(cfg: Config, db: DatabaseSync, job: Job, kind: 'brief' | 'f
       }, now);
       if (!saved) return;
     }
+    if (current.turn_id === null && (!cfg.tickets.enabled || !cfg.chats.enabled)) { defer(db, job, after(now(), cfg.jobs.collect_seconds), undefined, now); return; }
     const prepared = prepareTurn(cfg, db, job, kind, options);
     if (!prepared) { complete(db, job, () => {}, now); return; }
     await submit(cfg, db, job, prepared, { ...options, peer });
