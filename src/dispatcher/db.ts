@@ -71,11 +71,14 @@ CREATE TABLE IF NOT EXISTS job (
   attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
   failures INTEGER NOT NULL DEFAULT 0 CHECK (failures >= 0),
   next_at TEXT NOT NULL, lease_until TEXT, lease_token TEXT, run_id TEXT,
+  lease_seconds INTEGER CHECK (lease_seconds > 0),
+  reserved_at TEXT, turn_id INTEGER REFERENCES turn, merged_into INTEGER REFERENCES job,
   error_class TEXT CHECK (error_class IN ('dependency','job','unknown')), last_error TEXT,
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   CHECK (kind NOT IN ('sync','archive','purge') OR state <> 'parked'));
 CREATE INDEX IF NOT EXISTS job_ready ON job(state, next_at, id);
 CREATE INDEX IF NOT EXISTS job_ticket_order ON job(ticket, id);
+CREATE UNIQUE INDEX IF NOT EXISTS job_turn ON job(turn_id) WHERE turn_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS turn (
   id INTEGER PRIMARY KEY, ticket INTEGER NOT NULL REFERENCES ticket,
   kind TEXT NOT NULL CHECK (kind IN ('brief','forward','recovery','note')),
@@ -118,16 +121,36 @@ function empty(db: DatabaseSync): boolean {
   return db.prepare("SELECT 1 FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get() === undefined;
 }
 
-function transaction<T>(db: DatabaseSync, operation: () => T): T {
-  db.exec('BEGIN IMMEDIATE');
+export function transaction<T>(db: DatabaseSync, operation: () => T): T {
+  const savepoint = db.isTransaction ? `nested_${randomUUID().replaceAll('-', '')}` : null;
+  db.exec(savepoint ? `SAVEPOINT ${savepoint}` : 'BEGIN IMMEDIATE');
   try {
     const result = operation();
-    db.exec('COMMIT');
+    if (result && typeof (result as { then?: unknown }).then === 'function') throw new TypeError('Transactions must be synchronous');
+    db.exec(savepoint ? `RELEASE SAVEPOINT ${savepoint}` : 'COMMIT');
     return result;
   } catch (error) {
-    if (db.isTransaction) db.exec('ROLLBACK');
+    if (db.isTransaction) db.exec(savepoint ? `ROLLBACK TO SAVEPOINT ${savepoint}; RELEASE SAVEPOINT ${savepoint}` : 'ROLLBACK');
     throw error;
   }
+}
+
+function refineJobs(db: DatabaseSync): void {
+  const additions = {
+    lease_seconds: 'INTEGER CHECK (lease_seconds > 0)',
+    reserved_at: 'TEXT',
+    turn_id: 'INTEGER REFERENCES turn',
+    merged_into: 'INTEGER REFERENCES job',
+  };
+  const columns = () => db.prepare('PRAGMA table_info(job)').all().map((column) => column.name);
+  if (Object.keys(additions).every((name) => columns().includes(name))) return;
+  transaction(db, () => {
+    const existing = columns();
+    for (const [name, definition] of Object.entries(additions)) {
+      if (!existing.includes(name)) db.exec(`ALTER TABLE job ADD COLUMN ${name} ${definition}`);
+    }
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS job_turn ON job(turn_id) WHERE turn_id IS NOT NULL');
+  });
 }
 
 function scopeLegacyKeys(db: DatabaseSync): void {
@@ -177,6 +200,7 @@ export function openDb(path: string): DatabaseSync {
     const from = version(db);
     if (from === 0 && empty(db)) upgrade(db, 0);
     else if (from !== 2) throw new Error(`Schema version ${from} requires await migrate(path) before openDb(path)`);
+    refineJobs(db);
     db.exec('PRAGMA journal_mode = WAL');
     return db;
   } catch (error) {

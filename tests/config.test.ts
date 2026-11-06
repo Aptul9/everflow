@@ -21,7 +21,7 @@ test('defaults to disabled tickets/chats and every approved policy value', () =>
   expect(cfg.jobs).toEqual({
     triage_concurrency: 3, turn_concurrency: 4, lease_seconds: 120, renew_seconds: 30,
     backoff_initial_seconds: 10, backoff_max_seconds: 1800, backoff_jitter: 0.2,
-    max_attempts: 5, max_recoveries: 2, collect_seconds: 10, sync_seconds: 300, heartbeat_seconds: 10,
+    max_attempts: 5, max_recoveries: 2, dependency_failure_threshold: 3, collect_seconds: 10, sync_seconds: 300, heartbeat_seconds: 10,
     archive_hours: 24, reopen_days: 14, purge_days: 30, log_max_bytes: 10485760, log_files: 5,
   });
 });
@@ -100,6 +100,7 @@ test.each([
   ['jobs', 'lease_seconds', '0'], ['jobs', 'renew_seconds', '120'],
   ['jobs', 'backoff_initial_seconds', '1801'], ['jobs', 'backoff_jitter', '1.1'],
   ['jobs', 'backoff_jitter', '-0.1'], ['jobs', 'max_attempts', '0'], ['jobs', 'max_recoveries', '-1'],
+  ['jobs', 'dependency_failure_threshold', '0'],
   ['jobs', 'collect_seconds', '0'], ['jobs', 'sync_seconds', '0'], ['jobs', 'heartbeat_seconds', '0'],
   ['jobs', 'archive_hours', '0'], ['jobs', 'reopen_days', '-1'], ['jobs', 'purge_days', '0'],
   ['jobs', 'log_max_bytes', '0'], ['jobs', 'log_files', '0'], ['jobs', 'max_attempts', '"5"'],

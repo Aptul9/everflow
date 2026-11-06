@@ -6,9 +6,9 @@ export const SCRATCH = 'C:/Users/Antonio/AppData/Local/Temp/opencode/inbox-dispa
 export const OLD_AT = '2026-11-04T17:01:02.123456Z';
 export const CUTOFF = '2026-11-05T20:00:00.000Z';
 
-export function scratch() {
+export function scratch(prefix = 'phase1-') {
   mkdirSync(SCRATCH, { recursive: true });
-  const root = mkdtempSync(join(SCRATCH, 'phase1-'));
+  const root = mkdtempSync(join(SCRATCH, prefix));
   const path = join(root, 'fixture.db');
   const config = join(root, 'config.toml');
   writeFileSync(config, '[db]\npath = "fixture.db"\n');

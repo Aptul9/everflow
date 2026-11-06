@@ -19,6 +19,7 @@ const jobs = z.strictObject({
   backoff_jitter: z.number().min(0).max(1).default(0.2),
   max_attempts: positive.default(5),
   max_recoveries: nonnegative.default(2),
+  dependency_failure_threshold: positive.default(3),
   collect_seconds: positive.default(10),
   sync_seconds: positive.default(300),
   heartbeat_seconds: positive.default(10),
