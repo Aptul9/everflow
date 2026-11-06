@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS ticket (
   kb_notes TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(kb_notes) AND json_type(kb_notes) = 'array'),
   confidence REAL CHECK (confidence >= 0 AND confidence <= 1),
   created_at TEXT NOT NULL, approved_at TEXT, closed_at TEXT, approval_note TEXT,
-  last_activity_at TEXT, archived_at TEXT,
+  last_activity_at TEXT, archived_at TEXT, session_title TEXT,
   maybe_ticket INTEGER REFERENCES ticket CHECK (maybe_ticket <> id),
   merged_into INTEGER REFERENCES ticket CHECK (merged_into <> id));
 CREATE TABLE IF NOT EXISTS ticket_conversation (
@@ -89,13 +89,14 @@ CREATE TABLE IF NOT EXISTS turn (
   recovery_of INTEGER REFERENCES turn, input_turn INTEGER REFERENCES turn,
   recovery_count INTEGER NOT NULL DEFAULT 0 CHECK (recovery_count >= 0),
   context_ids TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(context_ids) AND json_type(context_ids) = 'array'),
+  batch_ids TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(batch_ids) AND json_type(batch_ids) = 'array'),
   reserved_at TEXT, admitted_at TEXT, completed_at TEXT, created_at TEXT NOT NULL,
   error_class TEXT CHECK (error_class IN ('dependency','job','unknown')), last_error TEXT);
 CREATE TRIGGER IF NOT EXISTS immutable_turn_input
-BEFORE UPDATE OF ticket,kind,batch,prompt_id,text,session_id,context_ids,recovery_of,input_turn ON turn
+BEFORE UPDATE OF ticket,kind,batch,prompt_id,text,session_id,context_ids,batch_ids,recovery_of,input_turn ON turn
 WHEN NEW.ticket IS NOT OLD.ticket OR NEW.kind IS NOT OLD.kind OR NEW.batch IS NOT OLD.batch
   OR NEW.prompt_id IS NOT OLD.prompt_id OR NEW.text IS NOT OLD.text OR NEW.session_id IS NOT OLD.session_id
-  OR NEW.context_ids IS NOT OLD.context_ids OR NEW.recovery_of IS NOT OLD.recovery_of OR NEW.input_turn IS NOT OLD.input_turn
+  OR NEW.context_ids IS NOT OLD.context_ids OR NEW.batch_ids IS NOT OLD.batch_ids OR NEW.recovery_of IS NOT OLD.recovery_of OR NEW.input_turn IS NOT OLD.input_turn
 BEGIN SELECT RAISE(ABORT, 'turn target and input are immutable'); END;
 CREATE TABLE IF NOT EXISTS health (
   dependency TEXT PRIMARY KEY, state TEXT NOT NULL CHECK (state IN ('ok','retrying','failing','stopped')),
@@ -153,6 +154,21 @@ function refineJobs(db: DatabaseSync): void {
   });
 }
 
+function refineChat(db: DatabaseSync): void {
+  const has = (table: 'ticket' | 'turn', name: string) => db.prepare(`PRAGMA table_info(${table})`).all().some((column) => column.name === name);
+  if (has('ticket', 'session_title') && has('turn', 'batch_ids')) return;
+  transaction(db, () => {
+    if (!has('ticket', 'session_title')) db.exec('ALTER TABLE ticket ADD COLUMN session_title TEXT');
+    if (!has('turn', 'batch_ids')) {
+      db.exec(`ALTER TABLE turn ADD COLUMN batch_ids TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(batch_ids) AND json_type(batch_ids) = 'array');
+        UPDATE turn SET batch_ids=COALESCE((SELECT json_extract(payload,'$.batch_ids') FROM job WHERE turn_id=turn.id AND json_type(payload,'$.batch_ids')='array'),
+          CASE WHEN batch IS NULL THEN '[]' ELSE json_array(batch) END);
+        DROP TRIGGER immutable_turn_input`);
+      db.exec(schema.slice(schema.indexOf('CREATE TRIGGER'), schema.indexOf('CREATE TABLE IF NOT EXISTS health')));
+    }
+  });
+}
+
 function scopeLegacyKeys(db: DatabaseSync): void {
   if (!db.prepare('PRAGMA table_info(message)').all().some((column) => column.name === 'native_id')) {
     db.exec('ALTER TABLE message ADD COLUMN native_id TEXT');
@@ -201,6 +217,7 @@ export function openDb(path: string): DatabaseSync {
     if (from === 0 && empty(db)) upgrade(db, 0);
     else if (from !== 2) throw new Error(`Schema version ${from} requires await migrate(path) before openDb(path)`);
     refineJobs(db);
+    refineChat(db);
     db.exec('PRAGMA journal_mode = WAL');
     return db;
   } catch (error) {

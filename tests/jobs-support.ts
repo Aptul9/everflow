@@ -49,3 +49,43 @@ export function raceClaims(cfg: Config, at: string, count: number): Promise<(num
 export function raceEnqueues(cfg: Config, at: string, inputs: Omit<Extract<Operation, { kind: 'enqueue' }>, 'kind'>[]): Promise<(number | null)[]> {
   return race(cfg, at, inputs.map((input) => ({ ...input, kind: 'enqueue' })));
 }
+
+export async function raceChatOpen(path: string): Promise<string[]> {
+  const barrier = new SharedArrayBuffer(4);
+  const workers = Array.from({ length: 2 }, () => new Worker(`
+    const { parentPort, workerData } = require('node:worker_threads');
+    const { DatabaseSync } = require('node:sqlite');
+    const exec = DatabaseSync.prototype.exec;
+    let waited = false;
+    DatabaseSync.prototype.exec = function (sql) {
+      if (!waited && sql === 'BEGIN IMMEDIATE') {
+        waited = true;
+        parentPort.postMessage({ ready: true });
+        if (Atomics.wait(new Int32Array(workerData.barrier), 0, 0, 10000) === 'timed-out') throw new Error('Writer barrier timed out');
+      }
+      return exec.call(this, sql);
+    };
+    (async () => {
+      try {
+        const { openDb } = await import(workerData.module);
+        const db = openDb(workerData.path);
+        db.close();
+        parentPort.postMessage({ result: 'ok' });
+      } catch (error) { parentPort.postMessage({ result: error.message }); }
+      finally { parentPort.close(); }
+    })();
+  `, { eval: true, workerData: { path, barrier, module: new URL('../src/dispatcher/db.ts', import.meta.url).href } }));
+  try {
+    await Promise.all(workers.map((worker) => new Promise<void>((resolve, reject) => {
+      worker.once('message', (message: { ready?: boolean; result?: string }) => message.ready ? resolve() : reject(new Error(message.result)));
+      worker.once('error', reject);
+    })));
+    const results = workers.map((worker) => new Promise<string>((resolve, reject) => {
+      worker.once('message', (message: { result: string }) => resolve(message.result));
+      worker.once('error', reject);
+    }));
+    Atomics.store(new Int32Array(barrier), 0, 1);
+    Atomics.notify(new Int32Array(barrier), 0, 2);
+    return await Promise.all(results);
+  } finally { await Promise.all(workers.map((worker) => worker.terminate())); }
+}

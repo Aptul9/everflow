@@ -39,6 +39,7 @@ export interface Ticket {
   confidence: number | null;
   approval_note: string | null;
   archived_at: string | null;
+  session_title: string | null;
   maybe_ticket: number | null;
   merged_into: number | null;
 }
@@ -129,12 +130,13 @@ function messageVersion(message: Message): string {
     message.sent_at, message.text, message.attachments, message.ref, message.stored_at])).digest('hex');
 }
 
-export function stage(db: DatabaseSync, ticket: number): Stage {
-  const row = getTicket(db, ticket);
-  if (db.prepare("SELECT 1 FROM job WHERE ticket=? AND state='parked'").get(ticket)) return 'Failed';
+export function stage(db: DatabaseSync, ticket: number, projection: { exclude_job?: number; exclude_turn?: number; report?: Report | null; lifecycle?: Lifecycle; pending?: boolean } = {}): Stage {
+  const row = { ...getTicket(db, ticket), ...(projection.report !== undefined ? { report: projection.report } : {}),
+    ...(projection.lifecycle ? { lifecycle: projection.lifecycle } : {}) };
+  if (db.prepare("SELECT 1 FROM job WHERE ticket=? AND state='parked' AND id<>?").get(ticket, projection.exclude_job ?? -1)) return 'Failed';
   if (row.lifecycle === 'proposed' || row.report === 'needs_you' || row.report === 'blocked') return 'Needs you';
-  if (db.prepare("SELECT 1 FROM job WHERE ticket=? AND state IN ('queued','running')").get(ticket)
-    || db.prepare("SELECT 1 FROM turn WHERE ticket=? AND state IN ('prepared','admitted','running')").get(ticket)) return 'Working';
+  if (projection.pending || db.prepare("SELECT 1 FROM job WHERE ticket=? AND state IN ('queued','running') AND id<>? AND kind NOT IN ('sync','archive','purge')").get(ticket, projection.exclude_job ?? -1)
+    || db.prepare("SELECT 1 FROM turn WHERE ticket=? AND state IN ('prepared','admitted','running') AND id<>?").get(ticket, projection.exclude_turn ?? -1)) return 'Working';
   if (row.report === 'waiting_them') return 'Waiting on them';
   if (row.lifecycle === 'active') return 'Idle';
   return row.lifecycle === 'done' ? 'Done' : 'Dismissed';

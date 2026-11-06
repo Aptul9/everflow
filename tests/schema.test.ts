@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { expect, test } from 'vitest';
 import { openDb } from '../src/dispatcher/db.ts';
 import { OLD_AT, scratch } from './support.ts';
+import { raceChatOpen } from './jobs-support.ts';
 
 function fresh() {
   const db = openDb(scratch().path);
@@ -12,6 +13,38 @@ function fresh() {
 function ticket(db: DatabaseSync, title = 'Synthetic ticket') {
   return Number(db.prepare('INSERT INTO ticket(title,created_at) VALUES (?,?)').run(title, OLD_AT).lastInsertRowid);
 }
+
+function preChatSchema(path: string): void {
+  using db = openDb(path);
+  const trigger = String(db.prepare("SELECT sql FROM sqlite_schema WHERE name='immutable_turn_input'").get()!.sql)
+    .replace(',batch_ids', '').replace(' OR NEW.batch_ids IS NOT OLD.batch_ids', '');
+  db.exec('DROP TRIGGER immutable_turn_input; ALTER TABLE turn DROP COLUMN batch_ids; ALTER TABLE ticket DROP COLUMN session_title');
+  db.exec(trigger);
+}
+
+test('chat observation refinement preserves old immutable input and reconstructs its batch ownership', () => {
+  const { path } = scratch('phase5-refinement-');
+  {
+    using db = openDb(path);
+    const owner = ticket(db);
+    db.exec("INSERT INTO conversation(id,source,account,native_id) VALUES (1,'teams','synthetic@example.invalid','synthetic')");
+    db.prepare("INSERT INTO batch(id,conversation,ticket,state,created_at) VALUES (1,1,?,'delivered',?)").run(owner, OLD_AT);
+    db.prepare("INSERT INTO turn(ticket,kind,batch,prompt_id,text,session_id,state,created_at) VALUES (?,'forward',1,'msg_legacy','Immutable old input','ses_legacy','admitted',?)").run(owner, OLD_AT);
+  }
+  preChatSchema(path);
+  using refined = openDb(path);
+  expect(refined.prepare('SELECT prompt_id,text,session_id,batch_ids FROM turn').get()).toEqual({ prompt_id: 'msg_legacy', text: 'Immutable old input', session_id: 'ses_legacy', batch_ids: '[1]' });
+  expect(() => refined.prepare("UPDATE turn SET batch_ids='[]'").run()).toThrow(/immutable/);
+  expect(refined.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+});
+
+test('concurrent openers recheck chat observation columns inside the acquired writer transaction', async () => {
+  const { path } = scratch('phase5-refinement-race-');
+  preChatSchema(path);
+  expect(await raceChatOpen(path)).toEqual(['ok', 'ok']);
+  using db = openDb(path);
+  expect(db.prepare('PRAGMA integrity_check').get()!.integrity_check).toBe('ok');
+});
 
 test('provides every v2 table and no stored mutable stage', () => {
   using db = fresh();

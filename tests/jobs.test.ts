@@ -388,6 +388,16 @@ test('uses configured backoff and Retry-After without mixing seconds and millise
   expect(row(db, job.id).next_at).toBe('2026-11-06T00:01:00.000000Z');
 });
 
+test.each([
+  [{ type: 'provider.transport', message: 'ECONNREFUSED: synthetic', retryAfterMs: 1500 }, 1.5],
+  [{ type: 'provider.request', message: 'synthetic', status: 429, retryAfterMs: 3600000 }, 3600],
+] as const)('preserves API millisecond retry floor %j through generic classification/backoff', (error, seconds) => {
+  const { cfg } = fixture({ backoff_initial_seconds: 1, backoff_jitter: 0 });
+  const failure = jobs.classify(error);
+  expect(failure).toMatchObject({ error_class: 'dependency', retry_after: seconds });
+  expect(jobs.backoff(1, cfg.jobs, failure.retry_after, 0.5, AT)).toBe(seconds);
+});
+
 test('one hundred consecutive dependency retries never consume attempts or park', () => {
   const { path, cfg } = fixture();
   using db = openDb(path);

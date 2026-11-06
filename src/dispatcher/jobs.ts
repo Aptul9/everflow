@@ -101,14 +101,19 @@ export function enqueue(db: DatabaseSync, kind: JobKind, key: string, payload: J
   const incoming = JSON.parse(payloadText(payload)) as JobPayload;
   const normalized = kind === 'forward' ? forwardPayload(incoming) : incoming;
   return transaction(db, () => {
+    if (normalized.chain_job !== undefined) {
+      const root = Number.isSafeInteger(normalized.chain_job) && Number(normalized.chain_job) > 0
+        ? db.prepare('SELECT ticket FROM job WHERE id=?').get(Number(normalized.chain_job)) : undefined;
+      if (!root || ticket === undefined || root.ticket !== ticket) throw new TypeError('Continuation must belong to its root job ticket');
+    }
     const existing = db.prepare('SELECT id,kind,ticket,merged_into FROM job WHERE key=?').get(key);
     if (existing) {
       if (existing.kind !== kind || existing.ticket !== (ticket ?? null)) throw new Error(`Job key ${key} belongs to different work`);
       const target = readJob(db, Number(existing.merged_into ?? existing.id));
-      if (kind === 'forward' && target.state === 'parked') mergeForward(db, target, normalized, at);
+      if (kind === 'forward' && normalized.chain_job === undefined && target.state === 'parked') mergeForward(db, target, normalized, at);
       return target.id;
     }
-    const parked = kind === 'forward' && ticket !== undefined
+    const parked = kind === 'forward' && normalized.chain_job === undefined && ticket !== undefined
       ? db.prepare("SELECT id FROM job WHERE kind='forward' AND ticket=? AND state='parked' ORDER BY id LIMIT 1").get(ticket) : undefined;
     const target = parked ? Number(parked.id) : null;
     const saved = db.prepare(`INSERT INTO job(kind,key,ticket,payload,state,merged_into,next_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`)
@@ -126,12 +131,15 @@ export function claim(db: DatabaseSync, cfg: Config, runId: string, at?: string)
       WHERE state='running' AND lease_until<=?`).run(now, now);
     const triage = Number(db.prepare("SELECT COUNT(*) AS n FROM job WHERE kind='triage' AND state='running'").get()!.n);
     const slots = reservations(db);
-    const row = db.prepare(`SELECT j.id FROM job j WHERE j.state='queued' AND j.next_at<=?
-      AND NOT EXISTS (SELECT 1 FROM job earlier WHERE earlier.ticket=j.ticket AND earlier.id<j.id
+    const row = db.prepare(`WITH ordered AS (
+      SELECT job.*,COALESCE(json_extract(payload,'$.chain_job'),id) AS fifo FROM job)
+      SELECT j.id FROM ordered j WHERE j.state='queued' AND j.next_at<=?
+      AND NOT EXISTS (SELECT 1 FROM ordered earlier WHERE earlier.ticket=j.ticket
+        AND (earlier.fifo<j.fifo OR earlier.fifo=j.fifo AND earlier.id<j.id)
         AND earlier.state IN ('queued','running','parked'))
       AND (j.kind<>'triage' OR ?<?)
       AND (j.kind NOT IN ('start_chat','forward') OR j.reserved_at IS NOT NULL OR j.turn_id IS NOT NULL OR ?<?)
-      ORDER BY j.id LIMIT 1`).get(now, triage, cfg.jobs.triage_concurrency, slots, cfg.jobs.turn_concurrency);
+      ORDER BY j.fifo,j.id LIMIT 1`).get(now, triage, cfg.jobs.triage_concurrency, slots, cfg.jobs.turn_concurrency);
     if (!row) return null;
     const id = Number(row.id);
     db.prepare(`UPDATE job SET state='running',lease_until=?,lease_token=?,run_id=?,lease_seconds=?,updated_at=?,
@@ -155,15 +163,15 @@ export function renew(db: DatabaseSync, id: number, leaseToken: string, at?: str
 
 const leaseLost = Symbol('lease lost');
 
-export function complete(db: DatabaseSync, job: Job, effects: (db: DatabaseSync) => void): boolean {
+export function complete(db: DatabaseSync, job: Job, effects: (db: DatabaseSync) => void, clock: () => string = utc): boolean {
   try {
     return transaction(db, () => {
-      if (!owns(db, job, utc())) return false;
+      if (!owns(db, job, utc(clock()))) return false;
       const result: unknown = effects(db);
       if (result && typeof (result as { then?: unknown }).then === 'function') {
         throw new TypeError('Completion effects must be synchronous');
       }
-      const now = utc();
+      const now = utc(clock());
       const updated = db.prepare(`UPDATE job SET state='done',lease_until=NULL,lease_token=NULL,run_id=NULL,reserved_at=NULL,updated_at=? WHERE ${fence}`)
         .run(now, job.id, job.lease_token, job.run_id, now);
       if (!updated.changes) throw leaseLost;
@@ -175,11 +183,11 @@ export function complete(db: DatabaseSync, job: Job, effects: (db: DatabaseSync)
   }
 }
 
-export function defer(db: DatabaseSync, job: Job, nextAt: string, payload?: JobPayload): boolean {
+export function defer(db: DatabaseSync, job: Job, nextAt: string, payload?: JobPayload, clock: () => string = utc): boolean {
   const next = utc(nextAt);
   const saved = payload === undefined ? null : payloadText(payload);
   return transaction(db, () => {
-    const now = utc();
+    const now = utc(clock());
     return db.prepare(`UPDATE job SET state='queued',next_at=?,payload=COALESCE(?,payload),lease_until=NULL,lease_token=NULL,
       run_id=NULL,updated_at=? WHERE ${fence}`)
       .run(next, saved, now, job.id, job.lease_token, job.run_id, now).changes !== 0;
@@ -259,7 +267,9 @@ export function classify(error: unknown): Failure {
 
   let retryAfter: RetryAfter;
   for (const node of nodes) {
-    const direct = node.retry_after ?? node.retryAfter;
+    const milliseconds = typeof node.retryAfterMs === 'number' && Number.isFinite(node.retryAfterMs) && node.retryAfterMs >= 0
+      ? node.retryAfterMs / 1000 : undefined;
+    const direct = node.retry_after ?? node.retryAfter ?? milliseconds;
     const headers = node.headers;
     const header = headers instanceof Headers ? headers.get('retry-after') : headers && typeof headers === 'object'
       ? Object.entries(headers).find(([key]) => key.toLowerCase() === 'retry-after')?.[1] : undefined;
