@@ -41,11 +41,13 @@ const configSchema = z.looseObject({
   vault: z.looseObject({ path: z.string().min(1).default('.') }).prefault({}),
   opencode: z.looseObject({
     url: z.string().default(''), directory: z.string().min(1).default('.'), model: z.string().default(''),
+    timeout_seconds: positive.max(120).optional(),
   }).prefault({}),
   triage: z.looseObject({
     providers: z.array(z.string().min(1)).default([]), model: z.string().default(''),
     tool_limit: positive.max(8).default(8), timeout_seconds: positive.max(120).default(120),
     min_confidence: z.number().min(0).max(1).default(0.75),
+    provider_config_path: z.string().min(1).optional(),
   }).prefault({}),
   windows: z.looseObject({
     outlook: positive.min(300).default(300), teams: positive.min(120).default(120), teamsrelay: positive.min(120).default(120),
@@ -74,6 +76,7 @@ export function loadConfig(path: string): Config {
     db: { ...cfg.db, path: resolve(root, cfg.db.path) },
     vault: { ...cfg.vault, path: resolve(root, cfg.vault.path) },
     opencode: { ...cfg.opencode, directory: resolve(root, cfg.opencode.directory) },
+    triage: { ...cfg.triage, ...(cfg.triage.provider_config_path ? { provider_config_path: resolve(root, cfg.triage.provider_config_path) } : {}) },
   };
 }
 

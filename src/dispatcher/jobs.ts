@@ -123,7 +123,21 @@ export function enqueue(db: DatabaseSync, kind: JobKind, key: string, payload: J
   });
 }
 
-export function claim(db: DatabaseSync, cfg: Config, runId: string, at?: string): Job | null {
+function pendingInputSql(ticket: string, except: string): string {
+  return `(EXISTS (SELECT 1 FROM job input WHERE input.ticket=${ticket} AND input.id<>${except}
+      AND input.kind IN ('triage','start_chat','forward','collect')
+      AND (input.state IN ('queued','running','parked') OR input.reserved_at IS NOT NULL AND input.turn_id IS NULL))
+    OR EXISTS (SELECT 1 FROM turn WHERE ticket=${ticket} AND state IN ('prepared','admitted','running'))
+    OR EXISTS (SELECT 1 FROM batch WHERE ticket=${ticket} AND state IN ('pending','prepared','delivered'))
+    OR EXISTS (SELECT 1 FROM message m JOIN ticket_conversation l ON l.conversation=m.conversation
+      WHERE l.ticket=${ticket} AND l.kind IN ('primary','linked') AND m.batch IS NULL))`;
+}
+
+export function hasPendingInput(db: DatabaseSync, ticket: number, except = -1): boolean {
+  return db.prepare(`SELECT 1 WHERE ${pendingInputSql('$ticket', '$except')}`).get({ ticket, except }) !== undefined;
+}
+
+export function claim(db: DatabaseSync, cfg: Config, runId: string, at?: string, options: { runtime?: boolean; inputReady?: boolean } = {}): Job | null {
   if (!runId) throw new TypeError('A nonempty run id is required');
   return transaction(db, () => {
     const now = utc(at);
@@ -136,10 +150,15 @@ export function claim(db: DatabaseSync, cfg: Config, runId: string, at?: string)
       SELECT j.id FROM ordered j WHERE j.state='queued' AND j.next_at<=?
       AND NOT EXISTS (SELECT 1 FROM ordered earlier WHERE earlier.ticket=j.ticket
         AND (earlier.fifo<j.fifo OR earlier.fifo=j.fifo AND earlier.id<j.id)
-        AND earlier.state IN ('queued','running','parked'))
+        AND earlier.state IN ('queued','running','parked')
+        ${options.runtime ? "AND (earlier.kind NOT IN ('sync','archive','purge') OR earlier.state='running')" : ''})
       AND (j.kind<>'triage' OR ?<?)
       AND (j.kind NOT IN ('start_chat','forward') OR j.reserved_at IS NOT NULL OR j.turn_id IS NOT NULL OR ?<?)
-      ORDER BY j.fifo,j.id LIMIT 1`).get(now, triage, cfg.jobs.triage_concurrency, slots, cfg.jobs.turn_concurrency);
+      ${options.runtime ? `AND (j.kind<>'triage' OR ?=1)
+        AND (j.kind NOT IN ('start_chat','forward') OR j.turn_id IS NOT NULL OR ?=1)
+        AND (j.kind NOT IN ('sync','archive','purge') OR j.ticket IS NULL OR NOT ${pendingInputSql('j.ticket', 'j.id')})` : ''}
+      ORDER BY j.fifo,j.id LIMIT 1`).get(now, triage, cfg.jobs.triage_concurrency, slots, cfg.jobs.turn_concurrency,
+        ...(options.runtime ? [Number(cfg.tickets.enabled), Number(cfg.tickets.enabled && cfg.chats.enabled && options.inputReady !== false)] : []));
     if (!row) return null;
     const id = Number(row.id);
     db.prepare(`UPDATE job SET state='running',lease_until=?,lease_token=?,run_id=?,lease_seconds=?,updated_at=?,
@@ -194,11 +213,12 @@ export function defer(db: DatabaseSync, job: Job, nextAt: string, payload?: JobP
   });
 }
 
-export function retry(db: DatabaseSync, id: number): void {
+export function retry(db: DatabaseSync, id: number, options: { queued?: boolean } = {}): void {
   const now = utc();
   const changed = db.prepare(`UPDATE job SET state='queued',attempts=0,failures=0,error_class=NULL,last_error=NULL,next_at=?,
-    lease_until=NULL,lease_token=NULL,run_id=NULL,updated_at=? WHERE id=? AND state='parked'`).run(now, now, id).changes;
-  if (!changed) throw new Error(`Job ${id} is not parked`);
+    lease_until=NULL,lease_token=NULL,run_id=NULL,updated_at=? WHERE id=? AND
+    (state='parked' OR ?=1 AND state='queued' AND failures>0 AND error_class IS NOT NULL)`).run(now, now, id, Number(options.queued === true)).changes;
+  if (!changed) throw new Error(`Job ${id} is not ${options.queued ? 'parked or failed queued work' : 'parked'}`);
 }
 
 export function park(db: DatabaseSync, id: number, reason: string): void {

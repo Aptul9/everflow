@@ -1,14 +1,20 @@
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
 import type { NextServer, NextServerOptions, RequestHandler } from 'next/dist/server/next.js';
 import { loadConfig } from './dispatcher/config.ts';
 import { allowedHost, errorResponse, guardPost } from './web/api.ts';
 import { initialize, release } from './web/instance.ts';
 import type { WebInstance } from './web/instance.ts';
 import { readBuildReceipt, samePath } from './web/build-artifact.ts';
+import { acquireInstance, atomicJson, cleanupChildren, DaemonError, instancePaths, readDaemonReceipt, readJson } from './dispatcher/daemon.ts';
+import type { DaemonReceipt } from './dispatcher/daemon.ts';
+import { migrate, openDb, prepareStart } from './dispatcher/db.ts';
+import { startRuntime, validateRuntimeConfig } from './dispatcher/runtime.ts';
+import { createKernel } from './windows/kernel.ts';
 
 export async function startServer(options: { configPath: string; buildReceipt: string; port?: number }) {
   const artifact = readBuildReceipt(options?.buildReceipt);
@@ -72,5 +78,72 @@ export async function startServer(options: { configPath: string; buildReceipt: s
     await app.prepare();
     handle = app.getRequestHandler();
     return { port, close };
+  } catch (error) { await close(); throw error; }
+}
+
+export async function startDaemon(options: { configPath: string; buildReceipt: string; runId: string; port?: number }) {
+  const artifact = readBuildReceipt(options.buildReceipt);
+  const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  if (!samePath(moduleRoot, artifact.root) || !samePath(process.cwd(), artifact.root)) throw new DaemonError('daemon.staged-server-required');
+  const cfg = loadConfig(options.configPath);
+  validateRuntimeConfig(cfg, options.buildReceipt);
+  const paths = instancePaths(cfg.db.path, options.runId);
+  cfg.db.path = paths.db;
+  const owner = await acquireInstance(paths.db);
+  let kernel: ReturnType<typeof createKernel>;
+  let identity: ReturnType<ReturnType<typeof createKernel>['processIdentity']>;
+  try { kernel = createKernel(); identity = kernel.processIdentity(process.pid); }
+  catch (error) { await owner.close(); throw error; }
+  let db: ReturnType<typeof openDb> | undefined, web: Awaited<ReturnType<typeof startServer>> | undefined;
+  let runtime: Awaited<ReturnType<typeof startRuntime>> | undefined, watcher: fs.FSWatcher | undefined, closing: Promise<void> | undefined;
+  const terminal = Promise.withResolvers<void>();
+  const stamp = new Date().toISOString();
+  const receipt: DaemonReceipt = { ...identity, version: 1, status: 'starting', run_id: options.runId,
+    config_path: cfg._config_path, db_path: paths.db, artifact: options.buildReceipt, port: 0,
+    started_at: stamp, heartbeat_at: stamp, argv: process.argv, children: [] };
+  let published = false, starting = true, startupFailed = false, startupFailure: unknown;
+  const save = () => { atomicJson(paths.receipt, receipt); published = true; };
+  const close = () => closing ??= (async () => {
+    watcher?.close(); process.off('SIGINT', stop); process.off('SIGTERM', stop);
+    await runtime?.close(); await web?.close();
+    if (db) {
+      db.prepare("UPDATE health SET state='stopped' WHERE dependency='daemon'").run();
+      db.close(); db = undefined;
+    }
+    if (published) { receipt.status = 'stopped'; receipt.heartbeat_at = new Date().toISOString(); save(); }
+    await owner.close(); kernel[Symbol.dispose](); terminal.resolve();
+  })();
+  // A failed close retains the writer pipe. The manual caller's exact-identity fallback ends this process.
+  const stop = () => { void close().catch(() => { process.exitCode = 1; }); };
+  const requested = () => {
+    try {
+      const value = readJson(paths.stop) as Partial<DaemonReceipt> | null;
+      if (value?.run_id === receipt.run_id && value.pid === receipt.pid && value.created === receipt.created) stop();
+    } catch { /* Malformed or foreign stop requests cannot control this run. */ }
+  };
+  try {
+    const previous = readDaemonReceipt(cfg);
+    if (previous) {
+      if (!kernel.wait(previous, 1000)) throw new DaemonError('daemon.previous-identity-running');
+      cleanupChildren(previous.children, kernel);
+    }
+    fs.mkdirSync(dirname(paths.db), { recursive: true });
+    save();
+    await migrate(paths.db);
+    db = openDb(paths.db);
+    prepareStart(db, cfg.start.triage_after);
+    web = await startServer({ configPath: cfg._config_path, buildReceipt: options.buildReceipt, ...(options.port === undefined ? {} : { port: options.port }) });
+    receipt.port = web.port;
+    watcher = fs.watch(dirname(paths.stop), (_event, name) => { if (String(name) === basename(paths.stop)) requested(); });
+    process.on('SIGINT', stop); process.on('SIGTERM', stop);
+    runtime = await startRuntime(cfg, db, { buildReceipt: options.buildReceipt, runId: receipt.run_id, restartAt: stamp,
+      metadata: { pid: receipt.pid, created: receipt.created, config_path: receipt.config_path, port: receipt.port, artifact: receipt.artifact },
+      onChildren: (children) => { receipt.children = children; save(); },
+      onHeartbeat: () => { receipt.heartbeat_at = new Date().toISOString(); save(); },
+      onError: (error) => { if (starting) { startupFailed = true; startupFailure = error; } else stop(); } });
+    if (startupFailed) throw startupFailure;
+    starting = false;
+    receipt.status = 'ready'; save(); atomicJson(paths.ready, receipt); requested();
+    return { receipt, close, done: terminal.promise };
   } catch (error) { await close(); throw error; }
 }

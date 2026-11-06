@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { posix } from 'node:path';
-import { accountNames, emitChanged, isEntrypoint, publishAccounts, requiredOption, runSource, sourceStamp, sourceText, SourceError, watcherArguments, writeDiagnostic, writeRecord } from './source.ts';
+import { accountNames, emitChanged, isEntrypoint, publishAccounts, requiredOption, runSource, sourceStamp, sourceText, SourceError, trackSourceChild, watcherArguments, writeDiagnostic, writeRecord } from './source.ts';
 import type { Emit, SourceMessage } from './source.ts';
 
 export interface RelayOptions { host: string; root: string; owner: string; maxRows?: number; maxAccounts?: number; timeoutMs?: number; maxBytes?: number }
@@ -29,6 +29,7 @@ export async function sshQuery(options: RelayOptions, path: string, sql: string,
   if (signal?.aborted) throw new SourceError('teamsrelay', 'relay.aborted');
   return new Promise((resolve, reject) => {
     const child = spawnProcess('ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', options.host, command], { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    trackSourceChild(child);
     const chunks: Buffer[] = [];
     let size = 0, failure: SourceError | undefined, escalation: ReturnType<typeof setTimeout> | undefined;
     const stop = (code: string) => {

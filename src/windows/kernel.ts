@@ -120,6 +120,8 @@ function kernelBindings(): NativeBindings {
     'void *__stdcall MapViewOfFile(void *mapping, uint32_t access, uint32_t high, uint32_t low, size_t size)',
     'int __stdcall IsProcessInJob(void *process, void *job, _Out_ int *result)',
     'int __stdcall GetProcessTimes(void *process, void *created, void *exited, void *kernel, void *user)',
+    'uint32_t __stdcall WaitForSingleObject(void *handle, uint32_t milliseconds)',
+    'int __stdcall TerminateProcess(void *process, uint32_t exitCode)',
     'int __stdcall QueryFullProcessImageNameW(void *process, uint32_t flags, void *name, _Inout_ uint32_t *size)',
     'int __stdcall CreateProcessW(str16 application, void *command, void *processSecurity, void *threadSecurity, int inherit, uint32_t flags, void *environment, str16 directory, const DispatcherStartup *startup, _Out_ DispatcherProcessInformation *result)',
   ];
@@ -178,48 +180,100 @@ export function createKernel(input?: NativeBindings) {
       return rows;
     } finally { close(handle); }
   }
+  function processInfo(handle: bigint, pid: number): ProcessIdentity {
+    const created = Buffer.alloc(8);
+    if (!api.GetProcessTimes!(handle, created, Buffer.alloc(8), Buffer.alloc(8), Buffer.alloc(8))) throw error('native.process-times');
+    const name = Buffer.alloc(32768 * 2), length = [32768];
+    if (!api.QueryFullProcessImageNameW!(handle, 0, name, length)) throw error('native.process-image');
+    if (!length[0] || length[0] >= 32768) throw new NativeError('native.process-image-limit');
+    return { pid, created: created.readBigUInt64LE(0).toString(), image: name.toString('utf16le', 0, length[0] * 2) };
+  }
+  function checkPid(pid: number): void {
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 0xffffffff) throw new NativeError('native.invalid-pid');
+  }
+  function matching(identity: ProcessIdentity, access: number, action: (handle: bigint) => boolean, absent: boolean): boolean {
+    checkPid(identity.pid);
+    if (!/^\d+$/.test(identity.created) || !isAbsolute(identity.image)) throw new NativeError('native.invalid-process-identity');
+    const pointer = api.OpenProcess!(access | 0x101000, 0, identity.pid) as bigint | null;
+    if (invalid(pointer)) {
+      const status = api.GetLastError!();
+      if (status === 87 || status === 1168) return absent;
+      throw new NativeError('native.process-open', status);
+    }
+    const handle = own(pointer);
+    try {
+      if (waiting(handle, 0)) return absent;
+      let actual: ProcessIdentity;
+      try { actual = processInfo(handle, identity.pid); }
+      catch (failure) { if (waiting(handle, 0)) return absent; throw failure; }
+      if (actual.created !== identity.created || windowsPath(actual.image) !== windowsPath(identity.image)) return absent;
+      return action(handle);
+    } finally { close(handle); }
+  }
+  function waiting(handle: bigint, milliseconds: number): boolean {
+    if (!Number.isSafeInteger(milliseconds) || milliseconds < 0 || milliseconds > 120000) throw new NativeError('native.wait-limit');
+    const result = api.WaitForSingleObject!(handle, milliseconds) as number;
+    if (result === 0) return true;
+    if (result === 258) return false;
+    throw error('native.process-wait');
+  }
+  function inJob(): boolean {
+    const result = [0];
+    if (!api.IsProcessInJob!(api.GetCurrentProcess!(), null, result)) throw error('native.job-query');
+    return result[0] !== 0;
+  }
+  function launch(options: LaunchOptions, capture: boolean): number | ProcessIdentity {
+    if (!isAbsolute(options.executable) || !isAbsolute(options.cwd) || /\0/.test(options.executable + options.cwd)) throw new NativeError('native.invalid-argument');
+    // Unidentified outer containment is retained unless the caller explicitly requests the supported breakaway mode.
+    const breakaway = options.breakaway !== false;
+    if (inJob() && breakaway) throw new NativeError('native.outer-job');
+    const command = [options.executable, ...options.args].map(quoteWindowsArgument).join(' ');
+    if (command.length >= 32767) throw new NativeError('native.command-limit');
+    const names = new Set<string>();
+    const environment = Object.entries(options.environment).sort(([a], [b]) => a.toUpperCase().localeCompare(b.toUpperCase())).map(([name, value]) => {
+      if (!name || /[=\0]/.test(name) || value.includes('\0') || names.has(name.toLowerCase())) throw new NativeError('native.invalid-environment');
+      names.add(name.toLowerCase()); return `${name}=${value}`;
+    }).join('\0') + '\0\0';
+    const startup = { cb: 104, reserved: null, desktop: null, title: null, x: 0, y: 0, xSize: 0, ySize: 0, xChars: 0, yChars: 0,
+      fill: 0, flags: 1, show: 0, reservedBytes: 0, reservedPointer: null, input: null, output: null, error: null };
+    const result: { process?: bigint; thread?: bigint; pid?: number } = {};
+    if (!api.CreateProcessW!(options.executable, Buffer.from(command + '\0', 'utf16le'), null, null, 0, breakaway ? 0x09000600 : 0x08000600, Buffer.from(environment, 'utf16le'), options.cwd, startup, result)) throw error('native.create-process');
+    const processHandle = own(result.process ?? null);
+    try {
+      const thread = own(result.thread ?? null);
+      try {
+        if (!result.pid) throw new NativeError('native.invalid-pid');
+        if (!capture) return result.pid;
+        try { return processInfo(processHandle, result.pid); }
+        catch (failure) {
+          // This is still the handle returned by CreateProcess, never a reopened PID.
+          if (!waiting(processHandle, 0) && (!api.TerminateProcess!(processHandle, 1) || !waiting(processHandle, 5000))) throw error('native.launch-cleanup');
+          throw failure;
+        }
+      } finally { close(thread); }
+    } finally { close(processHandle); }
+  }
   return {
     resources,
     processes,
-    inJob(): boolean {
-      const result = [0];
-      if (!api.IsProcessInJob!(api.GetCurrentProcess!(), null, result)) throw error('native.job-query');
-      return result[0] !== 0;
-    },
+    inJob,
     processIdentity(pid: number): ProcessIdentity {
-      if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 0xffffffff) throw new NativeError('native.invalid-pid');
+      checkPid(pid);
       const handle = own(api.OpenProcess!(0x1000, 0, pid));
-      try {
-        const created = Buffer.alloc(8);
-        if (!api.GetProcessTimes!(handle, created, Buffer.alloc(8), Buffer.alloc(8), Buffer.alloc(8))) throw error('native.process-times');
-        const name = Buffer.alloc(32768 * 2), length = [32768];
-        if (!api.QueryFullProcessImageNameW!(handle, 0, name, length)) throw error('native.process-image');
-        if (!length[0] || length[0] >= 32768) throw new NativeError('native.process-image-limit');
-        return { pid, created: created.readBigUInt64LE(0).toString(), image: name.toString('utf16le', 0, length[0] * 2) };
-      } finally { close(handle); }
+      try { return processInfo(handle, pid); } finally { close(handle); }
     },
-    launch(options: LaunchOptions): number {
-      if (!isAbsolute(options.executable) || !isAbsolute(options.cwd) || /\0/.test(options.executable + options.cwd)) throw new NativeError('native.invalid-argument');
-      // No attempt to escape an unidentified or unrelated outer job.
-      const breakaway = options.breakaway !== false;
-      if (this.inJob() && breakaway) throw new NativeError('native.outer-job');
-      const command = [options.executable, ...options.args].map(quoteWindowsArgument).join(' ');
-      if (command.length >= 32767) throw new NativeError('native.command-limit');
-      const names = new Set<string>();
-      const environment = Object.entries(options.environment).sort(([a], [b]) => a.toUpperCase().localeCompare(b.toUpperCase())).map(([name, value]) => {
-        if (!name || /[=\0]/.test(name) || value.includes('\0') || names.has(name.toLowerCase())) throw new NativeError('native.invalid-environment');
-        names.add(name.toLowerCase()); return `${name}=${value}`;
-      }).join('\0') + '\0\0';
-      const startup = { cb: 104, reserved: null, desktop: null, title: null, x: 0, y: 0, xSize: 0, ySize: 0, xChars: 0, yChars: 0,
-        fill: 0, flags: 1, show: 0, reservedBytes: 0, reservedPointer: null, input: null, output: null, error: null };
-      const result: { process?: bigint; thread?: bigint; pid?: number } = {};
-      if (!api.CreateProcessW!(options.executable, Buffer.from(command + '\0', 'utf16le'), null, null, 0, breakaway ? 0x09000600 : 0x08000600, Buffer.from(environment, 'utf16le'), options.cwd, startup, result)) throw error('native.create-process');
-      const process = own(result.process ?? null);
-      try {
-        const thread = own(result.thread ?? null);
-        try { if (!result.pid) throw new NativeError('native.invalid-pid'); return result.pid; }
-        finally { close(thread); }
-      } finally { close(process); }
+    launch(options: LaunchOptions): number { return launch(options, false) as number; },
+    launchIdentity(options: LaunchOptions): ProcessIdentity { return launch(options, true) as ProcessIdentity; },
+    running(identity: ProcessIdentity): boolean { return matching(identity, 0, (handle) => !waiting(handle, 0), false); },
+    wait(identity: ProcessIdentity, milliseconds: number): boolean { return matching(identity, 0, (handle) => waiting(handle, milliseconds), true); },
+    terminate(identity: ProcessIdentity): boolean {
+      if (identity.pid === process.pid) throw new NativeError('native.self-termination');
+      return matching(identity, 1, (handle) => {
+        if (waiting(handle, 0)) return false;
+        if (!api.TerminateProcess!(handle, 1)) { const failure = error('native.process-terminate'); if (waiting(handle, 0)) return false; throw failure; }
+        if (!waiting(handle, 5000)) throw new NativeError('native.process-exit-timeout');
+        return true;
+      }, false);
     },
     shared(path: string): { handle: bigint | null; error: number | null } {
       const handle = api.CreateFileW!(path, 0x80000000, 7, null, 3, 0, null) as bigint | null;

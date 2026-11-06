@@ -5,6 +5,7 @@ import { parseArgs } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { utc } from '../dispatcher/time.ts';
 import { NativeError } from '../windows/kernel.ts';
+import type { ChildProcess } from 'node:child_process';
 
 export type Source = 'outlook' | 'teams' | 'teamsrelay';
 export interface SourceMessage {
@@ -106,10 +107,25 @@ export function requiredOption(values: Record<string, unknown>, key: string): st
   return value;
 }
 
+function sourceOwner(): boolean { return process.connected === true && process.env.INBOX_DISPATCHER_SOURCE_OWNER === String(process.ppid); }
+
+export function trackSourceChild(child: ChildProcess): void {
+  if (!sourceOwner()) return;
+  const notify = (active: boolean) => {
+    if (process.connected && child.pid) process.send?.({ type: 'dispatcher.child', pid: child.pid, active }, () => {});
+  };
+  child.once('spawn', () => notify(true));
+  child.once('close', () => notify(false));
+}
+
 export async function runSource(source: Source, options: { once: boolean; poll: number }, scan: (signal: AbortSignal) => void | Promise<void>, lifecycle: { wait?: (ms: number, signal: AbortSignal) => Promise<void>; close?: () => void | Promise<void> } = {}, signal?: AbortSignal): Promise<number> {
   const controller = new AbortController();
   const abort = () => controller.abort();
+  const message = (value: unknown) => { if (value && typeof value === 'object' && 'type' in value && value.type === 'dispatcher.stop') abort(); };
+  const owned = sourceOwner();
   process.on('SIGINT', abort); process.on('SIGTERM', abort);
+  process.on('message', message);
+  if (owned) process.on('disconnect', abort);
   const stop = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
   let previous = '';
   try {
@@ -131,6 +147,8 @@ export async function runSource(source: Source, options: { once: boolean; poll: 
     return 0;
   } finally {
     process.off('SIGINT', abort); process.off('SIGTERM', abort);
-    await lifecycle.close?.();
+    process.off('message', message);
+    if (owned) process.off('disconnect', abort);
+    try { await lifecycle.close?.(); } finally { if (owned && process.connected) process.disconnect?.(); }
   }
 }
