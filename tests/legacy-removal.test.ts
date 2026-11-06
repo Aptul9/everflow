@@ -29,7 +29,8 @@ test('legacy inventory accepts explicit empty metadata and preserves actual trac
 
 test('real Git index contains no tracked Python application, test or requirements file', () => {
   // Source-only stages omit .git and Python already. A staged filesystem scan cannot prove source deletion.
-  expect(trackedLegacyPaths(process.env.TEST_TRACKED_LEGACY_PATHS)).toEqual([]);
+  // Documentation tooling under docs/ is neither application, test nor requirements code.
+  expect(trackedLegacyPaths(process.env.TEST_TRACKED_LEGACY_PATHS).filter((path) => !path.startsWith('docs/'))).toEqual([]);
 });
 
 test('shipped application and build scripts have no Python bridge, source write transport, deny override or provider lifecycle helper', () => {
