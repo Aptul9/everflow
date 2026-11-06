@@ -61,6 +61,7 @@ export interface AssessmentOptions {
   random?: () => number;
   db?: DatabaseSync;
   offer?: () => AssessmentInput | null;
+  owned?: () => boolean;
 }
 
 class ObsoleteAssessment extends Error {}
@@ -146,6 +147,8 @@ export async function assess(cfg: Config, context: AssessmentContext, candidates
     if (signal?.aborted) throw cancelled(signal);
     if (now() >= deadline) throw timeout();
   };
+  // Provider health observed after a lost lease is stale and must not overwrite the new owner's record.
+  const leased = () => { if (options.owned && !options.owned()) throw new ObsoleteAssessment('Lease lost during provider I/O'); };
   if (!Number.isSafeInteger(cfg.triage.tool_limit) || cfg.triage.tool_limit < 1 || cfg.triage.tool_limit > 8
     || !Number.isSafeInteger(cfg.triage.timeout_seconds) || cfg.triage.timeout_seconds < 1 || cfg.triage.timeout_seconds > 120) throw new RangeError('Invalid assessment budget');
   check();
@@ -209,6 +212,7 @@ export async function assess(cfg: Config, context: AssessmentContext, candidates
         content = parsed.data.content;
       } catch (error) {
         if (signal?.aborted) throw cancelled(signal);
+        leased();
         const failure = controller.signal.aborted || now() >= deadline ? timeout() : error;
         if (failure !== error) controller.abort(failure);
         if (classify(failure).error_class !== 'dependency') throw failure;
@@ -218,6 +222,7 @@ export async function assess(cfg: Config, context: AssessmentContext, candidates
         messages = null;
         continue;
       } finally { clearTimeout(timer); }
+      leased();
       healthOk(db, `provider:${id}`, utc(new Date(now()).toISOString()), { retry_at: null });
       check();
       const uses = content.filter((block) => block.type === 'tool_use');
@@ -359,7 +364,7 @@ export async function handleTriage(cfg: Config, db: DatabaseSync, job: Job, opti
     const first = offer();
     if (!state.offered) return;
     if (!first) { finishRules(cfg, db, job, state.offered); return; }
-    const decision = await assess(cfg, first.context, first.candidates, first.mode, options.signal, { ...options, db, offer });
+    const decision = await assess(cfg, first.context, first.candidates, first.mode, options.signal, { ...options, db, offer, owned: () => owns(db, job, utc()) });
     const accepted = state.offered;
     if (!accepted) return;
     complete(db, job, () => {
