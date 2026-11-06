@@ -31,7 +31,7 @@ function webGraph() {
     'src/dispatcher/approval.ts', 'src/dispatcher/db.ts', 'src/dispatcher/jobs.ts', 'src/dispatcher/tickets.ts', 'src/dispatcher/time.ts', 'src/dispatcher/policy.ts',
     'src/app/page.tsx', 'src/app/layout.tsx', 'src/app/globals.css', 'src/app/api/state/route.ts', 'src/app/api/ticket/[id]/route.ts', 'src/app/api/ticket/[id]/[action]/route.ts',
     'src/app/api/batch/[id]/ticket/route.ts', 'src/app/api/job/[id]/retry/route.ts',
-    ...['action-dialog', 'ticket-board', 'ticket-card', 'use-overview'].map((name) => `src/components/tickets/${name}.${name === 'use-overview' ? 'ts' : 'tsx'}`),
+    ...['action-dialog', 'pipeline', 'ticket-board', 'ticket-card', 'use-overview'].map((name) => `src/components/tickets/${name}.${name === 'use-overview' ? 'ts' : 'tsx'}`),
     ...['alert', 'badge', 'button', 'card', 'checkbox', 'dialog', 'input', 'scroll-area', 'separator', 'tabs', 'textarea'].map((name) => `src/components/ui/${name}.tsx`),
   ];
   const allowed = new Set(paths.map((path) => resolve(path)));

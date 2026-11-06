@@ -1,21 +1,51 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { FilePlus, Inbox, Keyboard, MessagesSquare, RefreshCw, Search, TriangleAlert, WifiOff } from 'lucide-react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { groups } from '../../lib/web-types.ts';
-import type { Group, OverviewState } from '../../lib/web-types.ts';
+import type { Group, OverviewState, SkippedBatch } from '../../lib/web-types.ts';
+import { cn } from '../../lib/utils.ts';
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert.tsx';
 import { Badge } from '../ui/badge.tsx';
 import { Button } from '../ui/button.tsx';
-import { Card, CardContent, CardHeader } from '../ui/card.tsx';
 import { Input } from '../ui/input.tsx';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs.tsx';
-import { ActionDialog } from './action-dialog.tsx';
-import { Messages, TicketCard } from './ticket-card.tsx';
+import { ActionDialog, Kbd } from './action-dialog.tsx';
+import { Pipeline, Problems } from './pipeline.tsx';
+import { formatTime, MessageList, TicketCard, Time, Toggle, tones } from './ticket-card.tsx';
+import type { Tone } from './ticket-card.tsx';
 import { useOverview } from './use-overview.ts';
+
+const columnTone: Record<Group, Tone> = { needs_you: 'needs', working: 'working', waiting_them: 'waiting', failed: 'failed', done_today: 'done', skipped: 'skipped' };
+const outcomes: Record<SkippedBatch['outcome'], string> = { not_on_us: 'Not on us', backlog: 'Backlog', answered: 'Answered' };
+
+function BatchCard(props: { batch: SkippedBatch; enabled: boolean; expired: boolean; pending: ReadonlySet<string>; errors: Record<string, string>; post: (key: string, path: string) => Promise<unknown> }) {
+  const { batch } = props;
+  const key = `batch:${batch.id}:ticket`;
+  const messagesId = useId();
+  const [messagesOpen, setMessagesOpen] = useState(false);
+  return <div className="rounded-lg border bg-card shadow-xs">
+    <div className="space-y-2 p-3">
+      <div className="flex min-w-0 items-center gap-2 text-xs">
+        <Badge variant="secondary" className="px-1.5 text-[11px]">{outcomes[batch.outcome]}</Badge>
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 text-muted-foreground"><span className="font-mono">#{batch.id}</span><Time value={batch.created_at} /></span>
+      </div>
+      <h4 className="text-sm leading-snug font-semibold"><span className="sr-only">{`Batch #${batch.id}:`}</span>{' '}{batch.title ?? '(no title)'}</h4>
+      <p className="truncate text-xs text-muted-foreground" title={`${batch.source} · ${batch.account}`}>{batch.source} · {batch.account}</p>
+      {props.errors[key] && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{props.errors[key]}</p>}
+    </div>
+    {props.enabled && <div className="border-t px-3 py-2">
+      <Button type="button" variant="outline" size="sm" className="h-9 w-full sm:h-8" aria-label={`Make ticket from batch #${batch.id}`} disabled={props.expired || props.pending.has(key)}
+        onClick={() => { void props.post(key, `/api/batch/${batch.id}/ticket`).catch(() => {}); }}><FilePlus aria-hidden="true" />Make ticket</Button>
+    </div>}
+    <div className="border-t px-2 py-1">
+      <Toggle expanded={messagesOpen} controls={messagesId} onClick={() => setMessagesOpen(!messagesOpen)} icon={<MessagesSquare aria-hidden="true" />}>Messages ({batch.messages.length})</Toggle>
+    </div>
+    {messagesOpen && <div className="px-2 pb-2"><MessageList id={messagesId} messages={batch.messages} /></div>}
+  </div>;
+}
 
 export function TicketBoard(props: { initialState: OverviewState; initialEtag: string; token: string; initialNow?: number }) {
   const { state, now, unreachable, expired, pending, errors, notice, post } = useOverview(props.initialState, props.initialEtag, props.token, props.initialNow);
-  const [tab, setTab] = useState<Group>('needs_you');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const root = useRef<HTMLDivElement>(null);
@@ -23,7 +53,8 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
   const tickets = Object.values(state.groups).flat();
   const available = new Set(tickets.filter((ticket) => ticket.lifecycle === 'proposed' || ticket.lifecycle === 'active').map((ticket) => ticket.id));
   const chosen = [...selected].filter((id) => available.has(id));
-  const matches = (text: string) => text.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase());
+  const needle = query.trim().toLocaleLowerCase();
+  const matches = (text: string) => text.toLocaleLowerCase().includes(needle);
 
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
@@ -32,12 +63,21 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
         || target?.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"])')
         || document.querySelector('[role="dialog"][data-state="open"]')) return;
       if (event.key === '/') { event.preventDefault(); search.current?.focus(); return; }
-      const cards = [...(root.current?.querySelectorAll<HTMLElement>('[role="tabpanel"][data-state="active"] article[data-ticket-id]') ?? [])];
+      const cards = [...(root.current?.querySelectorAll<HTMLElement>('article[data-ticket-id]') ?? [])];
       if (!cards.length) return;
       const index = cards.findIndex((card) => card === document.activeElement || card.contains(document.activeElement));
       if (event.key === 'j' || event.key === 'k') {
         event.preventDefault();
         cards[Math.min(cards.length - 1, Math.max(0, index < 0 ? 0 : index + (event.key === 'j' ? 1 : -1)))]?.focus();
+      } else if (event.key === 'h' || event.key === 'l') {
+        const columns = [...(root.current?.querySelectorAll<HTMLElement>('[data-column]') ?? [])].map((column) => [...column.querySelectorAll<HTMLElement>('article[data-ticket-id]')]);
+        const current = index < 0 ? -1 : columns.findIndex((column) => column.includes(cards[index]!));
+        const row = current < 0 ? 0 : columns[current]!.indexOf(cards[index]!);
+        const step = event.key === 'l' ? 1 : -1;
+        for (let next = current < 0 ? (step > 0 ? 0 : columns.length - 1) : current + step; next >= 0 && next < columns.length; next += step) {
+          const column = columns[next]!;
+          if (column.length) { event.preventDefault(); column[Math.min(row, column.length - 1)]!.focus(); break; }
+        }
       } else if (['s', 'c', 'd'].includes(event.key) && index >= 0) {
         const action = cards[index]!.querySelector<HTMLButtonElement>(`[data-shortcut="${event.key}"]`);
         if (action && !action.disabled) { event.preventDefault(); action.focus(); action.click(); }
@@ -47,80 +87,113 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
     return () => document.removeEventListener('keydown', keyboard);
   }, []);
 
-  return <div ref={root} className="mx-auto max-w-6xl space-y-5 p-4 sm:p-6">
-    <a href="#tickets" className="sr-only rounded-md bg-background p-3 text-primary focus:not-sr-only">Skip to tickets</a>
-    <header className="flex flex-wrap items-end justify-between gap-4">
-      <div><h1 className="text-2xl font-semibold tracking-tight">Inbox dispatcher</h1><p className="mt-1 text-sm text-muted-foreground">Local overview · {state.day}</p></div>
-      <div className="w-full sm:w-80"><label htmlFor="ticket-search" className="mb-1 block text-sm font-medium">Search tickets</label><Input ref={search} id="ticket-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Title, client, reference, session title" /></div>
+  const columns = groups.map(([group, label]) => {
+    const batches = group === 'skipped' ? state.skipped.filter((batch) => matches([batch.title, batch.source, batch.account, batch.outcome, ...batch.messages.map((message) => message.text)].join(' '))) : [];
+    const cards = group === 'skipped' ? [] : state.groups[group].filter((ticket) => matches([ticket.title, ticket.client, ticket.session_title, ticket.summary, ticket.ask, ticket.proposal, ...ticket.refs.map((ref) => ref.key)].join(' ')));
+    const total = group === 'skipped' ? state.skipped.length : state.groups[group].length;
+    return { group, label, batches, cards, total, shown: batches.length + cards.length };
+  });
+
+  return <div ref={root} className="min-h-dvh">
+    <a href="#tickets" className="sr-only rounded-md bg-background p-3 text-primary focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50">Skip to tickets</a>
+    <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur-md">
+      <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 sm:px-6">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span aria-hidden="true" className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground shadow-sm"><Inbox className="size-4" /></span>
+          <div className="leading-tight">
+            <h1 className="text-[15px] font-semibold tracking-tight">Inbox dispatcher</h1>
+            <p className="text-xs text-muted-foreground">Local overview · {state.day}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={cn('inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs', unreachable ? 'border-destructive/25 bg-destructive-soft text-destructive' : 'bg-card text-muted-foreground')}>
+            {unreachable ? <WifiOff aria-hidden="true" className="size-3.5" /> : <span aria-hidden="true" className="size-2 rounded-full bg-success" />}
+            {unreachable ? 'Offline' : 'Live'}
+          </span>
+          {!state.chats_enabled && <Badge variant="outline">Chats off</Badge>}
+        </div>
+        <div className="relative order-last w-full sm:order-none sm:ml-auto sm:w-80">
+          <label htmlFor="ticket-search" className="sr-only">Search tickets</label>
+          <Search aria-hidden="true" className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Input ref={search} id="ticket-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)}
+            placeholder="Title, client, reference, session" className="h-10 bg-card pr-9 pl-8 sm:h-9" />
+          {!query && <Kbd aria-hidden="true" className="pointer-events-none absolute top-1/2 right-2 hidden -translate-y-1/2 sm:inline-flex">/</Kbd>}
+        </div>
+      </div>
     </header>
 
-    {expired && <Alert variant="destructive"><AlertTitle>Reload required</AlertTitle><AlertDescription><p>Server restarted or action token rejected. Reload page before submitting again.</p><Button type="button" variant="outline" onClick={() => window.location.reload()}>Reload page</Button></AlertDescription></Alert>}
-    {unreachable && <Alert variant="destructive"><AlertTitle>Unreachable since {unreachable}</AlertTitle><AlertDescription>Showing last good state. Retrying every 10 seconds.</AlertDescription></Alert>}
-    {!state.tickets_enabled && <Alert><AlertTitle>Tickets disabled</AlertTitle><AlertDescription>Read-only state and health. Work controls are unavailable.</AlertDescription></Alert>}
-    {!state.chats_enabled && <Badge variant="secondary">Chats off</Badge>}
+    <div className="mx-auto max-w-[1600px] space-y-4 px-4 py-4 sm:px-6 sm:py-5">
+      {expired && <Alert variant="destructive" className="border-destructive/30 bg-destructive-soft">
+        <TriangleAlert aria-hidden="true" />
+        <AlertTitle>Reload required</AlertTitle>
+        <AlertDescription className="flex w-full flex-wrap items-center justify-between gap-3">
+          <p>Server restarted or action token rejected. Reload page before submitting again.</p>
+          <Button type="button" variant="outline" className="h-10 sm:h-9" onClick={() => window.location.reload()}><RefreshCw aria-hidden="true" />Reload page</Button>
+        </AlertDescription>
+      </Alert>}
+      {unreachable && <Alert className="border-warning/30 bg-warning-soft text-warning">
+        <WifiOff aria-hidden="true" />
+        <AlertTitle>Unreachable since <span suppressHydrationWarning>{formatTime(unreachable)}</span></AlertTitle>
+        <AlertDescription className="text-foreground/80">Showing last good state. Retrying every 10 seconds.</AlertDescription>
+      </Alert>}
+      {!state.tickets_enabled && <Alert>
+        <TriangleAlert aria-hidden="true" />
+        <AlertTitle>Tickets disabled</AlertTitle>
+        <AlertDescription>Read-only state and health. Work controls are unavailable.</AlertDescription>
+      </Alert>}
 
-    <section aria-label="Health" className="rounded-lg border bg-card p-3">
-      <h2 className="mb-2 text-sm font-semibold">Health</h2>
-      <ul className="flex flex-wrap gap-x-5 gap-y-3">
-        {state.health.map((health) => <li key={health.dependency} className="min-w-0 text-sm">
-          <p><span className="font-medium">{health.dependency === 'opencode' ? 'OpenChamber' : health.dependency}</span>: {health.state}</p>
-          {health.last_error && <p className="text-destructive">{health.last_error}</p>}
-          {health.since && health.state !== 'ok' && <p className="text-xs text-muted-foreground">Since <time dateTime={health.since}>{health.since}</time></p>}
-          {health.checkpoint && <p className="text-xs text-muted-foreground">Checkpoint: {health.checkpoint}</p>}
-        </li>)}
-      </ul>
-    </section>
+      <Pipeline state={state} />
+      <Problems state={state} expired={expired} pending={pending} errors={errors} post={post} />
 
-    <section aria-label="Problems">
-      <Card className="gap-3 py-3 shadow-none">
-        <CardHeader className="px-4"><h2 className="text-sm font-semibold">Problems ({state.problems.jobs.length + state.problems.quarantine.length + state.problems.triage.length})</h2></CardHeader>
-        <CardContent className="space-y-3 px-4 text-sm">
-          {state.problems.jobs.map((job) => <div key={job.id} className="rounded-md bg-muted p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2"><p className="font-medium">{job.ticket === null ? 'Unbound job' : 'Job'} #{job.id} · {job.kind}{job.ticket === null ? '' : ` · Ticket #${job.ticket}`}</p>
-              {state.tickets_enabled && <Button variant="outline" type="button" disabled={expired || pending.has(`job:${job.id}:retry`)} onClick={() => { void post(`job:${job.id}:retry`, `/api/job/${job.id}/retry`).catch(() => {}); }}>Retry job #{job.id}</Button>}
+      <main id="tickets" tabIndex={-1} className="space-y-3 outline-none">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <h2 className="text-sm font-semibold">Board</h2>
+          <p className="text-xs text-muted-foreground">{needle ? `${columns.reduce((sum, column) => sum + column.shown, 0)} matching "${query.trim()}"` : `${tickets.length} tickets today, ${state.skipped.length} skipped batches`}</p>
+          {state.tickets_enabled && <div className="ml-auto">
+            <ActionDialog label={`Dismiss selected (${chosen.length})`} title={`Dismiss ${chosen.length} selected tickets`} confirm="Confirm dismiss" size="sm" className="h-9 sm:h-8"
+              disabled={chosen.length === 0 || expired} onConfirm={async (reason) => {
+                const results = await Promise.all(chosen.map(async (id) => {
+                  try { await post(`ticket:${id}:dismiss`, `/api/ticket/${id}/dismiss`, { reason }); return id; } catch { return null; }
+                }));
+                setSelected((previous) => new Set([...previous].filter((id) => !results.includes(id))));
+              }} />
+          </div>}
+        </div>
+        <nav aria-label="Board columns" className="-mx-4 flex gap-1.5 overflow-x-auto px-4 [scrollbar-width:none] sm:-mx-6 sm:px-6 xl:hidden">
+          {columns.map((column) => <a key={column.group} href={`#col-${column.group}`} className="inline-flex shrink-0 items-center gap-1.5 rounded-full border bg-card px-2.5 py-1 text-xs">
+            <span aria-hidden="true" className={cn('size-1.5 rounded-full', tones[columnTone[column.group]].dot)} />{column.label}<span className="font-semibold tabular-nums">{column.total}</span>
+          </a>)}
+        </nav>
+        <div className="relative -mx-4 flex snap-x snap-mandatory scroll-px-4 gap-3 overflow-x-auto px-4 pb-3 sm:-mx-6 sm:scroll-px-6 sm:px-6 xl:mx-0 xl:grid xl:grid-cols-6 xl:overflow-visible xl:px-0 xl:pb-0">
+          {columns.map((column) => <section key={column.group} id={`col-${column.group}`} data-column={column.group} aria-label={`${column.label} (${column.total})`}
+            className="flex w-[84vw] max-w-[340px] shrink-0 scroll-mt-28 snap-start flex-col rounded-xl bg-muted/80 ring-1 ring-border/60 sm:w-[300px] xl:w-auto xl:max-w-none">
+            <div className="flex items-center gap-2 px-3 pt-3 pb-2">
+              <span aria-hidden="true" className={cn('size-2 rounded-full', tones[columnTone[column.group]].dot)} />
+              <h3 className="text-[13px] font-semibold">{column.label}</h3>
+              <span className="rounded-full bg-background px-1.5 text-[11px] font-semibold text-muted-foreground tabular-nums">{column.total}</span>
+              {needle && column.shown !== column.total && <span className="ml-auto text-[11px] text-muted-foreground">{column.shown} shown</span>}
             </div>
-            {job.last_error && <p>{job.last_error}</p>}{job.parse_error && <p>{job.parse_error}</p>}{job.raw && <pre className="mt-1 whitespace-pre-wrap">{job.raw}</pre>}
-            {errors[`job:${job.id}:retry`] && <p role="alert" className="text-destructive">{errors[`job:${job.id}:retry`]}</p>}
-          </div>)}
-          {state.problems.quarantine.map((item) => <details key={item.id} className="rounded-md bg-muted p-3"><summary>Quarantine #{item.id} · {item.source}: {item.error}</summary><pre className="mt-2 whitespace-pre-wrap">{item.line}</pre>{item.truncated && <p>Input truncated.</p>}</details>)}
-          {state.problems.triage.map((item) => <details key={item.id} className="rounded-md bg-muted p-3"><summary>Triage failure #{item.id}{item.batch === null ? '' : ` · Batch #${item.batch}`}: {item.parse_error}</summary><pre className="mt-2 whitespace-pre-wrap">{item.raw}</pre></details>)}
-          {!state.problems.jobs.length && !state.problems.quarantine.length && !state.problems.triage.length && <p className="text-muted-foreground">No recorded problems.</p>}
-        </CardContent>
-      </Card>
-    </section>
+            <div className="flex flex-1 flex-col gap-2 px-2 pb-2">
+              {column.batches.map((batch) => <BatchCard key={batch.id} batch={batch} enabled={state.tickets_enabled} expired={expired} pending={pending} errors={errors} post={post} />)}
+              {column.cards.map((ticket) => <TicketCard key={ticket.id} ticket={ticket} enabled={state.tickets_enabled} chats={state.chats_enabled} expired={expired} now={now}
+                selected={selected.has(ticket.id)} onSelect={(checked) => setSelected((previous) => { const next = new Set(previous); if (checked) next.add(ticket.id); else next.delete(ticket.id); return next; })}
+                pending={pending} errors={errors} post={post} />)}
+              {column.shown === 0 && <p className="rounded-lg border border-dashed border-foreground/10 px-3 py-6 text-center text-xs text-muted-foreground">
+                {column.total === 0 ? `No tickets in ${column.label.toLocaleLowerCase()}.` : 'No matches.'}
+              </p>}
+            </div>
+          </section>)}
+        </div>
+      </main>
 
-    <main id="tickets" tabIndex={-1}>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold">Tickets</h2>
-        {state.tickets_enabled && <ActionDialog label={`Dismiss selected (${chosen.length})`} title={`Dismiss ${chosen.length} selected tickets`} confirm="Confirm dismiss"
-          disabled={chosen.length === 0 || expired} onConfirm={async (reason) => {
-            const results = await Promise.all(chosen.map(async (id) => {
-              try { await post(`ticket:${id}:dismiss`, `/api/ticket/${id}/dismiss`, { reason }); return id; } catch { return null; }
-            }));
-            setSelected((previous) => new Set([...previous].filter((id) => !results.includes(id))));
-          }} />}
-      </div>
-      <Tabs value={tab} onValueChange={(value) => setTab(value as Group)}>
-        <TabsList aria-label="Ticket groups" className="mb-2 h-auto! w-full flex-wrap justify-start gap-1 bg-muted p-1">
-          {groups.map(([group, label]) => <TabsTrigger key={group} value={group} className="min-h-10 flex-none px-3 text-muted-foreground" aria-label={`${label} (${group === 'skipped' ? state.skipped.length : state.groups[group].length})`}>
-            {label} <span className="tabular-nums">({group === 'skipped' ? state.skipped.length : state.groups[group].length})</span>
-          </TabsTrigger>)}
-        </TabsList>
-        {groups.map(([group, label]) => <TabsContent key={group} value={group} className="space-y-3">
-          {group === 'skipped' ? state.skipped.filter((batch) => matches([batch.title, batch.source, batch.account, batch.outcome, ...batch.messages.map((message) => message.text)].join(' '))).map((batch) => <Card key={batch.id} className="gap-3 py-4 shadow-none">
-            <CardHeader className="px-4"><h3 className="font-semibold">Batch #{batch.id}: {batch.title ?? '(no title)'}</h3><p className="text-sm text-muted-foreground">{batch.source} · {batch.account} · {batch.outcome}</p></CardHeader>
-            <CardContent className="space-y-2 px-4"><Messages messages={batch.messages} />
-              {state.tickets_enabled && <Button type="button" variant="outline" aria-label={`Make ticket from batch #${batch.id}`} disabled={expired || pending.has(`batch:${batch.id}:ticket`)} onClick={() => { void post(`batch:${batch.id}:ticket`, `/api/batch/${batch.id}/ticket`).catch(() => {}); }}>Make ticket</Button>}
-              {errors[`batch:${batch.id}:ticket`] && <p role="alert" className="text-sm text-destructive">{errors[`batch:${batch.id}:ticket`]}</p>}
-            </CardContent>
-          </Card>) : state.groups[group].filter((ticket) => matches([ticket.title, ticket.client, ticket.session_title, ticket.summary, ticket.ask, ticket.proposal, ...ticket.refs.map((ref) => ref.key)].join(' '))).map((ticket) =>
-            <TicketCard key={ticket.id} ticket={ticket} enabled={state.tickets_enabled} chats={state.chats_enabled} expired={expired} now={now}
-              selected={selected.has(ticket.id)} onSelect={(checked) => setSelected((previous) => { const next = new Set(previous); if (checked) next.add(ticket.id); else next.delete(ticket.id); return next; })}
-              pending={pending} errors={errors} post={post} />)}
-          {(group === 'skipped' ? state.skipped.length === 0 : state.groups[group].length === 0) && <p className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">No tickets in {label.toLocaleLowerCase()}.</p>}
-        </TabsContent>)}
-      </Tabs>
-    </main>
-    <footer className="space-y-1 text-sm text-muted-foreground"><p>Dismissed: {state.feedback.dismiss_count}. Made tickets: {state.feedback.make_ticket_count}.</p><p>Keyboard: j/k cards, s Start, c note, d Dismiss, / search.</p><p role="status" aria-live="polite">{notice}</p></footer>
+      <footer className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-t pt-4 text-xs text-muted-foreground">
+        <p>Dismissed: {state.feedback.dismiss_count}. Made tickets: {state.feedback.make_ticket_count}.</p>
+        <p className="hidden flex-wrap items-center gap-x-3 gap-y-1 sm:flex">
+          <Keyboard aria-hidden="true" className="size-4" />
+          <span><Kbd>j</Kbd> <Kbd>k</Kbd> cards</span><span><Kbd>h</Kbd> <Kbd>l</Kbd> columns</span><span><Kbd>s</Kbd> Start</span><span><Kbd>c</Kbd> note</span><span><Kbd>d</Kbd> Dismiss</span><span><Kbd>/</Kbd> search</span><span><Kbd>Esc</Kbd> close</span>
+        </p>
+        <p role="status" aria-live="polite" className="w-full">{notice}</p>
+      </footer>
+    </div>
   </div>;
 }

@@ -1,50 +1,83 @@
 'use client';
 
+import { BookOpen, Clock, GitCommitVertical, MessageSquarePlus, MessagesSquare, Play, RotateCw, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { SourceMessage, TicketCard as CardData, TicketDetail } from '../../lib/web-types.ts';
+import { cn } from '../../lib/utils.ts';
 import { Badge } from '../ui/badge.tsx';
 import { Button } from '../ui/button.tsx';
-import { Card, CardContent, CardHeader } from '../ui/card.tsx';
 import { Checkbox } from '../ui/checkbox.tsx';
 import { ScrollArea } from '../ui/scroll-area.tsx';
-import { Separator } from '../ui/separator.tsx';
 import { ActionDialog } from './action-dialog.tsx';
 
-export function SafeLink({ url, children }: { url: string | null; children: React.ReactNode }) {
+export type Tone = 'needs' | 'working' | 'waiting' | 'failed' | 'done' | 'skipped';
+
+export const tones: Record<Tone, { dot: string; badge: string; bar: string }> = {
+  needs: { dot: 'bg-primary', badge: 'bg-accent text-accent-foreground', bar: 'bg-primary' },
+  working: { dot: 'bg-info', badge: 'bg-info-soft text-info', bar: 'bg-info' },
+  waiting: { dot: 'bg-warning', badge: 'bg-warning-soft text-warning', bar: 'bg-warning' },
+  failed: { dot: 'bg-destructive', badge: 'bg-destructive-soft text-destructive', bar: 'bg-destructive' },
+  done: { dot: 'bg-success', badge: 'bg-success-soft text-success', bar: 'bg-success' },
+  skipped: { dot: 'bg-input', badge: 'bg-muted text-muted-foreground', bar: 'bg-input' },
+};
+
+function tone(ticket: CardData): Tone {
+  if (ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed') return 'done';
+  if (ticket.stage === 'Failed') return 'failed';
+  if (ticket.lifecycle === 'proposed' || ticket.stage === 'Needs you') return 'needs';
+  return ticket.stage === 'Waiting on them' ? 'waiting' : 'working';
+}
+
+export function formatTime(value: string | null): string {
+  const date = new Date(value ?? '');
+  if (!value || Number.isNaN(date.getTime())) return value ?? '';
+  const pad = (part: number) => String(part).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+export function Time({ value, className }: { value: string; className?: string }) {
+  return <time dateTime={value} title={value} className={cn('tabular-nums', className)} suppressHydrationWarning>{formatTime(value)}</time>;
+}
+
+export function SafeLink({ url, children, className }: { url: string | null; children: React.ReactNode; className?: string }) {
   let safe: string | undefined;
   try {
     const value = new URL(url ?? '');
     if (['http:', 'https:'].includes(value.protocol) && !value.username && !value.password) safe = value.href;
   } catch { /* Invalid references remain literal text. */ }
-  return safe ? <a href={safe} target="_blank" rel="noopener noreferrer" className="text-primary underline underline-offset-2">{children}</a> : <span>{children}</span>;
+  return safe ? <a href={safe} target="_blank" rel="noopener noreferrer" className={cn('text-primary underline-offset-2 hover:underline', className)}>{children}</a> : <span className={className}>{children}</span>;
 }
 
-export function Messages({ messages }: { messages: SourceMessage[] }) {
-  const [expanded, setExpanded] = useState(false);
-  const id = useId();
-  return <div>
-    <Button variant="ghost" type="button" aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded(!expanded)}>Messages ({messages.length})</Button>
-    {expanded && <ScrollArea id={id} className="mt-2 rounded-md border p-3 [&_[data-slot=scroll-area-viewport]]:max-h-80">
-      <ol aria-label="Source messages" className="space-y-3">
-        {messages.map((message) => <li key={message.id}>
-          <p className="text-sm text-muted-foreground">{message.source} · {message.sender ?? 'Unknown sender'} · <time dateTime={message.sent_at}>{message.sent_at}</time></p>
-          <p className="whitespace-pre-wrap">{message.text ?? '(no text)'}</p>
-        </li>)}
-      </ol>
-      {messages.length === 0 && <p className="text-sm text-muted-foreground">No source messages.</p>}
-    </ScrollArea>}
-  </div>;
+export function Toggle({ expanded, controls, onClick, icon, children }: { expanded: boolean; controls: string; onClick: () => void; icon: React.ReactNode; children: React.ReactNode }) {
+  return <Button variant="ghost" size="xs" type="button" aria-expanded={expanded} aria-controls={controls} onClick={onClick}
+    className={cn('h-7 min-w-0 px-1.5 text-muted-foreground hover:text-foreground', expanded && 'bg-muted text-foreground')}>
+    {icon}{children}
+  </Button>;
 }
 
-function Timeline({ ticket, revision }: { ticket: number; revision: string }) {
-  const [expanded, setExpanded] = useState(false);
+export function MessageList({ id, messages }: { id: string; messages: SourceMessage[] }) {
+  return <ScrollArea id={id} className="rounded-md border bg-muted/40 [&_[data-slot=scroll-area-viewport]]:max-h-72">
+    <ol aria-label="Source messages" className="divide-y">
+      {messages.map((message) => <li key={message.id} className="space-y-0.5 px-2.5 py-2">
+        <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-muted-foreground">
+          <span className="font-medium text-foreground">{message.sender ?? 'Unknown sender'}</span>
+          <span className="rounded bg-background px-1 font-mono text-[10px]">{message.source}</span>
+          <Time value={message.sent_at} />
+        </p>
+        <p className="text-[13px] whitespace-pre-wrap">{message.text ?? '(no text)'}</p>
+      </li>)}
+    </ol>
+    {messages.length === 0 && <p className="px-2.5 py-2 text-xs text-muted-foreground">No source messages.</p>}
+  </ScrollArea>;
+}
+
+function Timeline({ id, ticket, revision }: { id: string; ticket: number; revision: string }) {
   const [detail, setDetail] = useState<TicketDetail | null>(null);
   const [error, setError] = useState('');
-  const id = useId();
   const loaded = useRef('');
   useEffect(() => {
     const version = `${ticket}:${revision}`;
-    if (!expanded || loaded.current === version) return;
+    if (loaded.current === version) return;
     const controller = new AbortController();
     setError('');
     void fetch(`/api/ticket/${ticket}`, { signal: controller.signal, cache: 'no-store' }).then(async (response) => {
@@ -54,20 +87,25 @@ function Timeline({ ticket, revision }: { ticket: number; revision: string }) {
       if (!controller.signal.aborted) { loaded.current = version; setDetail(next); }
     }).catch((failure: unknown) => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : 'Timeline unavailable'); });
     return () => controller.abort();
-  }, [expanded, revision, ticket]);
-  return <div>
-    <Button variant="ghost" type="button" aria-expanded={expanded} aria-controls={id} onClick={() => { setError(''); setExpanded(!expanded); }}>Timeline</Button>
-    {expanded && <div id={id} className="mt-2 rounded-md border p-3">
-      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      {!detail && !error && <p role="status">Loading timeline...</p>}
-      {detail && <ol aria-label="Timeline events" className="space-y-3">
-        {detail.timeline.map((event) => <li key={event.id}>
-          <p className="text-sm text-muted-foreground"><time dateTime={event.at}>{event.at}</time> · {event.actor} · {event.kind}</p>
-          <p className="whitespace-pre-wrap"><SafeLink url={event.link}>{event.body}</SafeLink></p>
-        </li>)}
-        {detail.timeline.length === 0 && <li>No timeline events.</li>}
-      </ol>}
-    </div>}
+  }, [revision, ticket]);
+  return <div id={id} className="rounded-md border bg-muted/40 px-2.5 py-2">
+    {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
+    {!detail && !error && <p role="status" className="text-xs text-muted-foreground">Loading timeline...</p>}
+    {detail && <ol aria-label="Timeline events" className="space-y-2.5 border-l pl-3">
+      {detail.timeline.map((event) => <li key={event.id} className="relative">
+        <span aria-hidden="true" className="absolute top-1.5 -left-[17px] size-2 rounded-full border-2 border-card bg-input" />
+        <p className="flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground"><Time value={event.at} /><span>{event.actor}</span><span className="rounded bg-background px-1 font-mono text-[10px]">{event.kind}</span></p>
+        <p className="text-[13px] whitespace-pre-wrap"><SafeLink url={event.link}>{event.body}</SafeLink></p>
+      </li>)}
+      {detail.timeline.length === 0 && <li className="text-xs text-muted-foreground">No timeline events.</li>}
+    </ol>}
+  </div>;
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return <div className="min-w-0 rounded-md bg-muted/70 px-2.5 py-1.5">
+    <dt className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">{label}</dt>
+    <dd className="line-clamp-4 text-[13px] whitespace-pre-wrap">{children}</dd>
   </div>;
 }
 
@@ -85,57 +123,77 @@ export function TicketCard(props: {
 }) {
   const { ticket, post } = props;
   const heading = useId();
+  const messagesId = useId();
+  const timelineId = useId();
+  const [messagesOpen, setMessagesOpen] = useState(false);
+  const [timelineOpen, setTimelineOpen] = useState(false);
   const keys = { start: `ticket:${ticket.id}:start`, chat: `ticket:${ticket.id}:chat`, dismiss: `ticket:${ticket.id}:dismiss` };
   const terminal = ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed';
   const error = props.errors[keys.start] || props.errors[keys.chat] || props.errors[keys.dismiss];
   const minutes = Math.max(0, Math.floor((props.now - Date.parse(ticket.created_at)) / 60_000));
   const age = minutes < 60 ? `${minutes}m` : minutes < 1_440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1_440)}d`;
-  return <article tabIndex={-1} aria-labelledby={heading} data-ticket-id={ticket.id} className="rounded-xl focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring">
-    <Card className="gap-3 py-4 shadow-none">
-      <CardHeader className="gap-2 px-4">
-        <div className="flex flex-wrap items-center gap-2">
-          {props.enabled && !terminal && <Checkbox checked={props.selected} onCheckedChange={(checked) => props.onSelect(checked === true)} aria-label={`Select ticket #${ticket.id}`} className="size-6" />}
-          <span className="text-sm font-medium">{ticket.client ?? 'Unassigned'}</span>
-          <Badge variant="secondary">{ticket.lifecycle === 'proposed' ? 'Proposed' : ticket.stage}</Badge>
-          {ticket.lifecycle === 'proposed' && ticket.stage === 'Failed' && <Badge variant="destructive">Failed</Badge>}
-          <span className="ml-auto text-sm text-muted-foreground"><time dateTime={ticket.created_at} title={ticket.created_at}>Age: {age}</time></span>
-        </div>
-        <h3 id={heading} className="text-base font-semibold">Ticket #{ticket.id}: {ticket.title}</h3>
-        <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
-          {ticket.confidence !== null && <span>Confidence: {Math.round(ticket.confidence * 100)}%</span>}
-          {ticket.maybe_ticket !== null && <span>Maybe #{ticket.maybe_ticket}</span>}
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3 px-4">
-        {ticket.summary && <p className="whitespace-pre-wrap text-sm">{ticket.summary}</p>}
-        {ticket.lifecycle === 'proposed' && <dl className="grid gap-2 text-sm sm:grid-cols-2">
-          <div><dt className="font-medium">Ask</dt><dd className="whitespace-pre-wrap">{ticket.ask || '(none)'}</dd></div>
-          <div><dt className="font-medium">Proposal</dt><dd className="whitespace-pre-wrap">{ticket.proposal || '(none)'}</dd></div>
-        </dl>}
-        {ticket.lifecycle !== 'proposed' && <div className="space-y-1 text-sm">
-          <p><span className="font-medium">Stage:</span> {ticket.stage}{ticket.report ? ` · ${ticket.report}` : ''}</p>
-          {ticket.report_line && <p className="whitespace-pre-wrap">{ticket.report_line}</p>}
-          {ticket.session_title && <p><span className="font-medium">Session title:</span> {ticket.session_title}</p>}
-        </div>}
-        {ticket.kb_notes.length > 0 && <div className="text-sm"><p className="font-medium">KB paths</p><ul>{ticket.kb_notes.map((path, index) => <li key={`${index}:${path}`}><code>{path}</code></li>)}</ul></div>}
-        {ticket.refs.length > 0 && <ul aria-label="References" className="flex flex-wrap gap-x-4 gap-y-1 text-sm">{ticket.refs.map((ref) => <li key={ref.id}><SafeLink url={ref.url}>{ref.key}</SafeLink></li>)}</ul>}
-        <div className="grid gap-1"><Messages messages={ticket.messages} /><Timeline ticket={ticket.id} revision={ticket.timeline_revision} /></div>
-        {props.enabled && !terminal && <>
-          <Separator />
-          <div className="flex flex-wrap gap-2">
-            {ticket.lifecycle === 'proposed' && props.chats && <>
-              <Button type="button" data-shortcut="s" disabled={props.expired || props.pending.has(keys.start)} onClick={() => { void post(keys.start, `/api/ticket/${ticket.id}/start`).catch(() => {}); }}>
-                {props.pending.has(keys.start) ? 'Saving Start' : 'Start'}
-              </Button>
-              <ActionDialog label="Open chat with note" title={`Open chat for ticket #${ticket.id}`} confirm="Approve with note" note shortcut="c"
-                disabled={props.expired || props.pending.has(keys.chat)} onConfirm={(note) => post(keys.chat, `/api/ticket/${ticket.id}/chat`, { note })} />
-            </>}
-            <ActionDialog label="Dismiss" title={`Dismiss ticket #${ticket.id}`} confirm="Confirm dismiss" shortcut="d" disabled={props.expired || props.pending.has(keys.dismiss)}
-              onConfirm={(reason) => post(keys.dismiss, `/api/ticket/${ticket.id}/dismiss`, { reason })} />
-          </div>
-        </>}
-        {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      </CardContent>
-    </Card>
+  const style = tones[tone(ticket)];
+  const actions = props.enabled && !terminal;
+  const starting = props.pending.has(keys.start);
+  return <article tabIndex={-1} aria-labelledby={heading} data-ticket-id={ticket.id}
+    className={cn('group/card scroll-mt-28 rounded-lg border bg-card shadow-xs transition-[box-shadow,border-color] hover:border-foreground/15 hover:shadow-sm',
+      'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring', props.selected && 'border-primary/40 bg-accent/40')}>
+    <div className="space-y-2 p-3">
+      <div className="flex min-w-0 items-center gap-2 text-xs">
+        {actions && <Checkbox checked={props.selected} onCheckedChange={(checked) => props.onSelect(checked === true)} aria-label={`Select ticket #${ticket.id}`} className="size-4.5" />}
+        <span className="min-w-0 truncate font-semibold" title={ticket.client ?? undefined}>{ticket.client ?? 'Unassigned'}</span>
+        <span className="ml-auto inline-flex shrink-0 items-center gap-0.5 text-muted-foreground"><Clock aria-hidden="true" className="size-3" /><time dateTime={ticket.created_at} title={ticket.created_at} className="tabular-nums">Age: {age}</time></span>
+      </div>
+      <h4 id={heading} className="text-sm leading-snug font-semibold"><span className="sr-only">{`Ticket #${ticket.id}:`}</span>{' '}{ticket.title}</h4>
+      <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+        <Badge className={cn('border-transparent px-1.5 text-[11px]', style.badge)}>{ticket.lifecycle === 'proposed' ? 'Proposed' : ticket.stage}</Badge>
+        {ticket.lifecycle === 'proposed' && ticket.stage === 'Failed' && <Badge variant="destructive" className="px-1.5 text-[11px]">Failed</Badge>}
+        {ticket.confidence !== null && <span className="text-muted-foreground"><span className="font-medium text-foreground tabular-nums">{Math.round(ticket.confidence * 100)}%</span> conf.</span>}
+        {ticket.maybe_ticket !== null && <span className="rounded border border-dashed px-1 text-muted-foreground">Maybe #{ticket.maybe_ticket}</span>}
+        <span className="ml-auto font-mono text-muted-foreground">#{ticket.id}</span>
+      </div>
+      {ticket.summary && <p className="line-clamp-3 text-[13px] whitespace-pre-wrap text-muted-foreground">{ticket.summary}</p>}
+      {ticket.lifecycle === 'proposed' && <dl className="grid gap-1.5">
+        <Field label="Ask">{ticket.ask || '(none)'}</Field>
+        <Field label="Proposal">{ticket.proposal || '(none)'}</Field>
+      </dl>}
+      {ticket.lifecycle !== 'proposed' && (ticket.report_line || ticket.session_title) && <dl className="space-y-1 text-[13px]">
+        {ticket.report_line && <div><dt className="sr-only">Report</dt><dd className="line-clamp-3 whitespace-pre-wrap">{ticket.report_line}</dd></div>}
+        {ticket.session_title && <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"><dt><MessagesSquare aria-label="Session title" className="size-3.5" /></dt><dd className="min-w-0 truncate" title={ticket.session_title}>{ticket.session_title}</dd></div>}
+      </dl>}
+      {(ticket.refs.length > 0 || ticket.kb_notes.length > 0) && <div className="flex flex-wrap gap-1 text-[11px]">
+        {ticket.refs.length > 0 && <ul aria-label="References" className="flex flex-wrap gap-1">{ticket.refs.map((ref) => <li key={ref.id}>
+          <SafeLink url={ref.url} className="inline-flex items-center rounded border border-primary/20 bg-accent px-1.5 py-px font-medium text-accent-foreground">{ref.key}</SafeLink>
+        </li>)}</ul>}
+        {ticket.kb_notes.length > 0 && <ul aria-label="KB paths" className="flex min-w-0 flex-wrap gap-1">{ticket.kb_notes.map((path, index) => <li key={`${index}:${path}`} title={path}
+          className="inline-flex max-w-full min-w-0 items-center gap-1 rounded border bg-muted px-1.5 py-px text-muted-foreground">
+          <BookOpen aria-hidden="true" className="size-3 shrink-0" /><code className="truncate font-mono">{path}</code>
+        </li>)}</ul>}
+      </div>}
+      {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
+    </div>
+    {actions && <div className="flex items-center gap-1.5 border-t px-3 py-2">
+      {ticket.lifecycle === 'proposed' && props.chats && <>
+        <Button type="button" size="sm" data-shortcut="s" title="Start (s)" className="h-9 flex-1 sm:h-8" disabled={props.expired || starting}
+          onClick={() => { void post(keys.start, `/api/ticket/${ticket.id}/start`).catch(() => {}); }}>
+          {starting ? <RotateCw aria-hidden="true" className="animate-spin" /> : <Play aria-hidden="true" />}{starting ? 'Saving Start' : 'Start'}
+        </Button>
+        <ActionDialog label="Open chat with note" display="Chat" title={`Open chat for ticket #${ticket.id}`} confirm="Approve with note" note shortcut="c" size="sm"
+          icon={<MessageSquarePlus aria-hidden="true" />} className="h-9 flex-1 sm:h-8" disabled={props.expired || props.pending.has(keys.chat)}
+          onConfirm={(note) => post(keys.chat, `/api/ticket/${ticket.id}/chat`, { note })} />
+      </>}
+      <ActionDialog label="Dismiss" display={ticket.lifecycle === 'proposed' && props.chats ? null : 'Dismiss'} title={`Dismiss ticket #${ticket.id}`} confirm="Confirm dismiss" shortcut="d"
+        size={ticket.lifecycle === 'proposed' && props.chats ? 'icon-sm' : 'sm'} icon={<X aria-hidden="true" />}
+        className={cn('h-9 sm:h-8', ticket.lifecycle === 'proposed' && props.chats ? 'w-9 sm:w-8' : 'flex-1')} disabled={props.expired || props.pending.has(keys.dismiss)}
+        onConfirm={(reason) => post(keys.dismiss, `/api/ticket/${ticket.id}/dismiss`, { reason })} />
+    </div>}
+    <div className="flex items-center gap-1 border-t px-2 py-1">
+      <Toggle expanded={messagesOpen} controls={messagesId} onClick={() => setMessagesOpen(!messagesOpen)} icon={<MessagesSquare aria-hidden="true" />}>Messages ({ticket.messages.length})</Toggle>
+      <Toggle expanded={timelineOpen} controls={timelineId} onClick={() => setTimelineOpen(!timelineOpen)} icon={<GitCommitVertical aria-hidden="true" />}>Timeline</Toggle>
+    </div>
+    {(messagesOpen || timelineOpen) && <div className="space-y-2 px-2 pb-2">
+      {messagesOpen && <MessageList id={messagesId} messages={ticket.messages} />}
+      {timelineOpen && <Timeline id={timelineId} ticket={ticket.id} revision={ticket.timeline_revision} />}
+    </div>}
   </article>;
 }
