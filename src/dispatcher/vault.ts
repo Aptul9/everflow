@@ -29,6 +29,13 @@ function numericLimit(value: number, maximum: number): void {
   if (!Number.isSafeInteger(value) || value < 1 || value > maximum) throw new RangeError(`Limit must be an integer from 1 to ${maximum}`);
 }
 
+function expandedComponent(path: string): void {
+  let name: string;
+  try { name = basename(fs.realpathSync.native(path)); }
+  catch { throw new VaultError('Vault path is missing or inaccessible'); }
+  if (!safeComponent(name) || name.normalize('NFKC') !== name) throw new VaultError('Unsafe expanded vault path component');
+}
+
 function directory(path: string): string {
   if (typeof path !== 'string' || !isAbsolute(path)) throw new VaultError('Vault root must be an absolute directory');
   const { root } = parse(path);
@@ -41,6 +48,7 @@ function directory(path: string): string {
     try { stat = fs.lstatSync(current); } catch { throw new VaultError('Vault root or path is missing or inaccessible'); }
     if (stat.isSymbolicLink()) throw new VaultError('Vault root and path components must not be links');
     if (!stat.isDirectory()) throw new VaultError('Vault root and path components must be directories');
+    if (part) expandedComponent(current);
   }
   return resolve(path);
 }
@@ -54,6 +62,7 @@ function checkedFile(root: string, path: string): { absolute: string; stat: fs.S
     let stat: fs.Stats;
     try { stat = fs.lstatSync(current); } catch { throw new VaultError('Note or path is missing or inaccessible'); }
     if (stat.isSymbolicLink()) throw new VaultError('Note path must not contain links');
+    expandedComponent(current);
     if (index < parts.length - 1) {
       if (!stat.isDirectory()) throw new VaultError('Note path component is not a directory');
     } else {

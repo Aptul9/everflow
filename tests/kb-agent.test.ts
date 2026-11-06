@@ -300,3 +300,74 @@ test('a local health statement failure is not attributed to the provider or retr
   expect(second.requests).toHaveLength(0);
   expect(db.prepare('SELECT COUNT(*) AS n FROM health').get()?.n).toBe(0);
 });
+
+test.each(['fallback', 'repair'])('%s starts a fresh tool-id transcript and returns matching reused ids', async (boundary) => {
+  const { cfg } = kbFixture();
+  if (boundary === 'fallback') cfg.triage.providers = ['first', 'second'];
+  using db = openDb(cfg.db.path);
+  await using peer = await scriptedPeer((_request, index) => index === 0 || index === 2 ? { body: tools(use('call_1')) }
+    : index === 1 ? boundary === 'fallback' ? { status: 503 } : { body: text('invalid initial decision') } : { body: text() });
+  const result = await run(cfg, context(), [], 'new', undefined, { db, providers: { first: provider(peer.baseURL), second: provider(peer.baseURL) } }).catch((error: unknown) => error);
+  expect(result).toMatchObject({ action: 'new' });
+  expect(peer.requests).toHaveLength(4);
+  expect(peer.errors).toEqual([]);
+  for (const index of [1, 3]) expect(peer.requests[index]!.messages.at(-1)!.content).toMatchObject([{ type: 'tool_result', tool_use_id: 'call_1' }]);
+  expect(peer.requests[2]!.messages).toHaveLength(boundary === 'fallback' ? 1 : 2);
+  expect(JSON.stringify(peer.requests[2]!.messages)).not.toContain('tool_result');
+  if (boundary === 'fallback') {
+    const health = db.prepare("SELECT state,detail,last_error FROM health WHERE dependency='provider:first'").get()!;
+    expect(health).toMatchObject({ state: 'retrying', last_error: 'Provider first HTTP 503' });
+    expect(JSON.parse(String(health.detail))).toMatchObject({ consecutive_errors: 1, retry_at: expect.any(String) });
+    expect(db.prepare("SELECT state FROM health WHERE dependency='provider:second'").get()?.state).toBe('ok');
+  }
+});
+
+test.each(['fallback', 'repair'])('%s clears replay ids without resetting the global eight-call budget', async (boundary) => {
+  const { cfg } = kbFixture();
+  if (boundary === 'fallback') cfg.triage.providers = ['first', 'second'];
+  const scanned = vi.spyOn(fs, 'opendirSync');
+  await using peer = await scriptedPeer((_request, index) => index === 0
+    ? { body: tools(...Array.from({ length: 6 }, (_, n) => use(`call_${n + 1}`))) }
+    : index === 1 ? boundary === 'fallback' ? { status: 503 } : { body: text('invalid initial decision') }
+      : index === 2 ? { body: tools(use('call_1'), use('call_2')) } : index === 3 ? { body: tools(use('call_3')) } : { body: text() });
+  const result = await run(cfg, context(), [], 'new', undefined, { providers: { first: provider(peer.baseURL), second: provider(peer.baseURL) } }).catch((error: unknown) => error);
+  expect(result).toMatchObject({ type: 'model.invalid-decision', repaired: true, parse_error: 'Tool call budget exhausted; batch refused' });
+  expect(peer.requests).toHaveLength(4);
+  expect(peer.requests[1]!.messages.at(-1)!.content).toHaveLength(6);
+  expect(peer.requests[3]!.messages.at(-1)!.content).toMatchObject([{ tool_use_id: 'call_1' }, { tool_use_id: 'call_2' }]);
+  expect(scanned.mock.calls).toHaveLength(8 * 3);
+});
+
+test.each(['fallback', 'repair'])('%s reused ids retain remaining-duration signals from the original deadline', async (boundary) => {
+  const { cfg } = kbFixture();
+  if (boundary === 'fallback') cfg.triage.providers = ['first', 'second'];
+  let now = Date.parse('2026-11-06T00:00:00Z');
+  const timers = vi.spyOn(globalThis, 'setTimeout');
+  const signals: AbortSignal[] = [];
+  let calls = 0;
+  const transport: typeof fetch = async (_input, init) => {
+    signals.push(init!.signal!);
+    const index = calls++;
+    now += [20_000, 30_000, 10_000, 5_000][index]!;
+    const body = index === 0 || index === 2 ? tools(use('call_1')) : index === 1 ? text('invalid initial decision') : text();
+    return new Response(JSON.stringify(body), { status: index === 1 && boundary === 'fallback' ? 503 : 200 });
+  };
+  const result = await run(cfg, context(), [], 'new', undefined, { fetch: transport, now: () => now,
+    providers: { first: provider('http://first.invalid'), second: provider('http://second.invalid') } }).catch((error: unknown) => error);
+  expect(result).toMatchObject({ action: 'new' });
+  expect(signals).toHaveLength(4);
+  expect(new Set(signals).size).toBe(4);
+  expect(timers.mock.calls.map((call) => call[1])).toEqual([120_000, 100_000, 70_000, 60_000]);
+});
+
+test('a reused fallback id does not grant a second repair after the first route already used it', async () => {
+  const { cfg } = kbFixture();
+  cfg.triage.providers = ['first', 'second'];
+  await using peer = await scriptedPeer((_request, index) => index === 0 ? { body: text('first invalid decision') }
+    : index === 1 || index === 3 ? { body: tools(use('call_1')) } : index === 2 ? { status: 503 } : { body: text('last invalid decision') });
+  const result = await run(cfg, context(), [], 'new', undefined, { providers: { first: provider(peer.baseURL), second: provider(peer.baseURL) } }).catch((error: unknown) => error);
+  expect(result).toMatchObject({ type: 'model.invalid-decision', repaired: true, raw: 'last invalid decision',
+    responses: [{ raw: 'first invalid decision' }, { raw: 'last invalid decision' }] });
+  expect(peer.requests).toHaveLength(5);
+  expect(peer.requests[4]!.messages.at(-1)!.content).toMatchObject([{ type: 'tool_result', tool_use_id: 'call_1' }]);
+});

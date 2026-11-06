@@ -144,3 +144,61 @@ test('small notes do not consume unread bytes from the global search budget', ()
   for (let index = 0; index < 60; index++) note(`small/note-${index}.md`, '# Small\nneedle');
   expect(search(vault, 'needle', 50)).toHaveLength(50);
 });
+
+test.each(['directory', 'file'])('NTFS alias of excluded %s is rejected before content open', (kind) => {
+  const { vault, note } = fixture();
+  const actual = kind === 'directory' ? '.unison.synthetic/note.md' : '.unison.sensitive.md';
+  const alias = kind === 'directory' ? 'UNISON~1.SYN/note.md' : 'UNISON~1.MD';
+  note(actual, '# Synthetic excluded\nexcluded-alias-marker\n');
+  expect(fs.existsSync(join(vault, alias))).toBe(true);
+  expect(fs.realpathSync.native(join(vault, alias))).toBe(fs.realpathSync.native(join(vault, actual)));
+  const opened = vi.spyOn(fs, 'openSync');
+  expect(() => read(vault, alias)).toThrow(/unsafe|expanded|path/i);
+  expect(opened).not.toHaveBeenCalled();
+  expect(search(vault, 'excluded-alias-marker', 50)).toEqual([]);
+});
+
+test.each([
+  ['root', 'read'], ['ancestor', 'read'], ['root', 'search'], ['ancestor', 'search'],
+] as const)('NTFS alias at excluded %s boundary blocks %s before content or enumeration', (boundary, operation) => {
+  const { root } = fixture();
+  const actual = join(root, '.unison.synthetic');
+  fs.mkdirSync(join(actual, 'kb'), { recursive: true });
+  fs.writeFileSync(join(actual, 'note.md'), '# Excluded root\nexcluded-root-marker');
+  fs.writeFileSync(join(actual, 'kb/note.md'), '# Excluded ancestor\nexcluded-root-marker');
+  const alias = join(root, 'UNISON~1.SYN');
+  expect(fs.existsSync(alias)).toBe(true);
+  expect(fs.realpathSync.native(alias)).toBe(fs.realpathSync.native(actual));
+  const selected = boundary === 'root' ? alias : join(alias, 'kb');
+  const opened = vi.spyOn(fs, 'openSync');
+  const walked = vi.spyOn(fs, 'opendirSync');
+  expect(() => operation === 'read' ? read(selected, 'note.md') : search(selected, 'excluded-root-marker', 50)).toThrow(/unsafe|expanded|path/i);
+  expect(opened).not.toHaveBeenCalled();
+  expect(walked).not.toHaveBeenCalled();
+});
+
+test('ordinary tilde names and native aliases of safe notes remain readable and searchable', () => {
+  const { vault, note } = fixture();
+  note('ordinary~notes/safe~note.md', '# Ordinary tilde\nsafe-tilde-marker');
+  note('allowed-synthetic-directory/readable-synthetic-note.md', '# Ordinary alias\nsafe-alias-marker');
+  const alias = 'ALLOWE~1/READAB~1.MD';
+  expect(fs.existsSync(join(vault, alias))).toBe(true);
+  expect(read(vault, alias)).toMatchObject({ text: '# Ordinary alias\nsafe-alias-marker' });
+  expect(read(vault, 'ordinary~notes/safe~note.md')).toMatchObject({ text: '# Ordinary tilde\nsafe-tilde-marker' });
+  expect(search(vault, 'safe-tilde-marker', 50)).toMatchObject([{ path: 'ordinary~notes/safe~note.md' }]);
+  expect(search(vault, 'safe-alias-marker', 50)).toMatchObject([{ path: 'allowed-synthetic-directory/readable-synthetic-note.md' }]);
+});
+
+test('native name expansion never follows an unchecked junction component', () => {
+  const { root, vault } = fixture();
+  const target = join(root, 'outside');
+  fs.mkdirSync(target);
+  fs.writeFileSync(join(target, 'note.md'), 'Synthetic outside marker');
+  const junction = join(vault, 'ordinary-link');
+  fs.symlinkSync(target, junction, 'junction');
+  const expanded = vi.spyOn(fs.realpathSync, 'native');
+  const opened = vi.spyOn(fs, 'openSync');
+  expect(() => read(vault, 'ordinary-link/note.md')).toThrow(/link/i);
+  expect(expanded.mock.calls.some(([path]) => String(path).startsWith(junction))).toBe(false);
+  expect(opened).not.toHaveBeenCalled();
+});
