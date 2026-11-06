@@ -221,3 +221,9 @@ __marimo__/
 
 # dispatcher state
 data/
+
+# Node/Next output
+node_modules/
+.next/
+*.tsbuildinfo
+next-env.d.ts
