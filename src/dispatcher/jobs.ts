@@ -52,7 +52,7 @@ function afterSeconds(at: string, seconds: number): string {
 
 const fence = "id=? AND state='running' AND lease_token=? AND run_id=? AND lease_until>?";
 
-function owns(db: DatabaseSync, job: Job, at: string): boolean {
+export function owns(db: DatabaseSync, job: Job, at: string): boolean {
   return db.prepare(`SELECT 1 FROM job WHERE ${fence}`).get(job.id, job.lease_token, job.run_id, at) !== undefined;
 }
 
@@ -253,7 +253,7 @@ export function classify(error: unknown): Failure {
     });
     const sqlite = typeof node.errcode === 'number' && ((node.errcode & 255) === 5 || (node.errcode & 255) === 6);
     return networkCodes.has(code) || /^SQLITE_(BUSY|LOCKED)(_|$)/.test(code) || com || sqlite
-      || node.name === 'TimeoutError' || node.type === 'provider.transport';
+      || node.name === 'TimeoutError' || node.name === 'AbortError' || node.type === 'provider.transport';
   })) errorClass = 'dependency';
   else if (nodes.some((node) => programmingErrors.has(String(node.name)))) errorClass = 'job';
 

@@ -4,9 +4,10 @@ import { z } from 'zod';
 import { clientsFor } from './config.ts';
 import type { Config } from './config.ts';
 import { transaction } from './db.ts';
-import type { Job, JobPayload } from './jobs.ts';
+import type { Job } from './jobs.ts';
 import { utc } from './time.ts';
 import type { Lifecycle, Report } from './types.ts';
+import { isNotePath } from './vault.ts';
 
 export type Stage = 'Failed' | 'Needs you' | 'Working' | 'Waiting on them' | 'Idle' | 'Done' | 'Dismissed';
 
@@ -292,7 +293,7 @@ export function ownContext(db: DatabaseSync, ticket: number): OwnContext {
   return { batch_ids: batches, messages: batches.flatMap((batch) => batchMessages(db, batch)) };
 }
 
-export function assessmentPayload(db: DatabaseSync, cfg: Config, batch: number, routed: Route, at?: string): JobPayload {
+export function assessmentPayload(db: DatabaseSync, cfg: Config, batch: number, routed: Route, at?: string) {
   const row = getBatch(db, batch);
   const offered = candidates(db, cfg, batch, at);
   const ids = [...new Set([...offered.map((candidate) => candidate.id), ...(routed.ticket === null ? [] : [routed.ticket])])];
@@ -302,13 +303,15 @@ export function assessmentPayload(db: DatabaseSync, cfg: Config, batch: number, 
     message_versions: batchMessages(db, batch).map((message) => ({ id: message.id, stored_at: message.stored_at, version: messageVersion(message) })) };
 }
 
-const decisionSchema = z.strictObject({
+export const modelDecisionSchema = z.strictObject({
   on_us: z.boolean(), reason: z.string().min(1), action: z.enum(['new', 'update', 'skip']), ticket: z.number().int().positive().nullable(),
   title: z.string(), client: z.string().min(1).nullable(), summary: z.string(), ask: z.string(), proposal: z.string(),
-  kb_notes: z.array(z.string()), confidence: z.number().finite().min(0).max(1), raw: z.string().optional(),
+  kb_notes: z.array(z.string().refine(isNotePath, 'Unsafe relative Markdown note path')), confidence: z.number().finite().min(0).max(1),
 }).refine((decision) => decision.action === 'skip' ? !decision.on_us && decision.ticket === null
   : decision.on_us && decision.title.trim().length > 0 && (decision.action === 'update' ? decision.ticket !== null : decision.ticket === null),
 { message: 'Contradictory decision action, on_us, ticket or title' });
+
+export const decisionSchema = modelDecisionSchema.safeExtend({ raw: z.string().optional() });
 
 export type Decision = z.infer<typeof decisionSchema>;
 
@@ -351,7 +354,7 @@ export function applyDecision(db: DatabaseSync, batch: number, input: unknown): 
     if (decision.client !== null && !scope.allowed_clients.includes(decision.client)) throw new TicketError('ticket.invalid-decision', 'Unknown configured client');
     const { raw: suppliedRaw, ...fields } = decision;
     const raw = suppliedRaw ?? JSON.stringify(fields);
-    const previous = db.prepare('SELECT raw FROM triage_log WHERE batch=? ORDER BY id DESC LIMIT 1').get(batch);
+    const previous = db.prepare("SELECT raw FROM triage_log WHERE batch=? AND action IN ('new','update','skip') ORDER BY id DESC LIMIT 1").get(batch);
     if (previous) {
       if (previous.raw !== raw) throw new TicketError('ticket.conflict', 'Batch already has a different assessment');
       return row.ticket;
