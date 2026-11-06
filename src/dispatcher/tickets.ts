@@ -112,6 +112,15 @@ export function batchMessages(db: DatabaseSync, batch: number): Message[] {
     .sort((a, b) => utc(a.sent_at).localeCompare(utc(b.sent_at)) || a.id - b.id);
 }
 
+// Earlier batched messages of the conversation, newest `limit` returned oldest first, so triage can judge age and replies.
+export function conversationHistory(db: DatabaseSync, conversation: number, batch: number, limit: number) {
+  return (db.prepare('SELECT * FROM message WHERE conversation=? AND batch IS NOT NULL AND batch<>? ORDER BY sent_at DESC,id DESC LIMIT ?')
+    .all(conversation, batch, limit) as unknown as Message[]).reverse().map((message) => ({
+    id: message.id, sent_at: message.sent_at, sender: message.sender, sender_name: message.sender_name, sender_is_me: !!message.sender_is_me,
+    text: JSON.parse(message.ref ?? '{}').deleted === true ? '[Source message deleted]' : message.text?.slice(0, 2_000) ?? null,
+  }));
+}
+
 function batchRefs(db: DatabaseSync, batch: Batch): TicketRef[] {
   return extractRefs([batch.title ?? '', ...batchMessages(db, batch.id).map((message) => message.text ?? '')].join('\n'), 'message');
 }

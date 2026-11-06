@@ -63,6 +63,27 @@ test('triage commits proposal, log, route, refs, timeline, batch and completion 
   expect(db.prepare('SELECT COUNT(*) AS n FROM turn').get()?.n).toBe(0);
 });
 
+test('triage sees the latest earlier messages of the conversation with send times, oldest first, capped and apart from the batch', async () => {
+  const { cfg } = kbFixture();
+  cfg.triage.history_messages = 3;
+  using db = openDb(cfg.db.path);
+  for (const [n, minute] of [[1, '20'], [2, '30'], [3, '40'], [4, '45']] as const) {
+    ingest(db, source({ message_id: `earlier-${n}`, sent_at: `2026-11-05T22:${minute}:00Z`, text: n === 4 ? 'x'.repeat(5_000) : `Earlier ${n}`, sender_is_me: n === 3 }));
+  }
+  db.prepare("INSERT INTO batch(conversation,state,created_at,done_at,outcome) VALUES (1,'done',?,?,'not_on_us')").run(AT, AT);
+  db.exec('UPDATE message SET batch=1');
+  const job = batchJob(db, cfg);
+  await using peer = await scriptedPeer(() => ({ body: text() }));
+  await handle(cfg, db, job, { providers: { first: provider(peer.baseURL) } });
+  const { context } = JSON.parse(String(peer.requests[0]!.messages[0]!.content)) as {
+    context: { now: string; messages: { text: string }[]; history: { sent_at: string; sender_is_me: boolean; text: string }[] } };
+  expect(context.now).toBe(AT);
+  expect(context.messages).toMatchObject([{ text: 'Check RCA-12' }]);
+  expect(context.history.map((message) => message.sent_at)).toEqual(['2026-11-05T22:30:00.000000Z', '2026-11-05T22:40:00.000000Z', '2026-11-05T22:45:00.000000Z']);
+  expect(context.history).toMatchObject([{ text: 'Earlier 2', sender_is_me: false }, { text: 'Earlier 3', sender_is_me: true }, { text: 'x'.repeat(2_000) }]);
+  expect(peer.requests[0]!.system).toMatch(/history/);
+});
+
 test('end-to-end source, HTTP tool round trip and KB-derived proposal commit under the same leased job', async () => {
   const { cfg } = kbFixture();
   using db = openDb(cfg.db.path);
