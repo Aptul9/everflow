@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import sqlite, { DatabaseSync } from 'node:sqlite';
+import { setImmediate } from 'node:timers/promises';
 import { afterEach, expect, test, vi } from 'vitest';
 import { migrate, openDb } from '../src/dispatcher/db.ts';
 import { createV1, OLD_AT, scratch, snapshot } from './support.ts';
@@ -17,6 +18,36 @@ test('migrates a frozen v1 fixture to schema version 2', async () => {
   await migrate(path);
   using db = openDb(path);
   expect(db.prepare('PRAGMA user_version').get()?.user_version).toBe(2);
+});
+
+test('migration deadline covers native waits while backup keeps the source untouched', async ({ task }) => {
+  const { path } = scratch('phase2-timing-');
+  createV1(path);
+  const bytes = readFileSync(path);
+  const nativeBackup = sqlite.backup;
+  const backup = vi.spyOn(sqlite, 'backup').mockImplementationOnce(async (...args) => {
+    const [source] = args;
+    const busyTimeout = Number(source.prepare('PRAGMA busy_timeout').get()?.timeout);
+    expect(busyTimeout).toBe(30_000);
+    // Allow native-I/O headroom above the configured lock-wait budget.
+    expect(task.timeout).toBeGreaterThanOrEqual(busyTimeout + 10_000);
+    expect(task.timeout).toBeLessThanOrEqual(60_000);
+    await setImmediate();
+    expect(() => source.exec('PRAGMA user_version = 99')).toThrow(/readonly/i);
+    expect(readFileSync(path)).toEqual(bytes);
+    expect(source.prepare('PRAGMA user_version').get()?.user_version).toBe(1);
+    expect(source.prepare('PRAGMA journal_mode').get()?.journal_mode).toBe('delete');
+    return nativeBackup(...args);
+  });
+  const saved = await migrate(path);
+  expect(backup).toHaveBeenCalledOnce();
+  expect(saved).toBeTypeOf('string');
+  using copy = new DatabaseSync(saved!, { readOnly: true });
+  expect(copy.prepare('PRAGMA integrity_check').get()?.integrity_check).toBe('ok');
+  expect(copy.prepare('PRAGMA user_version').get()?.user_version).toBe(1);
+  using db = openDb(path);
+  expect(db.prepare('PRAGMA user_version').get()?.user_version).toBe(2);
+  expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
 });
 
 test('backs up every v1 row before preserving source identities and historical batch references', async () => {

@@ -8,6 +8,7 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.{ts,tsx}'],
     // Client tests opt in with // @vitest-environment jsdom.
-    testTimeout: 10_000,
+    // SQLite allows 30s lock waits; native backup, fixtures and checks need headroom.
+    testTimeout: 60_000,
   },
 });
