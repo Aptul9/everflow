@@ -205,7 +205,14 @@ export function recordOwned(plan: RunPlan, path: string): RunPlan {
 }
 
 const VAULT = resolve('C:/Users/Antonio/OneDrive/Documenti/Vault');
-const OPENCODE_CONFIG = join(homedir(), '.config', 'opencode', 'opencode.jsonc');
+// A final-component symlink is resolved to its declared target, which is then guarded like any other input.
+function linkTarget(path: string): string {
+  const stat = fs.lstatSync(path, { throwIfNoEntry: false });
+  if (!stat?.isSymbolicLink()) return path;
+  const target = fs.readlinkSync(path);
+  return isAbsolute(target) ? resolve(target) : resolve(dirname(path), target);
+}
+const OPENCODE_CONFIG = linkTarget(join(homedir(), '.config', 'opencode', 'opencode.jsonc'));
 const OPENCHAMBER_SETTINGS = join(homedir(), '.config', 'openchamber', 'settings.json');
 const SOURCE_CONFIG = join(CHECKOUT, 'config.toml');
 const TRIAGE_ROUTE = 'meridian-everbright';
@@ -280,7 +287,7 @@ poll_seconds = 60
 [sources.teams]
 enabled = ${o.sources}
 poll_seconds = 30
-profile = ${q(o.profile.replaceAll('\\', '/'))}
+${o.profile ? `profile = ${q(o.profile.replaceAll('\\', '/'))}` : ''}
 
 [sources.teamsrelay]
 enabled = ${o.sources}
@@ -340,9 +347,10 @@ async function main(argv: string[]): Promise<void> {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, strict: true, options: {
     'opt-in': { type: 'boolean' }, scenario: { type: 'string' }, 'run-root': { type: 'string' }, artifact: { type: 'string' },
     seed: { type: 'string' }, 'teams-profile': { type: 'string' }, lookback: { type: 'string' }, sources: { type: 'boolean' },
-    tickets: { type: 'boolean' }, chats: { type: 'string' }, ticket: { type: 'string' }, note: { type: 'string' } } });
+    tickets: { type: 'boolean' }, chats: { type: 'string' }, ticket: { type: 'string' }, batch: { type: 'string' }, note: { type: 'string' } } });
   const command = positionals[0];
   if (values['opt-in'] !== true) refuse('live-checks.opt-in-required');
+  if (positionals.length !== 1) refuse('command.arguments');
   const runRoot = values['run-root'] ?? refuse('run-root.required');
   const scenario = values.scenario ?? refuse('scenario.invalid');
   const out = (value: unknown) => { console.log(JSON.stringify(value, null, 2)); };
@@ -432,15 +440,38 @@ async function main(argv: string[]): Promise<void> {
       session_title: value.ticket.session_title, messages: value.messages.map((m) => ({ source: m.source, message_id: m.message_id })), timeline: value.timeline.map((t) => t.kind) };
     writeHarness(plan, harness, `detail:${ticket}`, result);
     out({ ...result, summary: value.ticket.summary, ask: value.ticket.ask, client: value.ticket.client });
-  } else if (command === 'approve') {
-    if (!last) refuse('approve.no-daemon');
-    const ticket = Number(values.ticket), note = values.note ?? refuse('approve.note-required');
+  } else if (command === 'approve' || command === 'make-ticket') {
+    if (!last) refuse(`${command}.no-daemon`);
+    const id = Number(command === 'approve' ? values.ticket : values.batch);
+    if (!Number.isSafeInteger(id) || id <= 0) refuse(`${command}.id`);
     const page = await http(last.port, 'GET', '/');
-    const token = /<meta name="dispatcher-token" content="([a-f0-9]{64})"/.exec(page.text)?.[1] ?? refuse('approve.token-missing');
-    const body = JSON.stringify({ note });
-    const result = await http(last.port, 'POST', `/api/ticket/${ticket}/chat`, { origin: `http://127.0.0.1:${last.port}`, 'x-dispatcher-token': token,
-      'content-type': 'application/json', 'content-length': String(Buffer.byteLength(body)) }, body);
-    writeHarness(plan, harness, `approve:${ticket}`, { status: result.status, response: result.text });
+    const token = /<meta name="dispatcher-token" content="([a-f0-9]{64})"/.exec(page.text)?.[1] ?? refuse(`${command}.token-missing`);
+    const body = command === 'approve' ? JSON.stringify({ note: values.note ?? refuse('approve.note-required') }) : '{}';
+    const result = await http(last.port, 'POST', command === 'approve' ? `/api/ticket/${id}/chat` : `/api/batch/${id}/ticket`, { origin: `http://127.0.0.1:${last.port}`,
+      'x-dispatcher-token': token, 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(body)) }, body);
+    writeHarness(plan, harness, `${command}:${id}`, { status: result.status, response: result.text });
+    out(result);
+  } else if (command === 'remote') {
+    using db = new DatabaseSync(plan.db, { readOnly: true });
+    const ticket = Number(values.ticket);
+    const peer = modules.opencode.connect(cfg);
+    const session = ownSession(db, plan, ticket, peer);
+    const remote = await session.verify();
+    const settings = JSON.parse(fs.readFileSync(OPENCHAMBER_SETTINGS, 'utf8')) as { desktopLocalPort: number; desktopUiPassword?: string };
+    const url = `http://127.0.0.1:${settings.desktopLocalPort}`;
+    const fetcher = modules.opencode.authenticatedFetch({ url, password: settings.desktopUiPassword ?? '', openchamber: true, timeoutMs: 30000 });
+    const messages: { id: string; type: string; parts: string[]; outcome?: string }[] = [];
+    let cursor: string | undefined;
+    do {
+      const response = await fetcher(`${url}/api/session/${encodeURIComponent(session.id)}/message?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : '&order=asc'}`);
+      const page = await response.json() as { data: { id: string; type: string; content?: { type: string }[]; outcome?: string }[]; cursor?: { next?: string } };
+      for (const message of page.data) messages.push({ id: message.id, type: message.type, parts: (message.content ?? []).map((part) => part.type), ...(message.outcome ? { outcome: message.outcome } : {}) });
+      cursor = page.cursor?.next;
+    } while (cursor);
+    const result = { ticket, session: session.id, title: remote.title, archived: remote.time.archived !== undefined, running: await peer.running(session.id),
+      inbox: (await peer.inbox(session.id)).length, users: messages.filter((m) => m.type === 'user').map((m) => m.id),
+      tools: messages.flatMap((m) => m.parts).filter((part) => /tool/.test(part)).length, messages };
+    writeHarness(plan, harness, `remote:${ticket}`, result);
     out(result);
   } else if (command === 'inspect') {
     using db = new DatabaseSync(plan.db, { readOnly: true });
