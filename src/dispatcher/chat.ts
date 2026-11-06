@@ -459,7 +459,7 @@ ${quoteMessages(db, own.messages)}`;
     const health = db.prepare("SELECT detail FROM health WHERE dependency='opencode:execution'").get();
     const failures = Number(health ? JSON.parse(String(health.detail)).consecutive_errors ?? 0 : 0) + 1;
     db.prepare('UPDATE job SET turn_id=?,reserved_at=?,next_at=? WHERE id=?')
-      .run(id, turn.reserved_at ?? now(), after(now(), backoff(dependent ? failures : 1, cfg.jobs, failure.retry_after, 0.5, now())), queued);
+      .run(id, turn.reserved_at ?? now(), after(now(), backoff(dependent ? failures : 1, cfg.jobs, failure.retry_after, Math.random(), now())), queued);
     db.prepare('UPDATE job SET payload=? WHERE id=?').run(JSON.stringify({ ...current.payload, failed_result: result, recovery_turn: id }), job.id);
     timeline(db, turn.ticket, now(), 'failure', `${failure.message}; recovery input ${id} queued`, `recovery:turn:${turn.id}`);
     if (dependent) healthError(db, cfg, 'opencode:execution', error, now());

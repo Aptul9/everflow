@@ -518,3 +518,20 @@ test('old input completing after manual close cannot close a ticket reopened for
   expect(row(db, 'ticket', ticket)).toMatchObject({ lifecycle: 'active', report_at: '2026-11-06T00:01:00.000000Z', last_activity_at: '2026-11-06T00:02:00.000000Z' });
   expect(peer.calls.filter((call) => call.url.pathname.endsWith('/prompt'))).toHaveLength(1);
 });
+
+test('recovery honors configured backoff jitter instead of using a fixed midpoint', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  cfg.jobs.backoff_jitter = 0.2;
+  using db = openDb(path);
+  const ticket = proposed(db);
+  chat.approve(cfg, db, ticket, '');
+  await chat.startChat(cfg, db, claimed(db, cfg));
+  const turn = db.prepare('SELECT * FROM turn').get()!;
+  peer.finish(String(turn.session_id), String(turn.prompt_id), '', 'failed', { type: 'provider.transport', message: 'Synthetic dependency failure' });
+  const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+  try {
+    await chat.collect(cfg, db, claimed(db, cfg));
+    expect(db.prepare("SELECT next_at FROM job WHERE kind='forward' AND state='queued'").get()!.next_at).toBe('2026-11-06T00:00:08.000000Z');
+  } finally { random.mockRestore(); }
+});
