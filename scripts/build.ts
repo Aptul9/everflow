@@ -84,7 +84,7 @@ export function isolatedEnvironment(root: string, base: Record<string, string | 
   for (const name of ['user.npmrc', 'global.npmrc']) fs.writeFileSync(join(root, '.private', name), '', { flag: 'a' });
   return nativeBuildEnv({ ...env, HOME: home, USERPROFILE: home, APPDATA: join(home, 'AppData', 'Roaming'), LOCALAPPDATA: join(home, 'AppData', 'Local'),
     TEMP: join(root, '.private', 'tmp'), TMP: join(root, '.private', 'tmp'), NODE_ENV: 'production' as const, NEXT_TELEMETRY_DISABLED: '1',
-    INBOX_DISPATCHER_BUILD_ROOT: root, npm_config_cache: join(root, '.private', 'npm-cache'), npm_config_devdir: join(root, '.private', 'node-gyp'),
+    INBOX_DISPATCHER_BUILD_ROOT: root, npm_config_cache: join(root, '.private', 'npm-cache'), npm_package_config_node_gyp_devdir: join(root, '.private', 'node-gyp'),
     npm_config_userconfig: join(root, '.private', 'user.npmrc'), npm_config_globalconfig: join(root, '.private', 'global.npmrc'),
     npm_config_prefix: join(root, '.private', 'npm-prefix'), npm_config_update_notifier: 'false', npm_config_audit: 'false', npm_config_fund: 'false' });
 }

@@ -1,11 +1,21 @@
 import fs from 'node:fs';
-import { delimiter, join } from 'node:path';
+import { delimiter, join, win32 } from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
 import { containedLinks, createBuildTree, inspectBuildArtifacts, isolatedEnvironment } from '../scripts/build.ts';
 import { BUILD_PARENT, buildConfiguration, readBuildReceipt } from '../src/web/build-artifact.ts';
 import { SCRATCH } from './support.ts';
 
 afterEach(() => vi.restoreAllMocks());
+
+function visitedWithin(path: string, root: string): boolean {
+  const relative = win32.relative(root, path);
+  return relative === '' || relative !== '..' && !relative.startsWith('..\\') && !win32.isAbsolute(relative);
+}
+
+test('forbidden-input assertions detect Windows descendants without matching sibling prefixes', () => {
+  expect(visitedWithin('C:\\synthetic\\data\\nested\\held.db', 'C:\\synthetic\\data')).toBe(true);
+  expect(visitedWithin('C:\\synthetic\\data-other\\held.db', 'C:\\synthetic\\data')).toBe(false);
+});
 
 function sourceFixture() {
   const root = fs.mkdtempSync(join(SCRATCH, 'build-source-fixture-'));
@@ -41,7 +51,7 @@ test('stages only allowlisted source without enumerating or reading synthetic st
   expect(listings.mock.calls.some(([path]) => String(path) === source)).toBe(false);
   const visited = [...reads.mock.calls, ...stats.mock.calls, ...listings.mock.calls].map(([path]) => String(path));
   for (const name of ['data', '.venv', '.git', '.next', 'dist', 'node_modules', 'config.toml', '.env.local']) {
-    expect(visited.some((path) => path === join(source, name) || path.startsWith(join(source, name) + '/'))).toBe(false);
+    expect(visited.some((path) => visitedWithin(path, join(source, name)))).toBe(false);
   }
   expect(fs.existsSync(join(tree.root, 'config.toml'))).toBe(false);
   expect(fs.existsSync(join(tree.root, '.next'))).toBe(false);
@@ -89,11 +99,19 @@ test('child environment drops inherited application state and scopes native cach
   expect(env.USERPROFILE).toContain(tree.root);
   expect(env.npm_config_userconfig).toContain(tree.root);
   expect(env.npm_config_cache).toContain(tree.root);
-  expect(env.npm_config_devdir).toContain(tree.root);
+  expect(env.npm_config_devdir).toBeUndefined();
+  expect(env.npm_package_config_node_gyp_devdir).toBe(join(tree.root, '.private', 'node-gyp'));
   expect(env.NEXT_TELEMETRY_DISABLED).toBe('1');
   expect(env.npm_package_config_node_gyp_enable_thin_lto).toBe('false');
   expect(env.npm_package_config_node_gyp_enable_lto).toBe('false');
   expect(env.npm_package_config_node_gyp_lto_jobs).toBe('');
+});
+
+test('installed native headers resolve inside the staged node-gyp cache', () => {
+  const root = process.env.INBOX_DISPATCHER_BUILD_ROOT!;
+  expect(root).toBeTruthy();
+  const config = JSON.parse(fs.readFileSync(join(root, 'node_modules/winax/build/config.gypi'), 'utf8').replace(/^#.*$/gm, '')) as { variables: { nodedir: string } };
+  expect(config.variables.nodedir.toLowerCase()).toBe(join(root, '.private', 'node-gyp', process.versions.node).toLowerCase());
 });
 
 test('configuration rejects an outside root before filesystem access and pins a fresh staged root', () => {

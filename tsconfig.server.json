@@ -11,6 +11,6 @@
     "noEmit": false,
     "rewriteRelativeImportExtensions": true
   },
-  "include": ["src/dispatcher/**/*.ts", "src/web/**/*.ts", "src/server.ts"],
+  "include": ["src/dispatcher/**/*.ts", "src/windows/**/*.ts", "src/watchers/**/*.ts", "src/web/**/*.ts", "src/server.ts"],
   "exclude": ["node_modules", "dist", "tests"]
 }
