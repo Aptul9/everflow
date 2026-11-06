@@ -20,10 +20,10 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); vi.resto
 function board(state = uiState()) { return render(<TicketBoard initialState={state} initialEtag={'"initial"'} token="per-start-token" />); }
 function ticket(id = 1, title = 'Reset access') { return screen.getByRole('article', { name: `Ticket #${id}: ${title}` }); }
 
-test('six tabs have counts; health, Problems and persisted feedback remain outside tabs', async () => {
+test('six board columns have counts; health, Problems and persisted feedback remain outside columns', () => {
   board();
-  expect(screen.getAllByRole('tab')).toHaveLength(6);
-  for (const name of ['Needs you (2)', 'Working (1)', 'Waiting on them (1)', 'Failed (1)', 'Done today (1)', 'Skipped (3)']) expect(screen.getByRole('tab', { name })).toBeTruthy();
+  expect(document.querySelectorAll('[data-column]')).toHaveLength(6);
+  for (const name of ['Needs you (2)', 'Working (1)', 'Waiting on them (1)', 'Failed (1)', 'Done today (1)', 'Skipped (3)']) expect(screen.getByRole('region', { name })).toBeTruthy();
   expect(screen.getByRole('region', { name: 'Health' }).textContent).toContain('Source unavailable');
   expect(screen.getByRole('region', { name: 'Health' }).textContent).toContain('OpenChamber');
   const problems = screen.getByRole('region', { name: 'Problems' });
@@ -33,11 +33,11 @@ test('six tabs have counts; health, Problems and persisted feedback remain outsi
   expect(problems.textContent).toContain('raw invalid response');
   expect(problems.textContent).toContain('<quarantined>');
   expect(screen.getByText('Dismissed: 4. Made tickets: 2.')).toBeTruthy();
-  await userEvent.click(screen.getByRole('tab', { name: 'Working (1)' }));
-  expect(problems.closest('[role="tabpanel"]')).toBeNull();
-  expect(screen.getByText('Membership checked')).toBeTruthy();
-  expect(screen.getByText('North access investigation')).toBeTruthy();
-  expect(screen.getByText('Idle')).toBeTruthy();
+  expect(problems.closest('[data-column]')).toBeNull();
+  const working = screen.getByRole('region', { name: 'Working (1)' });
+  expect(within(working).getByText('Membership checked')).toBeTruthy();
+  expect(within(working).getByText('North access investigation')).toBeTruthy();
+  expect(within(working).getByText('Idle')).toBeTruthy();
 });
 
 test('proposed fields, safe refs, expandable literal messages and newest-first detail are visible', async () => {
@@ -136,7 +136,6 @@ test('Retry parked job and Make ticket for all skipped outcomes use guarded loca
   board();
   await userEvent.click(screen.getByRole('button', { name: 'Retry job #77' }));
   expect(fetcher).toHaveBeenCalledWith('/api/job/77/retry', expect.objectContaining({ method: 'POST', body: '{}' }));
-  await userEvent.click(screen.getByRole('tab', { name: 'Skipped (3)' }));
   for (const id of [10, 11, 12]) {
     await userEvent.click(screen.getByRole('button', { name: `Make ticket from batch #${id}` }));
     expect(fetcher).toHaveBeenCalledWith(`/api/batch/${id}/ticket`, expect.objectContaining({ method: 'POST', body: '{}' }));
@@ -151,6 +150,10 @@ test('j/k focus cards; s/c/d and slash activate visible controls', async () => {
   await user.keyboard('j');
   expect(document.activeElement).toBe(ticket(2, 'Second proposal'));
   await user.keyboard('k');
+  expect(document.activeElement).toBe(ticket());
+  await user.keyboard('l');
+  expect(document.activeElement).toBe(ticket(3, 'Active work'));
+  await user.keyboard('h');
   expect(document.activeElement).toBe(ticket());
   await user.keyboard('s');
   await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/ticket/1/start', expect.objectContaining({ method: 'POST' })));
@@ -185,7 +188,6 @@ test('shortcuts ignore editing, contenteditable, native select and modified keys
 
 test('search finds verified session title without inventing a deep link', async () => {
   board();
-  await userEvent.click(screen.getByRole('tab', { name: 'Working (1)' }));
   await userEvent.type(screen.getByRole('searchbox', { name: 'Search tickets' }), 'North access investigation');
   expect(ticket(3, 'Active work')).toBeTruthy();
   expect(ticket(3, 'Active work').querySelector('a[href*="session"]')).toBeNull();
