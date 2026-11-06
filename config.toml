@@ -1,10 +1,9 @@
 # Paths are relative to this file.
 
-[mode]
-shadow = true
+[tickets]
+enabled = false
 
-[dispatch]
-# Observe-only containment: ingest sources, but do not start/recover work or consume approval controls.
+[chats]
 enabled = false
 
 [db]
@@ -26,7 +25,11 @@ model = "meridian-everbright/claude-opus-5-5"
 # ~/.config/opencode/opencode.jsonc.
 providers = ["meridian-everbright", "meridian-notarify"]
 model = "claude-haiku-5-5"
+tool_limit = 8
+timeout_seconds = 120
 min_confidence = 0.75
+# Earlier messages of the same conversation sent with each batch, oldest first, with send times.
+history_messages = 40
 
 [windows]
 # Seconds a conversation stays quiet before its batch runs. Floors from the design: chat 120, email 300.
@@ -39,28 +42,47 @@ gchat = 120
 # Catch-up for a source with no cursor yet.
 lookback_minutes = 0
 
-[approval]
-# Observe session/self-chat decisions only after shadow review. Silence never authorizes delivery.
+[web]
+port = 8789
+
+[jobs]
+triage_concurrency = 3
+turn_concurrency = 4
+lease_seconds = 120
+renew_seconds = 30
+backoff_initial_seconds = 10
+backoff_max_seconds = 1800
+backoff_jitter = 0.2
+max_attempts = 5
+max_recoveries = 2
+dependency_failure_threshold = 3
+collect_seconds = 10
+sync_seconds = 300
+heartbeat_seconds = 10
+archive_hours = 24
+reopen_days = 14
+purge_days = 30
+log_max_bytes = 10485760
+log_files = 5
+
+# Entrypoints resolve inside the explicitly selected completed source-only artifact.
+# Sources remain off until guarded read-only acceptance supplies explicit source settings.
+[sources.outlook]
 enabled = false
-notes_account = ""
+entrypoint = "dist/watchers/outlook.js"
+poll_seconds = 60
 
-[delivery]
-# Shadow mode: even an explicit approval cannot invoke an outbound transport.
+[sources.teams]
 enabled = false
+entrypoint = "dist/watchers/teams.js"
+poll_seconds = 30
+# An explicit profile is required. Cache and snapshot paths are dispatcher-owned beside the DB.
 
-[[watchers]]
-source = "outlook"
-command = ["{python}", "-m", "dispatcher.watch_outlook"]
-
-# `watch` of Aptul9/Teams-MCP: every account of the Teams desktop client, never restarts Teams.
-[[watchers]]
-source = "teams"
-command = ["{python}", "C:/Users/Antonio/Downloads/teams-mcp/teams_mcp.py", "watch"]
-
-# Teams accounts held by the relay: read-only SSH snapshots of its saved stores. No MCP or account changes.
-[[watchers]]
-source = "teamsrelay"
-command = ["{python}", "-m", "dispatcher.watch_teamsrelay"]
+[sources.teamsrelay]
+enabled = false
+entrypoint = "dist/watchers/relay.js"
+poll_seconds = 30
+# Explicit host, data_dir and owner are required. Saved stores are read-only.
 
 # A receiving account names its client; for an account that is no client's (bandpey), the sender
 # domains and the addresses quoted in the text decide. Keywords pick the client's vault notes.

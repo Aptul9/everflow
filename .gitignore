@@ -221,3 +221,13 @@ __marimo__/
 
 # dispatcher state
 data/
+
+# Node/Next output
+node_modules/
+.next/
+*.tsbuildinfo
+next-env.d.ts
+
+# TypeScript application helpers are not Python installation output.
+!/src/lib/
+!/src/lib/**

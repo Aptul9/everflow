@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2024", "ESNext.Disposable"],
+    "types": ["node"],
+    "plugins": [],
+    "rootDir": "src",
+    "outDir": "dist",
+    "noEmit": false,
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": ["src/dispatcher/**/*.ts", "src/windows/**/*.ts", "src/watchers/**/*.ts", "src/web/**/*.ts", "src/server.ts", "src/cli.ts"],
+  "exclude": ["node_modules", "dist", "tests"]
+}
