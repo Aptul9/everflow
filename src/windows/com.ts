@@ -10,6 +10,7 @@ export interface ComBindings {
   wrapDispatch(pointer: bigint): any;
   releaseObject(object: any): void;
   points(object: any): any[];
+  releasePoint?(point: any): void;
   pump(): void;
 }
 
@@ -41,6 +42,7 @@ function comBindings(): ComBindings {
     },
     releasePointer: (pointer) => { koffi.call(method(pointer, 2), release, pointer); },
     wrapDispatch: (pointer) => { const bytes = Buffer.alloc(8); bytes.writeBigUInt64LE(pointer); return new winax.Object(bytes); },
+    // winax3.6.10 has no safe point-disposal API. No releasePoint capability is advertised.
     releaseObject: (object) => { winax.release(object); }, points: (object) => winax.getConnectionPoints(object), pump: () => { winax.peekAndDispatchMessages(); },
   };
   native = api;
@@ -52,6 +54,7 @@ export function createComSession(input?: ComBindings) {
   const initialized = api.initialize();
   if (initialized < 0) throw new NativeError('com.initialize', initialized >>> 0);
   const objects = new Set<any>();
+  const pointOwners = new Set<any>();
   const subscriptions: { point: any; cookie: number; sink: any }[] = [];
   let closed = false;
   const track = <T>(object: T): T => {
@@ -63,12 +66,19 @@ export function createComSession(input?: ComBindings) {
     if (!objects.has(object)) throw new NativeError('com.unowned');
     api.releaseObject(object); objects.delete(object);
   };
+  const releasePoint = (point: any) => {
+    if (!pointOwners.has(point)) throw new NativeError('com.unowned-point');
+    api.releasePoint!(point); pointOwners.delete(point);
+  };
   const close = () => {
     if (closed) return;
     closed = true;
     let failed = false;
     for (const { point, cookie } of subscriptions.splice(0).reverse()) {
       try { point.unadvise(cookie); } catch { failed = true; }
+    }
+    for (const point of [...pointOwners].reverse()) {
+      try { releasePoint(point); } catch { failed = true; }
     }
     for (const object of [...objects].reverse()) {
       try { release(object); } catch { failed = true; }
@@ -119,19 +129,29 @@ export function createComSession(input?: ComBindings) {
     },
     subscribeNewMail(object: any, listener: (ids: string) => void): boolean {
       if (closed) throw new NativeError('com.closed');
+      if (typeof api.releasePoint !== 'function') return false;
       let points: any[];
       try { points = api.points(object); } catch { return false; }
-      for (const point of points) {
-        try {
-          if (!point.getMethods().includes('NewMailEx')) continue;
-          const sink = { NewMailEx: (ids: unknown) => { if (typeof ids === 'string') listener(ids); } };
-          const cookie = point.advise(sink) as number;
-          if (!Number.isInteger(cookie) || cookie <= 0) throw new NativeError('com.event-cookie');
-          subscriptions.push({ point, cookie, sink });
-          return true;
-        } catch { /* Polling remains authoritative when connection points are unavailable. */ }
+      const acquired = new Set(points);
+      for (const point of acquired) pointOwners.add(point);
+      let selected: any;
+      try {
+        for (const point of acquired) {
+          try {
+            if (!point.getMethods().includes('NewMailEx')) continue;
+            const sink = { NewMailEx: (ids: unknown) => { if (typeof ids === 'string') listener(ids); } };
+            const cookie = point.advise(sink) as number;
+            if (!Number.isInteger(cookie) || cookie <= 0) throw new NativeError('com.event-cookie');
+            subscriptions.push({ point, cookie, sink }); selected = point;
+            return true;
+          } catch { /* Polling remains authoritative when connection points are unavailable. */ }
+        }
+        return false;
+      } finally {
+        let failed = false;
+        for (const point of acquired) if (point !== selected) { try { releasePoint(point); } catch { failed = true; } }
+        if (failed) throw new NativeError('com.cleanup');
       }
-      return false;
     },
     pump() { if (closed) throw new NativeError('com.closed'); api.pump(); },
     close,

@@ -88,6 +88,14 @@ function messageTime(value: unknown): string {
   catch { throw new SourceError('teams', 'teams.message-time'); }
 }
 
+function deletionTime(value: unknown): string {
+  if (typeof value !== 'number' && !(typeof value === 'string' && /^-?\d+$/.test(value))) return messageTime(value);
+  const milliseconds = Number(value);
+  if (!Number.isSafeInteger(milliseconds)) throw new SourceError('teams', 'teams.message-time');
+  try { return sourceStamp(new Date(milliseconds).toISOString()); }
+  catch { throw new SourceError('teams', 'teams.message-time'); }
+}
+
 export async function teamsPages(port: Pick<TeamsPort, 'request'>, account: TeamsAccount, input: string, key: 'messages' | 'conversations', sinceMs: number, signal?: AbortSignal, limit = 10): Promise<any[]> {
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new SourceError('teams', 'teams.pagination-limit', account.upn);
   let url = teamsUrl(input, account.region);
@@ -156,6 +164,8 @@ function files(properties: Record<string, any>): any[] {
 
 function normalize(raw: Record<string, any>, conversation: string, conversationTitle: string, account: TeamsAccount, previous?: MessageMetadata): SourceMessage | null {
   const properties = raw.properties ? object(raw.properties) : {};
+  const deletion = properties.deletetime;
+  const deletionStamp = deletion === undefined || deletion === null || deletion === '' ? undefined : deletionTime(deletion);
   const deleted = raw.deleted === true || raw.deletionInfo === true || properties.deleted === true || Boolean(properties.deletetime);
   const kind = String(raw.messagetype || '');
   if (SKIP_TYPES.some((prefix) => kind.startsWith(prefix)) || !kind && !deleted) return null;
@@ -163,7 +173,7 @@ function normalize(raw: Record<string, any>, conversation: string, conversationT
   const id = String(raw.id), sender = raw.from ? senderOid(raw) : previous?.sender ?? '';
   const me = account.oid || jwtMetadata(account.ic3).oid || '';
   const sentAt = raw.originalarrivaltime || raw.composetime;
-  const stamp = sentAt ? messageTime(sentAt) : previous?.sent_at ?? messageTime(properties.deletetime);
+  const stamp = messageTime(deleted && previous ? previous.sent_at : sentAt || previous?.sent_at || deletionStamp);
   const attachments: SourceMessage['attachments'] = [];
   let text = '';
   if (!deleted) {

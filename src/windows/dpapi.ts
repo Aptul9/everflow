@@ -20,8 +20,9 @@ function dpapiBindings(): DpapiBindings {
     transform(input, protecting, flags) {
       const output: { cbData?: number; pbData?: bigint } = {};
       if (!(protecting ? protect : unprotect)({ cbData: input.length, pbData: input }, null, null, null, null, flags, output)) {
+        const status = last();
         if (output.pbData) free(output.pbData);
-        throw new NativeError('dpapi.transform', last());
+        throw new NativeError('dpapi.transform', status);
       }
       return { pointer: output.pbData ?? null, size: output.cbData ?? -1 };
     },

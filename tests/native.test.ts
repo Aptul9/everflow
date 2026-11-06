@@ -1,8 +1,9 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test, vi } from 'vitest';
-import { createKernel, NativeResources, parseHandleInventory, quoteWindowsArgument, teamsDescendants } from '../src/windows/kernel.ts';
+import { createKernel, NativeResources, parseHandleInventory, quoteWindowsArgument, teamsDescendants, win32Ffi } from '../src/windows/kernel.ts';
 import type { NativeBindings } from '../src/windows/kernel.ts';
 import { createComSession } from '../src/windows/com.ts';
 import { createDpapi } from '../src/windows/dpapi.ts';
@@ -233,11 +234,13 @@ test('failed COM initialization does not uninitialize an unowned apartment', () 
 test('optional COM NewMailEx connection point is unadvised before releasing attached objects', () => {
   const order: string[] = [];
   const listener = vi.fn();
+  let pointReferences = 0, dispatchReferences = 0, remainingAtUninitialize = -1;
   let sink: { NewMailEx(ids: string): void } | undefined;
   const point = { getMethods: () => ['NewMailEx'], advise: vi.fn((value) => { sink = value; return 7; }), unadvise: vi.fn(() => { order.push('unadvise'); }) };
-  const bindings = comBindings();
-  bindings.points.mockReturnValue([point] as never[]);
+  const bindings = { ...comBindings(), releasePoint: vi.fn(() => { pointReferences--; dispatchReferences--; order.push('point-release'); }) };
+  bindings.points.mockImplementation(() => { pointReferences++; dispatchReferences++; return [point] as never[]; });
   bindings.releaseObject.mockImplementation(() => { order.push('release'); });
+  bindings.uninitialize.mockImplementation(() => { remainingAtUninitialize = pointReferences + dispatchReferences; order.push('uninitialize'); });
   using session = createComSession(bindings);
   const attached = session.attachOutlook();
   expect(session.subscribeNewMail(attached.object, listener)).toBe(true);
@@ -247,7 +250,72 @@ test('optional COM NewMailEx connection point is unadvised before releasing atta
   expect(bindings.pump).toHaveBeenCalledOnce();
   session.close();
   expect(point.unadvise).toHaveBeenCalledWith(7);
-  expect(order).toEqual(['unadvise', 'release']);
+  expect(bindings.releasePoint).toHaveBeenCalledWith(point);
+  expect(remainingAtUninitialize).toBe(0);
+  expect(order).toEqual(['unadvise', 'point-release', 'release', 'uninitialize']);
+});
+
+test.each(['selected', 'ignored', 'failed-advice'])('event capability without deterministic disposal refuses before enumerating %s wrappers', (kind) => {
+  let pointReferences = 0, dispatchReferences = 0;
+  const point = { getMethods: () => kind === 'ignored' ? ['OtherEvent'] : ['NewMailEx'],
+    advise: vi.fn(() => { if (kind === 'failed-advice') throw new Error('fixture advice failure'); return 7; }), unadvise: vi.fn() };
+  const bindings = comBindings();
+  bindings.points.mockImplementation(() => { pointReferences++; dispatchReferences++; return [point] as never[]; });
+  using session = createComSession(bindings);
+  const attached = session.attachOutlook();
+  expect(session.subscribeNewMail(attached.object, vi.fn())).toBe(false);
+  expect(bindings.points).not.toHaveBeenCalled();
+  expect(point.advise).not.toHaveBeenCalled();
+  expect([pointReferences, dispatchReferences]).toEqual([0, 0]);
+  session.close();
+  expect(bindings.releaseObject).toHaveBeenCalledOnce();
+  expect(bindings.uninitialize).toHaveBeenCalledOnce();
+});
+
+test('supported disposal releases ignored, failed-advice and post-selection owners before apartment shutdown', () => {
+  const live = new Set<unknown>();
+  let pointReferences = 0, dispatchReferences = 0, remainingAtUninitialize = -1;
+  const make = (methods: string[], fail = false) => ({ getMethods: () => methods,
+    advise: vi.fn(() => { if (fail) throw new Error('fixture advice failure'); return 7; }), unadvise: vi.fn() });
+  const ignored = make(['OtherEvent']), failed = make(['NewMailEx'], true), selected = make(['NewMailEx']), after = make(['OtherEvent']);
+  const points = [ignored, failed, selected, after];
+  const bindings = { ...comBindings(), releasePoint: vi.fn((point: unknown) => {
+    expect(live.delete(point)).toBe(true); pointReferences--; dispatchReferences--;
+  }) };
+  bindings.points.mockImplementation(() => { for (const point of points) { live.add(point); pointReferences++; dispatchReferences++; } return points as never[]; });
+  bindings.uninitialize.mockImplementation(() => { remainingAtUninitialize = pointReferences + dispatchReferences; });
+  using session = createComSession(bindings);
+  expect(session.subscribeNewMail(session.attachOutlook().object, vi.fn())).toBe(true);
+  expect([...live]).toEqual([selected]);
+  expect([pointReferences, dispatchReferences]).toEqual([1, 1]);
+  session.close();
+  expect(selected.unadvise).toHaveBeenCalledWith(7);
+  expect(ignored.unadvise).not.toHaveBeenCalled(); expect(failed.unadvise).not.toHaveBeenCalled(); expect(after.unadvise).not.toHaveBeenCalled();
+  expect(bindings.releasePoint).toHaveBeenCalledTimes(4);
+  expect(remainingAtUninitialize).toBe(0);
+});
+
+test('an unadvise error still disposes point and retained dispatch owners before uninitialization', () => {
+  let pointReferences = 0, dispatchReferences = 0, remainingAtUninitialize = -1;
+  const point = { getMethods: () => ['NewMailEx'], advise: () => 7, unadvise: () => { throw new Error('fixture unadvise failure'); } };
+  const bindings = { ...comBindings(), releasePoint: vi.fn(() => { pointReferences--; dispatchReferences--; }) };
+  bindings.points.mockImplementation(() => { pointReferences++; dispatchReferences++; return [point] as never[]; });
+  bindings.uninitialize.mockImplementation(() => { remainingAtUninitialize = pointReferences + dispatchReferences; });
+  using session = createComSession(bindings);
+  expect(session.subscribeNewMail(session.attachOutlook().object, vi.fn())).toBe(true);
+  expect(() => session.close()).toThrow(/com.cleanup/);
+  expect(bindings.releasePoint).toHaveBeenCalledOnce();
+  expect(remainingAtUninitialize).toBe(0);
+});
+
+test('pinned winax refuses optional events before calling its unsafe enumeration API', () => {
+  const winax = createRequire(import.meta.url)('winax') as { getConnectionPoints(object: unknown): unknown[] };
+  const enumerate = vi.spyOn(winax, 'getConnectionPoints').mockImplementation(() => { throw new Error('fixture enumeration forbidden'); });
+  const session = createComSession();
+  try {
+    expect(session.subscribeNewMail({ fixture: true }, vi.fn())).toBe(false);
+    expect(enumerate).not.toHaveBeenCalled();
+  } finally { session.close(); enumerate.mockRestore(); }
 });
 
 test('DPAPI forbids UI, wipes native clear output, frees output even after a copy failure', () => {
@@ -263,6 +331,36 @@ test('DPAPI forbids UI, wipes native clear output, frees output even after a cop
   bindings.copy.mockImplementation(() => { throw new Error('synthetic copy failure'); });
   expect(() => dpapi.unprotect(Buffer.from('encrypted'))).toThrow(/dpapi.copy/);
   expect(bindings.free).toHaveBeenCalledTimes(2);
+});
+
+test.each(['protect', 'unprotect'] as const)('failed native DPAPI %s captures status before freeing a non-null output', async (operation) => {
+  const ffi = win32Ffi(), blob = {};
+  const order: string[] = [];
+  let status = 5, inputCopy: Buffer | undefined;
+  const struct = vi.spyOn(ffi, 'struct').mockReturnValue(blob);
+  const sizeof = vi.spyOn(ffi, 'sizeof').mockReturnValue(16);
+  const offsetof = vi.spyOn(ffi, 'offsetof').mockReturnValue(8);
+  const load = vi.spyOn(ffi, 'load').mockImplementation(() => ({ func(signature: string) {
+    if (/Crypt(?:Unprotect|Protect)Data/.test(signature)) return (...args: any[]) => {
+      order.push('crypt'); status = 5; inputCopy = args[0].pbData;
+      expect(args[5]).toBe(1);
+      Object.assign(args.at(-1), { pbData: 9n, cbData: 0 }); return 0;
+    };
+    if (signature.includes('LocalFree')) return (pointer: bigint) => { expect(pointer).toBe(9n); order.push('free'); status = 111; return null; };
+    if (signature.includes('GetLastError')) return () => { order.push('last'); return status; };
+    throw new Error('fixture unexpected native signature');
+  } }));
+  try {
+    vi.resetModules();
+    const { createDpapi: fresh } = await import('../src/windows/dpapi.ts');
+    const original = Buffer.from('owned synthetic input');
+    let failure: unknown;
+    try { fresh()[operation](original); } catch (error) { failure = error; }
+    expect(failure).toMatchObject({ code: 'dpapi.transform', status: 5 });
+    expect(order).toEqual(['crypt', 'last', 'free']);
+    expect(inputCopy?.every((byte) => byte === 0)).toBe(true);
+    expect(original.toString()).toBe('owned synthetic input');
+  } finally { load.mockRestore(); offsetof.mockRestore(); sizeof.mockRestore(); struct.mockRestore(); }
 });
 
 test('real DPAPI scratch round trip never returns plaintext as protected bytes', () => {

@@ -295,15 +295,44 @@ test('later requests reuse the replacement token instead of repeatedly forwardin
   expect(refreshRejected).toHaveBeenCalledOnce();
 });
 
-test('a partial deletion tombstone retains known timestamp and sender without replaying live body', async () => {
+test.each([new Date(now).toISOString(), now, String(now)])('a partial deletion tombstone retains known timestamp and sender with deletion metadata %j', async (deletion) => {
   let raw: Record<string, unknown> = rawMessage();
   const port = teamsPort();
   port.request = async (_a, url) => url.includes('/messages?') ? { messages: [raw] } : { conversations: [{ id: 'chat' }] };
   const rows: SourceRecord[] = [], state = createTeamsState(since);
   await scanTeams(port, state, (row) => { rows.push(row); }, () => now);
-  raw = { id: '1', properties: { deletetime: new Date(now).toISOString() } };
+  raw = { id: '1', properties: { deletetime: deletion } };
   await scanTeams(port, state, (row) => { rows.push(row); }, () => now);
   expect(rows.filter((row) => 'message_id' in row).at(-1)).toMatchObject({ sender: 'bob', sent_at: '2026-11-04T10:30:00.123Z', text: '', ref: { deleted: true } });
+});
+
+test.each([now - 60000, String(now - 60000)])('fresh-state epoch-ms tombstone %j emits deletion and complete account coverage', async (deletion) => {
+  const port = teamsPort();
+  const raw = { id: String(now), properties: { deletetime: deletion } };
+  port.request = async (_account, url) => url.includes('/messages?') ? { messages: [raw] } : { conversations: [{ id: 'chat' }] };
+  const state = createTeamsState(since), rows: SourceRecord[] = [];
+  expect(state.metadata.size).toBe(0);
+  await expect(scanTeams(port, state, (row) => { rows.push(row); }, () => now)).resolves.toBeUndefined();
+  expect(rows.filter((row) => 'message_id' in row)).toMatchObject([{ source: 'teams', account: 'a@example.invalid', conversation_id: 'chat',
+    message_id: `chat;messageid=${now}`, sent_at: '2026-11-04T10:59:00.000Z', sender_is_me: false, text: '', attachments: [], ref: { id: String(now), deleted: true } }]);
+  expect(rows.at(-1)).toEqual({ source: 'teams', checkpoint: new Date(now).toISOString(), accounts: ['a@example.invalid'] });
+  expect(state.since).toBe(new Date(now).toISOString());
+  expect(state.cursors.get('a@example.invalid')).toBe(new Date(now).toISOString());
+});
+
+test.each([
+  { check: 'nan-number', value: NaN }, { check: 'positive-infinity', value: Infinity }, { check: 'negative-infinity', value: -Infinity },
+  { check: 'fractional-number', value: 1793790000000.5 }, { check: 'unsafe-integer', value: Number.MAX_SAFE_INTEGER + 1 }, { check: 'date-range', value: 8640000000000001 },
+  { check: 'nan-string', value: 'NaN' }, { check: 'infinity-string', value: 'Infinity' }, { check: 'junk-suffix', value: '1793790000000x' },
+  { check: 'fractional-string', value: '1793790000000.5' }, { check: 'object', value: {} }, { check: 'boolean', value: true },
+])('invalid deletion timestamp $check cannot emit a tombstone or advance coverage', async ({ value: deletion }) => {
+  const port = teamsPort();
+  port.request = async (_account, url) => url.includes('/messages?') ? { messages: [{ id: String(now), properties: { deletetime: deletion } }] } : { conversations: [{ id: 'chat' }] };
+  const state = createTeamsState(since), rows: SourceRecord[] = [];
+  const error = await scanTeams(port, state, (row) => { rows.push(row); }, () => now).catch((failure: unknown) => failure);
+  expect(safeSourceDiagnostic(error, 'teams')).toMatchObject({ code: 'teams.scan-incomplete', reason: 'teams.message-time' });
+  expect(rows.some((row) => 'message_id' in row || 'checkpoint' in row)).toBe(false);
+  expect(state.since).toBe(since); expect(state.cursors.size).toBe(0);
 });
 
 test('recovered failed account resumes its old floor while successful quiet account retains its local cursor', async () => {
