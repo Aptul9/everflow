@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
@@ -115,6 +116,15 @@ test('only the exact named seed backup is accepted, and only as a plain unlinked
   expect(guardRun({ ...f.input, seed }).seed).toBe(seed);
   fs.linkSync(seed, join(f.checkout, 'data', 'backups', 'linked.db'));
   refused({ ...f.input, seed }, 'seed.hard-link');
+});
+
+test('harness CLI refuses without opt-in and refuses protected run roots before reading any run file', () => {
+  const run = (...args: string[]) => spawnSync(process.execPath, ['scripts/live-checks.ts', ...args], { cwd: process.cwd(), encoding: 'utf8', windowsHide: true, timeout: 30000 });
+  const code = (result: ReturnType<typeof run>) => { expect(result.status).toBe(1); return JSON.parse(result.stderr.trim()).error as string; };
+  expect(code(run('status', '--scenario', 'cli-guard', '--run-root', join(CHECKOUT, 'data')))).toBe('live-checks.opt-in-required');
+  expect(code(run('status', '--opt-in', '--scenario', 'cli-guard', '--run-root', join(CHECKOUT, 'data')))).toBe('run-root.checkout-data');
+  expect(code(run('status', '--opt-in', '--scenario', 'cli-guard', '--run-root', join(CHECKOUT, 'data', 'dispatcher.db')))).toBe('run-root.protected');
+  expect(code(run('status', '--opt-in', '--scenario', 'cli-guard', '--run-root', join(SCRATCH, 'live-checks-absent', 'run')))).toBe('run-root.outside-live-root');
 });
 
 test('loaded config paths must stay inside the run root or the declared read-only inputs', () => {
