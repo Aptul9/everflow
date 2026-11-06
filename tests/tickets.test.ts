@@ -1043,3 +1043,120 @@ test.each(['relink', 'merge'] as const)('I1 %s intent cannot bypass a later targ
   expect(db.prepare('SELECT closed_at,report_at FROM ticket WHERE id=?').get(state.target))
     .toEqual({ closed_at: '2026-11-06T04:00:00Z', report_at: '2026-11-06T04:00:00Z' });
 });
+
+function rejectedTitleScope(db: DatabaseSync, job: jobs.Job, input: number, owner: number, response: unknown) {
+  const tables = ['conversation', 'person', 'message', 'cursor', 'batch', 'ticket', 'ticket_conversation', 'ticket_ref', 'triage_log', 'timeline', 'job', 'turn'];
+  const before = snapshot(db, tables);
+  const priorProposal = db.prepare('SELECT proposal FROM ticket WHERE id=?').get(owner)!.proposal;
+  const writes = db.prepare('SELECT total_changes() AS n').get()!.n;
+  const effects = vi.fn(() => { api.applyDecision(db, input, response); });
+  let error: unknown;
+  try { jobs.complete(db, job, effects); } catch (caught) { error = caught; }
+  expect(effects).toHaveBeenCalledTimes(1);
+  expect(db.prepare('SELECT proposal FROM ticket WHERE id=?').get(owner)!.proposal).toBe(priorProposal);
+  expect(error).toBeInstanceOf(api.TicketError);
+  expect(error).toMatchObject({ code: 'ticket.conflict' });
+  expect(String(error)).toMatch(/conversation.*title/i);
+  expect(snapshot(db, tables)).toEqual(before);
+  expect(db.prepare('SELECT total_changes() AS n').get()!.n).toBe(writes);
+  expect(db.isTransaction).toBe(false);
+}
+
+test('R1 historical-message title edit fences another batch before effects and permits a freshly reoffered assessment', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const older = { source: 'outlook', account: 'me@acme.invalid', conversation_id: 'shared-title', conversation_title: 'Original title',
+    message_id: 'historical-message', sender: 'bob@acme.invalid', sender_is_me: false,
+    sent_at: '2026-11-05T23:50:00.123456+00:00', text: 'Previously assessed request', attachments: [], ref: {} };
+  ingest(db, older);
+  const owner = ticket(db, { proposal: 'Prior proposal', closed_at: '2026-11-05T23:00:00.123456+00:00',
+    report_at: '2026-11-05T23:00:00.123456+00:00', report_message_id: 'prior-report', report: 'done' });
+  link(db, owner, 1);
+  const historical = Number(db.prepare("INSERT INTO batch(conversation,state,outcome,ticket,created_at,done_at) VALUES (1,'done','proposed',?,?,?)")
+    .run(owner, AT, AT).lastInsertRowid);
+  db.prepare('UPDATE message SET batch=?').run(historical);
+  const offeredAt = '2026-11-06T00:10:00.000000Z';
+  const editedAt = '2026-11-06T00:10:01.000000Z';
+  vi.setSystemTime(new Date(offeredAt));
+  ingest(db, { ...older, message_id: 'later-message', sent_at: '2026-11-05T23:51:00.654321Z', text: 'Follow-up needing assessment' });
+  expect(ingestApi.schedule(db, cfg, offeredAt)).toHaveLength(1);
+  const job = jobs.claim(db, cfg, 'shared-title-before-edit', offeredAt)!;
+  expect(job.kind).toBe('triage');
+  const input = Number(job.payload.batch);
+  expect(input).not.toBe(historical);
+  expect(db.prepare('SELECT native_id FROM message WHERE batch=?').all(input)).toEqual([{ native_id: 'later-message' }]);
+  const unchangedInput = db.prepare('SELECT * FROM message WHERE batch=?').all(input);
+  const markers = correctionMarkers(db, owner);
+  const stale = decision({ title: 'Original title', proposal: 'Stale original-title assessment' });
+  vi.setSystemTime(new Date(editedAt));
+  expect(ingest(db, { ...older, conversation_title: 'Changed title: request cancelled' })).toBe(true);
+  expect(db.prepare("SELECT batch,stored_at FROM message WHERE native_id='historical-message'").get()).toEqual({ batch: null, stored_at: editedAt });
+  expect(db.prepare('SELECT * FROM message WHERE batch=?').all(input)).toEqual(unchangedInput);
+  const currentRoute: api.Route = { ticket: owner, mode: 'update', candidates: [], context: [] };
+  expect(api.assessmentPayload(db, cfg, input, currentRoute, editedAt).message_versions).toEqual(job.payload.message_versions);
+  expect(ingestApi.schedule(db, cfg, editedAt)).toEqual([]);
+  expect(db.prepare("SELECT batch FROM message WHERE native_id='historical-message'").get()?.batch).toBeNull();
+  rejectedTitleScope(db, job, input, owner, stale);
+  expect(correctionMarkers(db, owner)).toEqual(markers);
+  const source = snapshot(db, ['conversation', 'person', 'message', 'cursor', 'turn']);
+
+  const freshScope = api.assessmentPayload(db, cfg, input, currentRoute, editedAt);
+  expect(freshScope.conversation_title).toBe('Changed title: request cancelled');
+  expect(freshScope.message_versions).toEqual(job.payload.message_versions);
+  expect(jobs.defer(db, job, editedAt, freshScope)).toBe(true);
+  const freshJob = jobs.claim(db, cfg, 'shared-title-reoffered', editedAt)!;
+  expect(freshJob.id).toBe(job.id);
+  expect(freshJob.lease_token).not.toBe(job.lease_token);
+  const staleEffects = vi.fn(() => { api.applyDecision(db, input, stale); });
+  expect(jobs.complete(db, job, staleEffects)).toBe(false);
+  expect(staleEffects).not.toHaveBeenCalled();
+  const fresh = decision({ title: 'Current title assessment', proposal: 'Fresh current-title assessment' });
+  expect(jobs.complete(db, freshJob, () => { api.applyDecision(db, input, fresh); })).toBe(true);
+  expect(db.prepare('SELECT proposal FROM ticket WHERE id=?').get(owner)?.proposal).toBe('Fresh current-title assessment');
+  expect(correctionMarkers(db, owner)).toEqual(markers);
+  expect(snapshot(db, ['conversation', 'person', 'message', 'cursor', 'turn'])).toEqual(source);
+  expect(db.prepare('SELECT state FROM job WHERE id=?').get(job.id)?.state).toBe('done');
+  expect(ingestApi.schedule(db, cfg, editedAt)).toHaveLength(1);
+  expect(db.prepare("SELECT kind,state FROM job WHERE id>?").all(job.id)).toEqual([{ kind: 'triage', state: 'queued' }]);
+  expect(db.prepare("SELECT stored_at FROM message WHERE native_id='historical-message'").get()?.stored_at).toBe(editedAt);
+  expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
+});
+
+test.each(['Original title', null, ''])('R1 unchanged shared title %j is explicitly snapshotted and accepted through fenced completion', (title) => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const input = batch(db, { conversation_title: title });
+  const owner = ticket(db, { proposal: 'Prior proposal' });
+  link(db, owner, conversation(db, input));
+  offer(db, cfg, input);
+  const job = jobs.claim(db, cfg, 'unchanged-shared-title', AT)!;
+  expect(Object.hasOwn(job.payload, 'conversation_title')).toBe(true);
+  expect(job.payload.conversation_title).toBe(title);
+  expect(jobs.complete(db, job, () => { api.applyDecision(db, input, decision({ proposal: 'Unchanged-title assessment' })); })).toBe(true);
+  expect(db.prepare('SELECT proposal FROM ticket WHERE id=?').get(owner)?.proposal).toBe('Unchanged-title assessment');
+});
+
+test.each([
+  { label: 'missing', title: 'Original title', value: undefined },
+  { label: 'missing with null title', title: null, value: undefined },
+  { label: 'missing with empty title', title: '', value: undefined },
+  { label: 'number', title: 'Original title', value: 12 },
+  { label: 'boolean', title: 'Original title', value: false },
+  { label: 'array', title: 'Original title', value: [] },
+  { label: 'object', title: 'Original title', value: { title: 'Original title' } },
+  { label: 'null versus empty', title: '', value: null },
+  { label: 'empty versus null', title: null, value: '' },
+])('R1 $label metadata scope fails closed before effects', ({ title, value }) => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const input = batch(db, { conversation_title: title });
+  const owner = ticket(db, { proposal: 'Prior proposal' });
+  link(db, owner, conversation(db, input));
+  offer(db, cfg, input);
+  const job = jobs.claim(db, cfg, 'invalid-title-scope', AT)!;
+  const scope = { ...job.payload };
+  if (value === undefined) delete scope.conversation_title;
+  else scope.conversation_title = value;
+  db.prepare('UPDATE job SET payload=? WHERE id=?').run(JSON.stringify(scope), job.id);
+  rejectedTitleScope(db, job, input, owner, decision({ proposal: 'Must not apply without matching metadata scope' }));
+});

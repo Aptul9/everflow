@@ -293,9 +293,10 @@ export function ownContext(db: DatabaseSync, ticket: number): OwnContext {
 }
 
 export function assessmentPayload(db: DatabaseSync, cfg: Config, batch: number, routed: Route, at?: string): JobPayload {
+  const row = getBatch(db, batch);
   const offered = candidates(db, cfg, batch, at);
   const ids = [...new Set([...offered.map((candidate) => candidate.id), ...(routed.ticket === null ? [] : [routed.ticket])])];
-  return { batch, mode: routed.mode, ticket: routed.ticket, candidates: offered, candidate_ids: ids,
+  return { batch, mode: routed.mode, ticket: routed.ticket, conversation_title: row.title, candidates: offered, candidate_ids: ids,
     allowed_clients: Object.keys(cfg.clients), inferred_clients: batchClients(db, cfg, batch), context_ticket_ids: routed.context,
     min_confidence: cfg.triage.min_confidence, reopen_days: cfg.jobs.reopen_days,
     message_versions: batchMessages(db, batch).map((message) => ({ id: message.id, stored_at: message.stored_at, version: messageVersion(message) })) };
@@ -337,11 +338,15 @@ export function applyDecision(db: DatabaseSync, batch: number, input: unknown): 
     const row = getBatch(db, batch);
     const job = db.prepare("SELECT payload FROM job WHERE kind='triage' AND json_extract(payload,'$.batch')=? ORDER BY id DESC LIMIT 1").get(batch);
     if (!job) throw new TicketError('ticket.conflict', `Batch ${batch} has no offered assessment`);
-    const scope = JSON.parse(String(job.payload)) as { candidate_ids: number[]; allowed_clients: string[]; min_confidence: number;
+    const scope = JSON.parse(String(job.payload)) as { conversation_title: string | null; candidate_ids: number[]; allowed_clients: string[]; min_confidence: number;
       reopen_days: number; message_versions: { id: number; stored_at: string; version: string }[] };
     if (!Array.isArray(scope.candidate_ids) || !Array.isArray(scope.allowed_clients) || !Array.isArray(scope.message_versions)) {
       throw new TicketError('ticket.conflict', 'Assessment has no candidate/client/input scope');
     }
+    if (scope.conversation_title !== null && typeof scope.conversation_title !== 'string') {
+      throw new TicketError('ticket.conflict', 'Assessment conversation title scope is missing or invalid');
+    }
+    if (scope.conversation_title !== row.title) throw new TicketError('ticket.conflict', 'Assessment conversation title changed');
     if (decision.ticket !== null && !scope.candidate_ids.includes(decision.ticket)) throw new TicketError('ticket.invalid-decision', 'Ticket is not an offered candidate');
     if (decision.client !== null && !scope.allowed_clients.includes(decision.client)) throw new TicketError('ticket.invalid-decision', 'Unknown configured client');
     const { raw: suppliedRaw, ...fields } = decision;
