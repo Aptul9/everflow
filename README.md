@@ -132,7 +132,7 @@ These values come from the exported schema in [config.ts](src/dispatcher/config.
   "tickets": { "enabled": false },
   "chats": { "enabled": false },
   "web": { "port": 8789 },
-  "triage": { "providers": [], "model": "", "tool_limit": 8, "timeout_seconds": 120, "min_confidence": 0.75 },
+  "triage": { "providers": [], "model": "", "tool_limit": 8, "timeout_seconds": 120, "min_confidence": 0.75, "history_messages": 40 },
   "windows": { "outlook": 300, "teams": 120, "teamsrelay": 120 },
   "jobs": {
     "triage_concurrency": 3,
@@ -194,7 +194,7 @@ The implementation is in [jobs.ts](src/dispatcher/jobs.ts), [kb-agent.ts](src/di
 | Job | HTTP 400/403; 401 after fresh sign-in; missing session; programming error; triage decision still invalid after repair | Park immediately. |
 | Unknown | Unclassified failures | Same backoff. Consume an attempt. Park on the fifth attempt. |
 
-Triage gets one repair turn for an invalid decision. Both attempts share the maximum 8 tool calls and 120-second wall budget. Only read-only `vault_search` and `vault_read` are offered. Providers are tried in configured order after dependency failures, without quota checks or autostart. A missing or invalid configured route is a job error.
+Triage reads the new batch plus the latest 40 earlier batched messages of the same conversation, oldest first, each with `sent_at` and text capped at 2000 characters, and the current UTC time. `[triage] history_messages` sets that count, from 0 to 100. Triage gets one repair turn for an invalid decision. Both attempts share the maximum 8 tool calls and 120-second wall budget. Only read-only `vault_search` and `vault_read` are offered. Providers are tried in configured order after dependency failures, without quota checks or autostart. A missing or invalid configured route is a job error.
 
 Jobs for one ticket preserve FIFO order. A parked job blocks later work. A parked triage batch retains its messages and absorbs later messages of its conversation. Later forwards merge behind the parked forward. Manual retry resets the job's attempts, failures, error and retry time; it does not erase immutable turn history or its recovery budget. Maintenance jobs `sync`, `archive` and `purge` retry indefinitely and report health instead of parking. They cannot be manually parked.
 

@@ -15,7 +15,7 @@ test('defaults to disabled tickets/chats and every approved policy value', () =>
   const cfg = loadConfig(config);
   expect(cfg.tickets).toEqual({ enabled: false });
   expect(cfg.chats).toEqual({ enabled: false });
-  expect(cfg.triage).toMatchObject({ tool_limit: 8, timeout_seconds: 120, min_confidence: 0.75 });
+  expect(cfg.triage).toMatchObject({ tool_limit: 8, timeout_seconds: 120, min_confidence: 0.75, history_messages: 40 });
   expect(cfg.windows).toMatchObject({ outlook: 300, teams: 120, teamsrelay: 120 });
   expect(cfg.web).toEqual({ port: 8789 });
   expect(cfg.jobs).toEqual({
@@ -94,6 +94,7 @@ test.each([
   ['triage', 'tool_limit', '0'], ['triage', 'tool_limit', '9'], ['triage', 'timeout_seconds', '121'],
   ['triage', 'min_confidence', '1.1'], ['triage', 'min_confidence', '-0.1'],
   ['triage', 'min_confidence', 'nan'], ['triage', 'min_confidence', 'inf'],
+  ['triage', 'history_messages', '-1'], ['triage', 'history_messages', '101'], ['triage', 'history_messages', '2.5'],
   ['windows', 'outlook', '299'], ['windows', 'teams', '119'], ['windows', 'teamsrelay', '119'],
   ['web', 'port', '0'], ['web', 'port', '65536'], ['web', 'port', '8789.5'],
   ['jobs', 'triage_concurrency', '0'], ['jobs', 'turn_concurrency', '0'],

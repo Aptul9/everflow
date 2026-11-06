@@ -46,7 +46,7 @@ const configSchema = z.looseObject({
   triage: z.looseObject({
     providers: z.array(z.string().min(1)).default([]), model: z.string().default(''),
     tool_limit: positive.max(8).default(8), timeout_seconds: positive.max(120).default(120),
-    min_confidence: z.number().min(0).max(1).default(0.75),
+    min_confidence: z.number().min(0).max(1).default(0.75), history_messages: nonnegative.max(100).default(40),
     provider_config_path: z.string().min(1).optional(),
   }).prefault({}),
   windows: z.looseObject({

@@ -28,6 +28,8 @@ model = "claude-haiku-5-5"
 tool_limit = 8
 timeout_seconds = 120
 min_confidence = 0.75
+# Earlier messages of the same conversation sent with each batch, oldest first, with send times.
+history_messages = 40
 
 [windows]
 # Seconds a conversation stays quiet before its batch runs. Floors from the design: chat 120, email 300.
