@@ -4,6 +4,9 @@ import type { SessionMessageInfo } from '@opencode/client';
 import { loadConfig } from '../src/dispatcher/config.ts';
 import * as transport from '../src/dispatcher/opencode.ts';
 import { classify } from '../src/dispatcher/jobs.ts';
+import { openDb } from '../src/dispatcher/db.ts';
+import * as chat from '../src/dispatcher/chat.ts';
+import { claimed, proposed, row } from './chat-support.ts';
 import { remoteSession, scriptedPeer, PEER_AT } from './opencode-support.ts';
 import { scratch } from './support.ts';
 
@@ -259,3 +262,56 @@ test('an older idle boundary cannot terminate newer streaming work or supply its
     completed_at: null, text: 'STATUS: working | Earlier output' });
   expect(await api.latestReport('ses_1')).toBeNull();
 });
+
+test.each(['short-json', 'password-type', 'port-type', 'validation-getter', 'read-failure', 'missing-file'] as const)(
+  'I3 settings boundary replaces %s diagnostics without raw input/cause in thrown or durable errors', async (mode) => {
+    await using peer = await scriptedPeer();
+    const { cfg, files } = config('');
+    const marker = 's9Q';
+    const settings = `${files.root}/${mode === 'missing-file' ? marker : 'synthetic-settings'}.json`;
+    let readSettings: transport.TransportOptions['readSettings'];
+    if (mode === 'short-json') writeFileSync(settings, `{"desktopLocalPort":12345,"desktopUiPassword":${marker}}`);
+    if (mode === 'password-type') readSettings = () => ({ desktopLocalPort: 12345, desktopUiPassword: { value: marker } });
+    if (mode === 'port-type') readSettings = () => ({ desktopLocalPort: marker, desktopUiPassword: marker });
+    if (mode === 'validation-getter') readSettings = () => ({
+      get desktopLocalPort() { throw new Error(marker, { cause: { raw: marker } }); }, desktopUiPassword: marker,
+    });
+    if (mode === 'read-failure') readSettings = () => { throw new Error(marker, { cause: { raw: marker } }); };
+    let error: unknown;
+    try { transport.connect(cfg, { settingsPath: settings, ...(readSettings ? { readSettings } : {}) }); }
+    catch (failure) { error = failure; }
+    const readFailure = mode === 'read-failure' || mode === 'missing-file';
+    const message = readFailure ? 'OpenChamber settings could not be read (OC_SETTINGS_READ)' : 'OpenChamber settings are invalid (OC_SETTINGS_INVALID)';
+    const record = error && typeof error === 'object' ? error as Record<string, unknown> : {};
+    const thrown = [String(error), JSON.stringify(error), JSON.stringify(Object.getOwnPropertyDescriptors(record))].join('\n');
+    const failure = classify(error);
+    const diagnostics = {
+      captured: error !== undefined,
+      secret_in_thrown: thrown.includes(marker),
+      secret_in_classified: JSON.stringify(failure).includes(marker),
+      raw_cause: 'cause' in record,
+      fixed_type: record.type === (readFailure ? 'opencode.settings-read' : 'opencode.settings-invalid'),
+      fixed_code: record.code === (readFailure ? 'OC_SETTINGS_READ' : 'OC_SETTINGS_INVALID'),
+      fixed_message: record.message === message,
+      error_class: failure.error_class,
+    };
+    cfg.tickets.enabled = true;
+    cfg.chats.enabled = true;
+    cfg.opencode.url = peer.url;
+    using db = openDb(files.path);
+    const ticket = proposed(db);
+    chat.approve(cfg, db, ticket, 'Synthetic settings failure only');
+    const job = claimed(db, cfg);
+    const api = transport.connect(cfg);
+    await chat.startChat(cfg, db, job, { peer: { ...api, async findTicket() { throw error; } } });
+    const saved = row(db, 'job', job.id);
+    const events = db.prepare("SELECT body FROM timeline WHERE ticket=? AND kind='failure'").all(ticket);
+    expect({ ...diagnostics, state: saved.state, durable_class: saved.error_class, fixed_job_error: saved.last_error === message,
+      fixed_timeline_error: events.length === 1 && events[0]!.body === message,
+      persisted_secret: JSON.stringify({ saved, events }).includes(marker) })
+      .toEqual({ captured: true, secret_in_thrown: false, secret_in_classified: false, raw_cause: false,
+        fixed_type: true, fixed_code: true, fixed_message: true, error_class: 'job',
+        state: 'parked', durable_class: 'job', fixed_job_error: true, fixed_timeline_error: true, persisted_secret: false });
+    expect(peer.calls).toHaveLength(0);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM turn').get()!.n).toBe(0);
+  });

@@ -91,7 +91,8 @@ function timeline(db: DatabaseSync, ticket: number, at: string, kind: 'failure' 
     .run(ticket, at, kind, 'chat', body, key);
 }
 
-function failed(cfg: Config, db: DatabaseSync, job: Job, error: unknown, options: ChatOptions, effects?: () => void): void {
+function failed(cfg: Config, db: DatabaseSync, job: Job, error: unknown, options: ChatOptions, effects?: () => void,
+  retry?: { dependency: string; next_at: string }): void {
   const now = clock(options);
   if (options.signal?.aborted) { defer(db, job, after(now(), cfg.jobs.collect_seconds), undefined, now); return; }
   try {
@@ -99,7 +100,8 @@ function failed(cfg: Config, db: DatabaseSync, job: Job, error: unknown, options
       if (!owns(db, job, now())) return;
       const failure = classify(error);
       effects?.();
-      if (!fail(db, cfg, job, error, { at: now(), ...(failure.error_class === 'dependency' ? { dependency: 'opencode' } : {}) })) throw lost;
+      if (!fail(db, cfg, job, error, { at: now(), ...(retry ? { dependency: retry.dependency } : failure.error_class === 'dependency' ? { dependency: 'opencode' } : {}) })) throw lost;
+      if (retry) db.prepare('UPDATE job SET next_at=? WHERE id=?').run(retry.next_at, job.id);
       const current = currentJob(db, job);
       if (current.turn_id !== null) db.prepare('UPDATE turn SET error_class=?,last_error=? WHERE id=?').run(failure.error_class, failure.message, current.turn_id);
       if (current.ticket !== null) timeline(db, current.ticket, now(), 'failure', failure.message, `failure:job:${job.id}:${current.failures}`);
@@ -375,7 +377,14 @@ async function finishReport(cfg: Config, db: DatabaseSync, job: Job, pending: Pe
   const now = clock(options);
   const peer = options.peer ?? connect(cfg);
   pending = { ...pending, title: projectedTitle(db, job, pending) };
-  if (!savePending(db, job, 'pending_report', pending, now)) return false;
+  const global = !collector && job.ticket === null;
+  const saved = global ? fenced(db, job, () => {
+    const payload = currentJob(db, job).payload;
+    db.prepare('UPDATE job SET payload=?,updated_at=? WHERE id=?').run(JSON.stringify({ ...payload,
+      pending_reports: { ...(payload.pending_reports as Record<string, PendingReport> | undefined), [pending.ticket]: pending } }), now(), job.id);
+    return true;
+  }, now) : savePending(db, job, 'pending_report', pending, now);
+  if (!saved) return false;
   if (!owns(db, job, now())) return false;
   let actual = await peer.get(pending.session_id, options.signal);
   if (actual.title !== pending.title) {
@@ -406,7 +415,12 @@ async function finishReport(cfg: Config, db: DatabaseSync, job: Job, pending: Pe
       finishBatches(db, turnRow(db, pending.turn), pending.result, 'forwarded');
       tailJob(cfg, db, job, pending, now);
     } else {
-      const { pending_report: _pending, ...payload } = currentJob(db, job).payload;
+      const payload = { ...currentJob(db, job).payload };
+      if (global) {
+        const reports = { ...payload.pending_reports as Record<string, PendingReport> };
+        delete reports[String(pending.ticket)];
+        payload.pending_reports = reports;
+      } else delete payload.pending_report;
       db.prepare('UPDATE job SET payload=? WHERE id=?').run(JSON.stringify(payload), job.id);
     }
     healthOk(db, 'opencode', now());
@@ -416,6 +430,7 @@ async function finishReport(cfg: Config, db: DatabaseSync, job: Job, pending: Pe
     return collector ? complete(db, job, commit, now) : fenced(db, job, commit, now) ?? false;
   } catch (error) {
     if (error !== changedProjection) throw error;
+    if (global) throw Object.assign(new Error('Sync report projection changed during readback'), { status: 503 });
     defer(db, job, now(), undefined, now);
     return false;
   }
@@ -508,12 +523,98 @@ function sessionTickets(db: DatabaseSync, job: Job): Ticket[] {
     ${job.ticket === null ? '' : 'AND id=?'} ORDER BY id`).all(...(job.ticket === null ? [] : [job.ticket])) as unknown as Ticket[];
 }
 
+type SyncFailure = ReturnType<typeof classify> & { failures: number; attempts: number; next_at: string };
+
+function syncFailures(db: DatabaseSync, job: Job): Record<string, SyncFailure> {
+  return currentJob(db, job).payload.sync_errors as Record<string, SyncFailure> | undefined ?? {};
+}
+
+function syncTicketResult(cfg: Config, db: DatabaseSync, job: Job, ticket: number, failure: ReturnType<typeof classify> | null, options: ChatOptions): boolean {
+  const now = clock(options);
+  return fenced(db, job, () => {
+    const payload = currentJob(db, job).payload;
+    const errors = { ...payload.sync_errors as Record<string, SyncFailure> | undefined };
+    const key = String(ticket);
+    const dependency = `jobs:sync:ticket:${ticket}`;
+    if (failure === null) {
+      if (errors[key]) healthOk(db, dependency, now());
+      delete errors[key];
+    } else {
+      const failures = (errors[key]?.failures ?? 0) + 1;
+      errors[key] = { ...failure, message: failure.message.slice(0, 1024), failures,
+        attempts: (errors[key]?.attempts ?? 0) + (failure.error_class === 'dependency' ? 0 : 1),
+        next_at: after(now(), backoff(failures, cfg.jobs, failure.retry_after, Math.random(), now())) };
+      healthError(db, cfg, dependency, errors[key].message, now());
+    }
+    db.prepare('UPDATE job SET payload=?,updated_at=? WHERE id=?').run(JSON.stringify({ ...payload, sync_errors: errors }), now(), job.id);
+    return true;
+  }, now) ?? false;
+}
+
+async function globalSync(cfg: Config, db: DatabaseSync, job: Job, peer: Peer, options: ChatOptions): Promise<void> {
+  const now = clock(options);
+  const migrated = fenced(db, job, () => {
+    const payload = currentJob(db, job).payload;
+    const pending = payload.pending_report as PendingReport | undefined;
+    if (pending) {
+      const reports = { ...payload.pending_reports as Record<string, PendingReport> | undefined };
+      if (reports[String(pending.ticket)]) throw jobError('Conflicting pending sync report identities');
+      reports[String(pending.ticket)] = pending;
+      delete payload.pending_report;
+      db.prepare('UPDATE job SET payload=? WHERE id=?').run(JSON.stringify({ ...payload, pending_reports: reports }), job.id);
+    }
+    return true;
+  }, now);
+  if (!migrated) return;
+  const reports = currentJob(db, job).payload.pending_reports as Record<string, PendingReport> | undefined ?? {};
+  const tickets = [...new Set([...sessionTickets(db, job).map((owner) => owner.id), ...Object.keys(reports).map(Number), ...Object.keys(syncFailures(db, job)).map(Number)])].sort((a, b) => a - b);
+  const failures: unknown[] = [];
+  for (const ticket of tickets) {
+    if (!owns(db, job, now())) return;
+    const previous = syncFailures(db, job)[String(ticket)];
+    if (previous && utc(previous.next_at) > now()) continue;
+    try {
+      const owner = ticketRow(db, ticket);
+      const pending = (currentJob(db, job).payload.pending_reports as Record<string, PendingReport> | undefined)?.[String(ticket)];
+      if (!owner.approved_at || !owner.session_id || pending && pending.session_id !== owner.session_id) throw jobError('Sync has no approved matching session target');
+      if (pending) {
+        if (!await finishReport(cfg, db, job, pending, { ...options, peer }, false)) return;
+      } else {
+        const baseline = { report_message_id: owner.report_message_id, report_at: owner.report_at };
+        const result = await peer.latestReport(owner.session_id, options.signal);
+        if (result && !await finishReport(cfg, db, job, { ticket, session_id: owner.session_id, turn: null, result,
+          status: parseStatus(result.text), title: '', baseline }, { ...options, peer }, false)) return;
+      }
+      if (!syncTicketResult(cfg, db, job, ticket, null, options)) return;
+    } catch (error) {
+      if (!owns(db, job, now())) return;
+      if (options.signal?.aborted) { defer(db, job, after(now(), cfg.jobs.collect_seconds), undefined, now); return; }
+      if (!syncTicketResult(cfg, db, job, ticket, classify(error), options)) return;
+      failures.push(error);
+    }
+  }
+  const errors = Object.values(syncFailures(db, job));
+  const wake = [after(now(), cfg.jobs.sync_seconds), ...errors.map((error) => error.next_at)].sort()[0]!;
+  if (failures.length) {
+    failed(cfg, db, job, new AggregateError(failures, `Sync failed for ${failures.length} ticket(s)`), options, undefined,
+      { dependency: 'jobs:sync', next_at: wake });
+  } else {
+    if (!errors.length) fenced(db, job, () => healthOk(db, 'jobs:sync', now()), now);
+    defer(db, job, wake, undefined, now);
+  }
+}
+
 export async function sync(cfg: Config, db: DatabaseSync, job: Job, options: ChatOptions = {}): Promise<void> {
   if (job.kind !== 'sync') throw new TypeError('sync requires a sync job');
   const now = clock(options);
   try {
     if (!owns(db, job, now())) return;
     const owners = sessionTickets(db, job);
+    const payload = currentJob(db, job).payload;
+    if (job.ticket === null && (owners.length || payload.pending_report || payload.pending_reports || payload.sync_errors)) {
+      await globalSync(cfg, db, job, options.peer ?? connect(cfg), options);
+      return;
+    }
     if (owners.length) {
       const peer = options.peer ?? connect(cfg);
       const pending = currentJob(db, job).payload.pending_report as PendingReport | undefined;
@@ -542,57 +643,133 @@ function localInput(db: DatabaseSync, ticket: number, except: number): boolean {
       WHERE l.ticket=? AND l.kind IN ('primary','linked') AND m.batch IS NULL`).get(ticket);
 }
 
-interface PendingArchive { ticket: number; session_id: string; idle_at: string; requested_at: string }
+interface PendingArchive { ticket: number; session_id: string; idle_at: string; requested_at: string; archived?: boolean }
+
+async function archiveObservation(db: DatabaseSync, job: Job, session: string, peer: Peer, options: ChatOptions) {
+  const now = clock(options);
+  if (!owns(db, job, now())) return null;
+  const actual = await peer.get(session, options.signal);
+  if (!owns(db, job, now())) return null;
+  if (actual.id !== session) throw jobError('Archive readback returned a different session');
+  const [running, inbox, latest] = await Promise.allSettled([peer.running(session, options.signal), peer.inbox(session, options.signal), peer.latestReport(session, options.signal)]);
+  if (!owns(db, job, now())) return null;
+  const remoteAt = Math.max(actual.time.created, actual.time.idle ?? 0, latest.status === 'fulfilled' ? latest.value?.completed_at ?? 0 : 0);
+  if (!Number.isFinite(remoteAt)) throw jobError('Session has no finite activity timestamp');
+  const failure = [running, inbox, latest].find((result) => result.status === 'rejected');
+  return { actual, busy: running.status === 'fulfilled' && running.value || inbox.status === 'fulfilled' && inbox.value.length > 0,
+    at: utc(new Date(remoteAt).toISOString()), failure };
+}
+
+function archiveLocalChanged(db: DatabaseSync, job: Job, pending: PendingArchive): boolean {
+  const owner = ticketRow(db, pending.ticket);
+  return owner.session_id !== pending.session_id || !owner.approved_at || localInput(db, owner.id, job.id)
+    || !!owner.last_activity_at && utc(owner.last_activity_at) > utc(pending.idle_at);
+}
+
+function clearArchive(db: DatabaseSync, job: Job, now: () => string): void {
+  const { pending_archive: _pending, ...payload } = currentJob(db, job).payload;
+  db.prepare('UPDATE job SET payload=?,updated_at=? WHERE id=?').run(JSON.stringify(payload), now(), job.id);
+}
+
+async function reconcileArchive(db: DatabaseSync, job: Job, pending: PendingArchive, peer: Peer, options: ChatOptions): Promise<boolean> {
+  const now = clock(options);
+  if (!owns(db, job, now())) return false;
+  const owner = ticketRow(db, pending.ticket);
+  if (!owner.approved_at || owner.session_id !== pending.session_id || job.ticket !== null && job.ticket !== owner.id) {
+    throw jobError('Archive intent has no approved matching session target');
+  }
+  let actual: Awaited<ReturnType<Peer['get']>> | undefined;
+  if (pending.archived !== false && archiveLocalChanged(db, job, pending)) {
+    pending = { ...pending, archived: false };
+    if (!savePending(db, job, 'pending_archive', pending, now)) return false;
+  }
+  // Missing archived on an existing intent means the original archive request.
+  if (pending.archived !== false) {
+    let observed = await archiveObservation(db, job, pending.session_id, peer, options);
+    if (!observed) return false;
+    actual = observed.actual;
+    if (observed.busy || observed.at > utc(pending.idle_at) || archiveLocalChanged(db, job, pending)) {
+      pending = { ...pending, archived: false };
+      if (!savePending(db, job, 'pending_archive', pending, now)) return false;
+    } else {
+      if (observed.failure) throw observed.failure.reason;
+      if (actual.time.archived === undefined) {
+        if (!owns(db, job, now())) return false;
+        await peer.archive(pending.session_id, true, options.signal);
+        if (!owns(db, job, now())) return false;
+        observed = await archiveObservation(db, job, pending.session_id, peer, options);
+        if (!observed) return false;
+        actual = observed.actual;
+        if (actual.time.archived === undefined) throw Object.assign(new Error('OpenCode archive PATCH was not observed'), { status: 503 });
+      }
+      const accepted = actual;
+      const remoteChanged = observed.busy || observed.at > utc(pending.idle_at);
+      const observationFailure = observed.failure;
+      const settled = fenced(db, job, () => {
+        if (remoteChanged || archiveLocalChanged(db, job, pending)) {
+          const current = currentJob(db, job);
+          db.prepare('UPDATE job SET payload=?,updated_at=? WHERE id=?')
+            .run(JSON.stringify({ ...current.payload, pending_archive: { ...pending, archived: false } }), now(), job.id);
+          return false;
+        }
+        if (observationFailure) throw observationFailure.reason;
+        if (!Number.isFinite(accepted.time.archived)) throw jobError('Archive readback has no finite acceptance timestamp');
+        db.prepare('UPDATE ticket SET archived_at=? WHERE id=? AND session_id=?')
+          .run(utc(new Date(accepted.time.archived!).toISOString()), pending.ticket, pending.session_id);
+        clearArchive(db, job, now);
+        healthOk(db, 'opencode', now());
+        return true;
+      }, now);
+      if (settled === undefined) return false;
+      if (settled) return true;
+      pending = { ...pending, archived: false };
+    }
+  }
+  if (!owns(db, job, now())) return false;
+  actual ??= await peer.get(pending.session_id, options.signal);
+  if (!owns(db, job, now())) return false;
+  if (actual.id !== pending.session_id) throw jobError('Archive readback returned a different session');
+  if (actual.time.archived !== undefined) {
+    await peer.archive(pending.session_id, false, options.signal);
+    if (!owns(db, job, now())) return false;
+    actual = await peer.get(pending.session_id, options.signal);
+    if (!owns(db, job, now())) return false;
+    if (actual.id !== pending.session_id || actual.time.archived !== undefined) {
+      throw Object.assign(new Error('OpenCode unarchive PATCH was not observed'), { status: 503 });
+    }
+  }
+  return fenced(db, job, () => {
+    db.prepare('UPDATE ticket SET archived_at=NULL WHERE id=? AND session_id=?').run(pending.ticket, pending.session_id);
+    clearArchive(db, job, now);
+    healthOk(db, 'opencode', now());
+    return true;
+  }, now) ?? false;
+}
 
 export async function archive(cfg: Config, db: DatabaseSync, job: Job, options: ChatOptions = {}): Promise<void> {
   if (job.kind !== 'archive') throw new TypeError('archive requires an archive job');
   const now = clock(options);
   try {
     if (!owns(db, job, now())) return;
+    const pending = currentJob(db, job).payload.pending_archive as PendingArchive | undefined;
     const owners = sessionTickets(db, job);
-    if (owners.length) {
+    if (pending || owners.length) {
       const peer = options.peer ?? connect(cfg);
-      for (const owner of owners) {
+      if (pending && !await reconcileArchive(db, job, pending, peer, options)) return;
+      for (const candidate of owners) {
         if (!owns(db, job, now())) return;
+        if (candidate.id === pending?.ticket) continue;
+        const owner = ticketRow(db, candidate.id);
         if (localInput(db, owner.id, job.id)) continue;
-        let actual = await peer.get(owner.session_id!, options.signal);
-        const [running, inbox, latest] = await Promise.all([peer.running(owner.session_id!, options.signal),
-          peer.inbox(owner.session_id!, options.signal), peer.latestReport(owner.session_id!, options.signal)]);
-        if (running || inbox.length) continue;
-        const remoteAt = Math.max(actual.time.created, actual.time.idle ?? 0, latest?.completed_at ?? 0);
-        if (!Number.isFinite(remoteAt)) throw jobError('Session has no finite activity timestamp');
-        const idle = [owner.last_activity_at ?? owner.created_at, utc(new Date(remoteAt).toISOString())].map((at) => utc(at)).sort().at(-1)!;
+        const observed = await archiveObservation(db, job, owner.session_id!, peer, options);
+        if (!observed) return;
+        if (observed.failure) throw observed.failure.reason;
+        if (observed.busy) continue;
+        const idle = [owner.last_activity_at ?? owner.created_at, observed.at].map((at) => utc(at)).sort().at(-1)!;
         if (Date.parse(now()) - Date.parse(idle) < cfg.jobs.archive_hours * 3600000) continue;
-        const pending: PendingArchive = { ticket: owner.id, session_id: owner.session_id!, idle_at: idle, requested_at: now() };
-        if (!savePending(db, job, 'pending_archive', pending, now)) return;
-        if (localInput(db, owner.id, job.id) || !owns(db, job, now())) continue;
-        if (actual.time.archived === undefined) {
-          await peer.archive(owner.session_id!, true, options.signal);
-          actual = await peer.get(owner.session_id!, options.signal);
-          if (actual.time.archived === undefined) throw Object.assign(new Error('OpenCode archive PATCH was not observed'), { status: 503 });
-        }
-        const [stillRunning, pendingInputs] = await Promise.all([peer.running(owner.session_id!, options.signal), peer.inbox(owner.session_id!, options.signal)]);
-        const remoteChanged = stillRunning || pendingInputs.length > 0 || utc(new Date(Math.max(actual.time.created, actual.time.idle ?? 0)).toISOString()) > idle;
-        const saved = fenced(db, job, () => {
-          const current = ticketRow(db, owner.id);
-          if (remoteChanged || localInput(db, owner.id, job.id) || current.session_id !== owner.session_id
-            || current.last_activity_at && utc(current.last_activity_at) > idle) return false;
-          db.prepare('UPDATE ticket SET archived_at=? WHERE id=?').run(utc(new Date(actual.time.archived!).toISOString()), owner.id);
-          const { pending_archive: _pending, ...payload } = currentJob(db, job).payload;
-          db.prepare('UPDATE job SET payload=? WHERE id=?').run(JSON.stringify(payload), job.id);
-          healthOk(db, 'opencode', now());
-          return true;
-        }, now);
-        if (saved === false && owns(db, job, now())) {
-          await peer.archive(owner.session_id!, false, options.signal);
-          const observed = await peer.get(owner.session_id!, options.signal);
-          if (observed.time.archived !== undefined) throw Object.assign(new Error('Concurrent input unarchive was not observed'), { status: 503 });
-          fenced(db, job, () => {
-            db.prepare('UPDATE ticket SET archived_at=NULL WHERE id=?').run(owner.id);
-            const { pending_archive: _pending, ...payload } = currentJob(db, job).payload;
-            db.prepare('UPDATE job SET payload=? WHERE id=?').run(JSON.stringify(payload), job.id);
-          }, now);
-        }
+        const intent: PendingArchive = { ticket: owner.id, session_id: owner.session_id!, idle_at: idle, requested_at: now(), archived: true };
+        if (!savePending(db, job, 'pending_archive', intent, now)) return;
+        if (!await reconcileArchive(db, job, intent, peer, options)) return;
       }
     }
     if (job.ticket === null) defer(db, job, after(now(), cfg.jobs.sync_seconds), undefined, now);

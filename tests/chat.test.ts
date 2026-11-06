@@ -389,3 +389,163 @@ test.each(['sync', 'archive'] as const)('maintenance %s handler keeps retrying c
   }
   expect(db.prepare('SELECT state FROM health WHERE dependency=?').get(`jobs:${kind}`)!.state).toBe('failing');
 });
+
+test('I2 global sync contains an invalid first ticket and keeps later reports current across recurring attempts', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  cfg.jobs.max_attempts = 2;
+  using db = openDb(path);
+  const first = proposed(db, { lifecycle: 'active', approved_at: AT, session_id: 'ses_invalid' });
+  const later = proposed(db, { lifecycle: 'active', approved_at: AT, session_id: 'ses_valid' });
+  for (const session of ['ses_invalid', 'ses_valid']) {
+    peer.sessions.set(session, remoteSession(session, cfg.opencode.directory));
+    await connect(cfg).prompt(session, `msg_${session}`, 'Synthetic direct input');
+    peer.finish(session, `msg_${session}`, session === 'ses_invalid' ? 'Completed without STATUS' : 'STATUS: needs_you | Later valid report', 'succeeded', undefined, PEER_AT + 1000);
+  }
+  const id = jobs.enqueue(db, 'sync', 'isolated-sync', {});
+  await chat.sync(cfg, db, claimed(db, cfg));
+  expect(row(db, 'ticket', later)).toMatchObject({ report: 'needs_you', report_line: 'Later valid report' });
+  expect(peer.sessions.get('ses_valid')!.title).toContain('Needs you');
+  expect(row(db, 'ticket', first)).toMatchObject({ report: null, report_at: null, last_activity_at: AT });
+  expect(row(db, 'job', id)).toMatchObject({ state: 'queued', attempts: 1, error_class: 'job' });
+  const firstError = JSON.parse(String(row(db, 'job', id).payload)).sync_errors[String(first)];
+  expect(firstError).toMatchObject({ error_class: 'job', attempts: 1, failures: 1, message: 'Completed assistant output has no valid final STATUS' });
+  const unchanged = { ...row(db, 'ticket', later) };
+  vi.setSystemTime(new Date(String(row(db, 'job', id).next_at)));
+  await chat.sync(cfg, db, claimed(db, cfg));
+  expect(row(db, 'ticket', later)).toEqual(unchanged);
+  await connect(cfg).prompt('ses_valid', 'msg_changed', 'Later changed direct input');
+  peer.finish('ses_valid', 'msg_changed', 'STATUS: waiting_them | Later changed report', 'succeeded', undefined, Date.now() + 1);
+  for (let pass = 0; pass < 7; pass++) {
+    vi.setSystemTime(new Date(String(row(db, 'job', id).next_at)));
+    await chat.sync(cfg, db, claimed(db, cfg));
+  }
+  const job = row(db, 'job', id);
+  const errors = JSON.parse(String(job.payload)).sync_errors;
+  expect(job.state).toBe('queued');
+  expect(Number(job.attempts)).toBeGreaterThan(cfg.jobs.max_attempts);
+  expect(Object.keys(errors)).toEqual([String(first)]);
+  expect(errors[String(first)].attempts).toBe(job.attempts);
+  expect(Buffer.byteLength(String(job.payload))).toBeLessThan(2048);
+  expect(row(db, 'ticket', later)).toMatchObject({ report: 'waiting_them', report_line: 'Later changed report' });
+  expect(peer.sessions.get('ses_valid')!.title).toContain('Waiting on them');
+  expect(db.prepare('SELECT state FROM health WHERE dependency=?').get(`jobs:sync:ticket:${first}`)!.state).toBe('failing');
+  expect(db.prepare("SELECT state FROM health WHERE dependency='jobs:sync'").get()!.state).toBe('failing');
+  expect(peer.calls.filter((call) => call.url.pathname.endsWith('/prompt'))).toHaveLength(3);
+  expect(db.prepare('SELECT COUNT(*) AS n FROM turn').get()!.n).toBe(0);
+});
+
+test.each(['keyed', 'legacy'] as const)('I2 failed first rename retains its pending report across %s storage and DB reopen while later ticket syncs', async (storage) => {
+  await using peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  let first: number;
+  let later: number;
+  let id: number;
+  let next: string;
+  {
+    using db = openDb(path);
+    first = proposed(db, { lifecycle: 'active', approved_at: AT, session_id: 'ses_rename_first' });
+    later = proposed(db, { lifecycle: 'active', approved_at: AT, session_id: 'ses_rename_later' });
+    for (const session of ['ses_rename_first', 'ses_rename_later']) {
+      peer.sessions.set(session, remoteSession(session, cfg.opencode.directory));
+      await connect(cfg).prompt(session, `msg_${session}`, 'Synthetic direct input');
+      peer.finish(session, `msg_${session}`, 'STATUS: needs_you | Durable direct report', 'succeeded', undefined, PEER_AT + 1000);
+    }
+    let lost = false;
+    peer.state.hook = (call) => {
+      if (!lost && call.method === 'PATCH' && call.url.pathname === '/api/session/ses_rename_first') {
+        lost = true; peer.state.loseRename = true;
+      }
+      return false;
+    };
+    id = jobs.enqueue(db, 'sync', 'pending-report-isolation', {});
+    await chat.sync(cfg, db, claimed(db, cfg));
+    expect(row(db, 'ticket', later).report).toBe('needs_you');
+    expect(row(db, 'ticket', first).report).toBeNull();
+    const payload = JSON.parse(String(row(db, 'job', id).payload));
+    expect(payload.pending_reports[String(first)]).toMatchObject({ ticket: first, session_id: 'ses_rename_first' });
+    expect(payload.pending_reports).not.toHaveProperty(String(later));
+    expect(payload.sync_errors[String(first)]).toMatchObject({ error_class: 'dependency', attempts: 0 });
+    if (storage === 'legacy') {
+      payload.pending_report = payload.pending_reports[String(first)];
+      delete payload.pending_reports;
+      db.prepare('UPDATE job SET payload=? WHERE id=?').run(JSON.stringify(payload), id);
+    }
+    next = String(row(db, 'job', id).next_at);
+  }
+  peer.state.hook = (call, response) => {
+    if (call.url.pathname === '/api/session/ses_rename_first/message') { peer.json(response, {}, 503); return true; }
+    return false;
+  };
+  vi.setSystemTime(new Date(next!));
+  using reopened = openDb(path);
+  await chat.sync(cfg, reopened, claimed(reopened, cfg, 'sync-reopened'));
+  expect(row(reopened, 'ticket', first!)).toMatchObject({ report: 'needs_you', report_at: '2026-11-06T00:00:01.000000Z' });
+  expect(row(reopened, 'ticket', later!).report).toBe('needs_you');
+  const payload = JSON.parse(String(row(reopened, 'job', id!).payload));
+  expect(payload).not.toHaveProperty('pending_report');
+  expect(payload.pending_reports).not.toHaveProperty(String(first!));
+  expect(payload.sync_errors).not.toHaveProperty(String(first!));
+  expect(reopened.prepare('SELECT state FROM health WHERE dependency=?').get(`jobs:sync:ticket:${first!}`)!.state).toBe('ok');
+  expect(peer.calls.filter((call) => call.method === 'PATCH' && call.url.pathname === '/api/session/ses_rename_first')).toHaveLength(1);
+  expect(peer.calls.filter((call) => call.url.pathname.endsWith('/prompt'))).toHaveLength(2);
+});
+
+test('I2 one ticket Retry-After floor does not delay healthy ticket cadence or heal the failed ticket', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  using db = openDb(path);
+  const failed = proposed(db, { lifecycle: 'active', approved_at: AT, session_id: 'ses_retry_floor' });
+  const healthy = proposed(db, { lifecycle: 'active', approved_at: AT, session_id: 'ses_healthy' });
+  for (const session of ['ses_retry_floor', 'ses_healthy']) peer.sessions.set(session, remoteSession(session, cfg.opencode.directory));
+  await connect(cfg).prompt('ses_healthy', 'msg_healthy', 'Synthetic direct input');
+  peer.finish('ses_healthy', 'msg_healthy', 'STATUS: working | First healthy report', 'succeeded', undefined, PEER_AT + 1);
+  peer.state.hook = (call, response) => {
+    if (call.url.pathname === '/api/session/ses_retry_floor/message') {
+      response.writeHead(503, { 'content-type': 'application/json', 'retry-after': '3600' }); response.end('{}'); return true;
+    }
+    return false;
+  };
+  const id = jobs.enqueue(db, 'sync', 'isolated-retry-floor', {});
+  await chat.sync(cfg, db, claimed(db, cfg));
+  const payload = JSON.parse(String(row(db, 'job', id).payload));
+  expect(payload).toHaveProperty(`sync_errors.${failed}`);
+  const error = payload.sync_errors[String(failed)];
+  expect(error).toMatchObject({ error_class: 'dependency', attempts: 0, failures: 1 });
+  expect(Date.parse(error.next_at) - Date.now()).toBe(3600000);
+  expect(Date.parse(String(row(db, 'job', id).next_at)) - Date.now()).toBe(300000);
+  expect(row(db, 'ticket', healthy).report_line).toBe('First healthy report');
+  const failedReads = peer.calls.filter((call) => call.url.pathname === '/api/session/ses_retry_floor/message').length;
+  vi.setSystemTime(new Date(String(row(db, 'job', id).next_at)));
+  await connect(cfg).prompt('ses_healthy', 'msg_healthy_next', 'Later healthy input');
+  peer.finish('ses_healthy', 'msg_healthy_next', 'STATUS: waiting_them | Later healthy report', 'succeeded', undefined, Date.now() + 1);
+  await chat.sync(cfg, db, claimed(db, cfg));
+  expect(peer.calls.filter((call) => call.url.pathname === '/api/session/ses_retry_floor/message')).toHaveLength(failedReads);
+  expect(row(db, 'ticket', healthy).report_line).toBe('Later healthy report');
+  expect(JSON.parse(String(row(db, 'job', id).payload)).sync_errors[String(failed)]).toEqual(error);
+  expect(db.prepare('SELECT state FROM health WHERE dependency=?').get(`jobs:sync:ticket:${failed}`)!.state).toBe('retrying');
+  expect(row(db, 'job', id)).toMatchObject({ state: 'queued', attempts: 0, error_class: 'dependency' });
+});
+
+test('I2 unknown thrown values remain classified ticket failures without healing or starving later work', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  using db = openDb(path);
+  const failed = proposed(db, { lifecycle: 'active', approved_at: AT, session_id: 'ses_unknown' });
+  const healthy = proposed(db, { lifecycle: 'active', approved_at: AT, session_id: 'ses_after_unknown' });
+  peer.sessions.set('ses_after_unknown', remoteSession('ses_after_unknown', cfg.opencode.directory));
+  await connect(cfg).prompt('ses_after_unknown', 'msg_after_unknown', 'Direct test input');
+  peer.finish('ses_after_unknown', 'msg_after_unknown', 'STATUS: needs_you | Later ticket still served', 'succeeded', undefined, PEER_AT + 1);
+  const api = connect(cfg);
+  const injected = { ...api, async latestReport(session: string, signal?: AbortSignal) {
+    if (session === 'ses_unknown') throw null;
+    return api.latestReport(session, signal);
+  } };
+  const id = jobs.enqueue(db, 'sync', 'unknown-ticket-error', {});
+  await chat.sync(cfg, db, claimed(db, cfg), { peer: injected });
+  const errors = JSON.parse(String(row(db, 'job', id).payload)).sync_errors;
+  expect(errors).toHaveProperty(String(failed));
+  expect(errors[String(failed)]).toMatchObject({ error_class: 'unknown', attempts: 1, failures: 1 });
+  expect(row(db, 'ticket', healthy).report).toBe('needs_you');
+  expect(db.prepare('SELECT state FROM health WHERE dependency=?').get(`jobs:sync:ticket:${failed}`)!.state).toBe('retrying');
+});

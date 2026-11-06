@@ -139,14 +139,29 @@ function interval(messages: readonly SessionMessageInfo[], target?: string): Tur
 
 const settingsSchema = z.looseObject({ desktopLocalPort: z.number().int().min(1).max(65535), desktopUiPassword: z.string().default('') });
 
+function settingsError(read: boolean): Error {
+  return Object.assign(new Error(read ? 'OpenChamber settings could not be read (OC_SETTINGS_READ)' : 'OpenChamber settings are invalid (OC_SETTINGS_INVALID)'),
+    { status: 400, type: read ? 'opencode.settings-read' : 'opencode.settings-invalid', code: read ? 'OC_SETTINGS_READ' : 'OC_SETTINGS_INVALID' });
+}
+
+function loadSettings(options: TransportOptions) {
+  let input: unknown;
+  try {
+    const path = options.settingsPath ?? join(homedir(), '.config', 'openchamber', 'settings.json');
+    input = options.readSettings ? options.readSettings(path) : readFileSync(path, 'utf8');
+  } catch { throw settingsError(true); }
+  try {
+    return settingsSchema.parse(options.readSettings ? input : JSON.parse(input as string));
+  } catch { throw settingsError(false); }
+}
+
 // Constructing the client starts no service, opens no connection and subscribes to no events.
 export function connect(cfg: Config, options: TransportOptions = {}) {
   let url = cfg.opencode.url;
   let password = options.password ?? process.env.INBOX_OPENCODE_PASSWORD ?? '';
   const openchamber = !url;
   if (openchamber) {
-    const path = options.settingsPath ?? join(homedir(), '.config', 'openchamber', 'settings.json');
-    const settings = settingsSchema.parse(options.readSettings ? options.readSettings(path) : JSON.parse(readFileSync(path, 'utf8')));
+    const settings = loadSettings(options);
     url = `http://127.0.0.1:${settings.desktopLocalPort}`;
     password = settings.desktopUiPassword;
   }

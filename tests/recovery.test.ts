@@ -6,6 +6,7 @@ import { close, merge, route } from '../src/dispatcher/tickets.ts';
 import { connect } from '../src/dispatcher/opencode.ts';
 import { AT, addBatch, chatFixture, claimed, proposed, row } from './chat-support.ts';
 import { remoteSession, scriptedPeer, PEER_AT } from './opencode-support.ts';
+import { snapshot } from './support.ts';
 
 beforeEach(() => { vi.stubEnv('INBOX_OPENCODE_PASSWORD', ''); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(AT)); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
@@ -534,4 +535,279 @@ test('recovery honors configured backoff jitter instead of using a fixed midpoin
     await chat.collect(cfg, db, claimed(db, cfg));
     expect(db.prepare("SELECT next_at FROM job WHERE kind='forward' AND state='queued'").get()!.next_at).toBe('2026-11-06T00:00:08.000000Z');
   } finally { random.mockRestore(); }
+});
+
+function idleArchive(peer: Awaited<ReturnType<typeof scriptedPeer>>, global = false) {
+  const files = chatFixture(peer.url);
+  const db = openDb(files.path);
+  const old = '2026-11-03T00:00:00.000000Z';
+  const ticket = proposed(db, { lifecycle: 'active', approved_at: old, session_id: 'ses_archive', last_activity_at: old,
+    report: 'waiting_them', report_line: 'Original report', report_at: old, report_message_id: 'asst_original' });
+  const session = remoteSession('ses_archive', files.cfg.opencode.directory);
+  session.time.created = Date.parse(old);
+  peer.sessions.set(session.id, session);
+  const id = jobs.enqueue(db, 'archive', 'durable-archive', {}, global ? undefined : ticket);
+  return { ...files, db, ticket, session, id };
+}
+
+test.each(['running', 'local-input', 'recent-completion'] as const)('I1 reconciles accepted archive before %s exclusions after failed readback and DB reopen', async (work) => {
+  await using peer = await scriptedPeer();
+  const f = idleArchive(peer);
+  let next: string;
+  let before: ReturnType<typeof row>;
+  {
+    using db = f.db;
+    let accepted = false;
+    let failedReadback = false;
+    peer.state.hook = (call, response) => {
+      if (call.method === 'PATCH' && call.body.archived === true) {
+        accepted = true;
+        if (work === 'running') f.session.time.busy = PEER_AT + 1;
+        if (work === 'local-input') {
+          const batch = addBatch(db, f.ticket, { text: 'New source input during archive' });
+          jobs.enqueue(db, 'forward', 'new-during-archive', { batch_ids: [batch] }, f.ticket);
+        }
+        if (work === 'recent-completion') {
+          peer.messages.set(f.session.id, [
+            { id: 'msg_recent', type: 'user', time: { created: PEER_AT }, text: 'New direct work' },
+            { id: 'asst_recent', type: 'assistant', agent: 'build', model: { id: 'synthetic', providerID: 'synthetic' },
+              time: { created: PEER_AT, completed: PEER_AT + 1 }, content: [{ type: 'text', text: 'STATUS: needs_you | New direct result' }] },
+            { id: 'idle_recent', type: 'idle', time: { created: PEER_AT + 1 }, outcome: 'succeeded' },
+          ]);
+          f.session.time.idle = PEER_AT + 1;
+        }
+      }
+      if (accepted && !failedReadback && call.method === 'GET' && call.url.pathname === '/api/session/ses_archive') {
+        failedReadback = true;
+        peer.json(response, {}, 503); return true;
+      }
+      return false;
+    };
+    await chat.archive(f.cfg, db, claimed(db, f.cfg));
+    expect(row(db, 'job', f.id)).toMatchObject({ state: 'queued', attempts: 0, error_class: 'dependency' });
+    expect(JSON.parse(String(row(db, 'job', f.id).payload))).toHaveProperty('pending_archive');
+    expect(f.session.time.archived).toBeDefined();
+    next = String(row(db, 'job', f.id).next_at);
+    before = { ...row(db, 'ticket', f.ticket) };
+  }
+  vi.setSystemTime(new Date(next!));
+  using reopened = openDb(f.path);
+  const retry = claimed(reopened, f.cfg, 'archive-reopened');
+  expect(retry.id).toBe(f.id);
+  await chat.archive(f.cfg, reopened, retry);
+  expect(f.session.time.archived).toBeUndefined();
+  expect(row(reopened, 'job', f.id).state).toBe('done');
+  expect(JSON.parse(String(row(reopened, 'job', f.id).payload))).not.toHaveProperty('pending_archive');
+  expect(row(reopened, 'ticket', f.ticket)).toEqual(before!);
+  expect(peer.calls.filter((call) => call.method === 'PATCH').map((call) => call.body.archived)).toEqual([true, false]);
+  expect(peer.calls.filter((call) => call.url.pathname.endsWith('/prompt'))).toHaveLength(0);
+  expect(reopened.prepare('SELECT COUNT(*) AS n FROM turn').get()!.n).toBe(0);
+});
+
+test.each(['rejected', 'lost-response', 'failed-readback'] as const)('I1 persists compensation before I/O and retries %s across DB reopen without another archive', async (fault) => {
+  await using peer = await scriptedPeer();
+  const f = idleArchive(peer, true);
+  let next: string;
+  let firstCompensation = true;
+  let rejectReadback = false;
+  const observedTargets: unknown[] = [];
+  {
+    using db = f.db;
+    peer.state.hook = (call, response) => {
+      if (call.method === 'PATCH' && call.body.archived === true) f.session.time.busy = PEER_AT + 1;
+      if (call.method === 'PATCH' && call.body.archived === false) {
+        using observer = openDb(f.path);
+        observedTargets.push(JSON.parse(String(row(observer, 'job', f.id).payload)).pending_archive?.archived);
+        if (firstCompensation) {
+          expect(db.isTransaction).toBe(false);
+          firstCompensation = false;
+          if (fault === 'rejected') { peer.json(response, {}, 503); return true; }
+          if (fault === 'lost-response') peer.state.loseArchive = true;
+          if (fault === 'failed-readback') rejectReadback = true;
+        }
+      } else if (rejectReadback && call.method === 'GET' && call.url.pathname === '/api/session/ses_archive') {
+        rejectReadback = false;
+        peer.json(response, {}, 503); return true;
+      }
+      return false;
+    };
+    await chat.archive(f.cfg, db, claimed(db, f.cfg));
+    expect(row(db, 'job', f.id)).toMatchObject({ state: 'queued', attempts: 0, error_class: 'dependency' });
+    expect(JSON.parse(String(row(db, 'job', f.id).payload)).pending_archive).toMatchObject({ archived: false });
+    expect(observedTargets).toEqual([false]);
+    next = String(row(db, 'job', f.id).next_at);
+  }
+  // The new execution has finished, but its interrupted compensation still has to settle first.
+  f.session.time.idle = PEER_AT + 2;
+  vi.setSystemTime(new Date(next!));
+  using reopened = openDb(f.path);
+  await chat.archive(f.cfg, reopened, claimed(reopened, f.cfg, 'compensation-reopened'));
+  expect(f.session.time.archived).toBeUndefined();
+  expect(row(reopened, 'ticket', f.ticket)).toMatchObject({ archived_at: null, report: 'waiting_them', report_line: 'Original report' });
+  expect(JSON.parse(String(row(reopened, 'job', f.id).payload))).not.toHaveProperty('pending_archive');
+  expect(row(reopened, 'job', f.id).state).toBe('queued');
+  expect(Date.parse(String(row(reopened, 'job', f.id).next_at)) - Date.now()).toBe(f.cfg.jobs.sync_seconds * 1000);
+  expect(peer.calls.filter((call) => call.method === 'PATCH').map((call) => call.body.archived))
+    .toEqual(fault === 'rejected' ? [true, false, false] : [true, false]);
+  expect(peer.calls.filter((call) => call.url.pathname.endsWith('/prompt'))).toHaveLength(0);
+});
+
+test.each(['archive', 'compensation'] as const)('I1 retains intent through %s marker commit failure and reconciles under a new lease', async (marker) => {
+  await using peer = await scriptedPeer();
+  const f = idleArchive(peer);
+  let next: string;
+  {
+    using db = f.db;
+    if (marker === 'compensation') peer.state.hook = (call) => {
+      if (call.method === 'PATCH' && call.body.archived === true) f.session.time.busy = PEER_AT + 1;
+      return false;
+    };
+    db.exec(`CREATE TRIGGER reject_archive_marker BEFORE UPDATE OF archived_at ON ticket
+      WHEN NEW.archived_at IS ${marker === 'archive' ? 'NOT ' : ''}NULL BEGIN SELECT RAISE(ABORT,'synthetic archive marker failure'); END`);
+    await chat.archive(f.cfg, db, claimed(db, f.cfg));
+    expect(row(db, 'job', f.id).state).toBe('queued');
+    expect(JSON.parse(String(row(db, 'job', f.id).payload))).toHaveProperty('pending_archive');
+    next = String(row(db, 'job', f.id).next_at);
+  }
+  f.session.time.busy = PEER_AT + 2;
+  vi.setSystemTime(new Date(next!));
+  using reopened = openDb(f.path);
+  reopened.exec('DROP TRIGGER reject_archive_marker');
+  await chat.archive(f.cfg, reopened, claimed(reopened, f.cfg, 'marker-reopened'));
+  expect(f.session.time.archived).toBeUndefined();
+  expect(row(reopened, 'job', f.id).state).toBe('done');
+  expect(JSON.parse(String(row(reopened, 'job', f.id).payload))).not.toHaveProperty('pending_archive');
+  expect(row(reopened, 'ticket', f.ticket)).toMatchObject({ archived_at: null, report: 'waiting_them', report_line: 'Original report' });
+  expect(peer.calls.filter((call) => call.method === 'PATCH').map((call) => call.body.archived)).toEqual([true, false]);
+});
+
+test('I1 new lease settles accepted archive while stale response cannot call or write after handoff', async () => {
+  await using peer = await scriptedPeer();
+  const f = idleArchive(peer);
+  using db = f.db;
+  using reopened = openDb(f.path);
+  let admitted!: () => void;
+  let release!: () => void;
+  const accepted = new Promise<void>((resolve) => { admitted = resolve; });
+  const responseGate = new Promise<void>((resolve) => { release = resolve; });
+  peer.state.hook = async (call, response) => {
+    if (call.method !== 'PATCH' || call.body.archived !== true) return false;
+    f.session.time.archived = PEER_AT;
+    f.session.time.busy = PEER_AT + 1;
+    admitted();
+    await responseGate;
+    response.writeHead(204); response.end(); return true;
+  };
+  const stale = claimed(db, f.cfg, 'old-archive-owner');
+  const oldRequest = chat.archive(f.cfg, db, stale);
+  await accepted;
+  vi.setSystemTime(new Date(Date.parse(stale.lease_until!) + 1));
+  const fresh = claimed(reopened, f.cfg, 'new-archive-owner');
+  expect(fresh.id).toBe(stale.id);
+  expect(fresh.lease_token).not.toBe(stale.lease_token);
+  let before!: ReturnType<typeof snapshot>;
+  let calls = 0;
+  try {
+    await chat.archive(f.cfg, reopened, fresh);
+    before = snapshot(reopened, ['ticket', 'ticket_conversation', 'ticket_ref', 'timeline', 'job', 'turn', 'batch', 'health']);
+    calls = peer.calls.length;
+  } finally { release(); await oldRequest; }
+  expect(f.session.time.archived).toBeUndefined();
+  expect(row(reopened, 'job', f.id).state).toBe('done');
+  expect(peer.calls).toHaveLength(calls);
+  expect(snapshot(reopened, ['ticket', 'ticket_conversation', 'ticket_ref', 'timeline', 'job', 'turn', 'batch', 'health'])).toEqual(before);
+  await chat.archive(f.cfg, db, stale);
+  expect(peer.calls).toHaveLength(calls);
+  expect(snapshot(reopened, ['ticket', 'ticket_conversation', 'ticket_ref', 'timeline', 'job', 'turn', 'batch', 'health'])).toEqual(before);
+});
+
+test.each(['local-input', 'remote-running'] as const)('I1 known %s settles compensation while unrelated inbox/history reads fail', async (work) => {
+  await using peer = await scriptedPeer();
+  const f = idleArchive(peer);
+  using db = f.db;
+  let accepted = false;
+  let failedReadback = false;
+  peer.state.hook = (call, response) => {
+    if (call.method === 'PATCH' && call.body.archived === true) {
+      accepted = true;
+      if (work === 'remote-running') f.session.time.busy = PEER_AT + 1;
+      else {
+        const batch = addBatch(db, f.ticket);
+        jobs.enqueue(db, 'forward', 'pending-compensation-input', { batch_ids: [batch] }, f.ticket);
+      }
+    }
+    if (accepted && !failedReadback && call.method === 'GET' && call.url.pathname === '/api/session/ses_archive') {
+      failedReadback = true;
+      peer.json(response, {}, 503); return true;
+    }
+    return false;
+  };
+  await chat.archive(f.cfg, db, claimed(db, f.cfg));
+  peer.state.historyStatus = 503;
+  peer.state.inboxStatus = 503;
+  vi.setSystemTime(new Date(String(row(db, 'job', f.id).next_at)));
+  await chat.archive(f.cfg, db, claimed(db, f.cfg, 'known-work-compensation'));
+  expect(f.session.time.archived).toBeUndefined();
+  expect(row(db, 'job', f.id).state).toBe('done');
+  expect(JSON.parse(String(row(db, 'job', f.id).payload))).not.toHaveProperty('pending_archive');
+  expect(peer.calls.filter((call) => call.method === 'PATCH').map((call) => call.body.archived)).toEqual([true, false]);
+});
+
+test('M1 unresolved merge rejects unchanged, resolved merge protects history, and obsolete collector is inert', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  using db = openDb(path);
+  const source = proposed(db);
+  const target = proposed(db, { title: 'Unchanged merge target' });
+  addBatch(db, source);
+  chat.approve(cfg, db, source, '');
+  await chat.startChat(cfg, db, claimed(db, cfg));
+  const input = db.prepare('SELECT * FROM turn').get()!;
+  const retained = claimed(db, cfg);
+  expect(retained.kind).toBe('collect');
+  const tables = ['ticket', 'ticket_conversation', 'ticket_ref', 'timeline', 'job', 'turn', 'batch', 'message', 'conversation', 'health'];
+  const unresolved = snapshot(db, tables);
+  expect(() => merge(db, source, target)).toThrow(/resolve|unresolved|admitted/);
+  expect(snapshot(db, tables)).toEqual(unresolved);
+  peer.finish(String(input.session_id), String(input.prompt_id), 'STATUS: waiting_them | Original request settled', 'succeeded', undefined, PEER_AT + 1000);
+  await chat.collect(cfg, db, retained);
+  expect(row(db, 'job', retained.id)).toMatchObject({ state: 'done', lease_token: null, reserved_at: null });
+  expect(db.prepare("SELECT COUNT(*) AS n FROM job WHERE ticket=? AND (state IN ('queued','running','parked') OR reserved_at IS NOT NULL AND turn_id IS NULL)").get(source)!.n).toBe(0);
+  expect(db.prepare("SELECT COUNT(*) AS n FROM turn WHERE ticket=? AND (state IN ('admitted','running') OR state='prepared' AND reserved_at IS NOT NULL)").get(source)!.n).toBe(0);
+  vi.setSystemTime(new Date('2026-11-06T00:01:00Z'));
+  expect(merge(db, source, target)).toBe(target);
+  const protectedSource = () => db.prepare(`SELECT merged_into,lifecycle,closed_at,report,report_line,report_at,report_message_id,report_turn,
+    last_activity_at,approved_at,approval_note,session_id FROM ticket WHERE id=?`).get(source);
+  const merged = protectedSource();
+  const targetAfterMerge = { ...row(db, 'ticket', target) };
+  const refsAfterMerge = db.prepare('SELECT * FROM ticket_ref ORDER BY id').all();
+  vi.setSystemTime(new Date('2026-11-06T00:02:00Z'));
+  await connect(cfg).prompt(String(input.session_id), 'msg_after_merge', 'Direct historical session input');
+  peer.finish(String(input.session_id), 'msg_after_merge', 'RCA-606\nSTATUS: needs_you | Newer output cannot reopen merged source', 'succeeded', undefined, Date.now() + 1);
+  const beforeSyncCalls = peer.calls.length;
+  jobs.enqueue(db, 'sync', 'sync-merged-source-history', {});
+  await chat.sync(cfg, db, claimed(db, cfg));
+  expect(protectedSource()).toEqual(merged);
+  expect(row(db, 'ticket', target)).toEqual(targetAfterMerge);
+  expect(db.prepare('SELECT * FROM ticket_ref ORDER BY id').all()).toEqual(refsAfterMerge);
+  expect(peer.calls.slice(beforeSyncCalls).filter((call) => call.url.pathname.endsWith('/prompt'))).toHaveLength(0);
+  expect(db.prepare("SELECT COUNT(*) AS n FROM turn WHERE kind='recovery'").get()!.n).toBe(0);
+  expect(db.prepare('SELECT COUNT(*) AS n FROM turn').get()!.n).toBe(1);
+  const beforeReplay = snapshot(db, tables);
+  const calls = peer.calls.length;
+  await chat.collect(cfg, db, retained);
+  expect(peer.calls).toHaveLength(calls);
+  expect(snapshot(db, tables)).toEqual(beforeReplay);
+});
+
+test('I1 a rejected observation with no error value cannot prove idle or create an archive', async () => {
+  await using peer = await scriptedPeer();
+  const f = idleArchive(peer);
+  using db = f.db;
+  const api = connect(f.cfg);
+  await chat.archive(f.cfg, db, claimed(db, f.cfg), { peer: { ...api, async latestReport() { throw undefined; } } });
+  expect(peer.calls.filter((call) => call.method === 'PATCH')).toHaveLength(0);
+  expect(row(db, 'job', f.id)).toMatchObject({ state: 'queued', error_class: 'unknown', attempts: 1 });
+  expect(JSON.parse(String(row(db, 'job', f.id).payload))).not.toHaveProperty('pending_archive');
+  expect(f.session.time.archived).toBeUndefined();
 });
