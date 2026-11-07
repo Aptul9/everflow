@@ -93,7 +93,7 @@ test('documented defaults equal the exported config and dependency backoff, with
   expect(JSON.parse(block('Runtime defaults', 'json'))).toEqual({ tickets: cfg.tickets, chats: cfg.chats, web: cfg.web,
     triage: cfg.triage, windows: cfg.windows, jobs: cfg.jobs, start: cfg.start });
   expect(cfg.tickets.enabled).toBe(false); expect(cfg.chats.enabled).toBe(false);
-  expect(cfg.sources).toEqual({ outlook: { enabled: false }, teams: { enabled: false }, teamsrelay: { enabled: false } });
+  expect(cfg.sources).toEqual({ outlook: { enabled: false }, teams: { enabled: false }, teamsrelay: { enabled: false }, gchat: { enabled: false }, gmail: { enabled: false } });
   for (const literal of ['true', '"true"']) {
     fs.writeFileSync(f.config, block('Disabled instance', 'toml').replaceAll('enabled = false', `enabled = ${literal}`));
     expect(compiledLoadConfig(f.config).tickets.enabled).toBe(literal === 'true');
@@ -134,13 +134,14 @@ test('documented source prerequisites construct only artifact Node commands and 
   expect(sources).toContain('`[sources.teams] profile`');
   expect(sources).toContain('`[sources.teamsrelay] host`');
   const entries = [...sources.matchAll(/`(dist\/watchers\/[^`]+\.js)`/g)].map((match) => match[1]!);
-  expect(entries).toHaveLength(3);
+  expect(entries).toHaveLength(5);
   expect(() => runtime.validateRuntimeConfig({ ...cfg, sources: { teams: { enabled: true } } }, f.receipt)).toThrow('source.profile-required');
   expect(() => runtime.validateRuntimeConfig({ ...cfg, sources: { teamsrelay: { enabled: true } } }, f.receipt)).toThrow('source.relay-options-required');
   using db = openDb(f.path);
   for (const [source, options] of [
     ['outlook', {}], ['teams', { profile: join(f.root, 'synthetic profile never read') }],
     ['teamsrelay', { host: 'synthetic.invalid', data_dir: '/synthetic saved relay', owner: 'synthetic@example.invalid' }],
+    ['gchat', { account: 'synthetic@example.invalid', self_id: 'synthetic-self' }], ['gmail', { account: 'synthetic@example.invalid' }],
   ] as const) {
     const command = runtime.sourceCommand({ ...cfg, sources: { [source]: { enabled: true, ...options } } }, db, source, f.receipt);
     expect(command.executable).toBe(process.execPath);

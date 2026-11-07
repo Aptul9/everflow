@@ -35,7 +35,7 @@ export function ticketDetail(db: DatabaseSync, id: number): TicketDetail {
 }
 
 function health(db: DatabaseSync, cfg: Config): Health[] {
-  const saved = db.prepare('SELECT dependency,state,since,last_ok,last_error FROM health ORDER BY dependency').all();
+  const saved = db.prepare('SELECT dependency,state,since,last_ok,last_error,detail FROM health ORDER BY dependency').all();
   const result = new Map<string, Health>();
   const sources = new Set([...Object.keys(cfg.windows), ...db.prepare('SELECT DISTINCT source FROM conversation ORDER BY source').all().map((row) => String(row.source))]);
   const scope = (name: string): Health['scope'] => name === 'daemon' ? 'daemon' : name.startsWith('provider:') ? 'provider'
@@ -43,13 +43,20 @@ function health(db: DatabaseSync, cfg: Config): Health[] {
   for (const dependency of ['daemon', 'opencode', ...sources, ...cfg.triage.providers.map((id) => `provider:${id}`)]) {
     result.set(dependency, { dependency, scope: scope(dependency), state: 'unknown', since: null, last_ok: null, last_error: null });
   }
-  for (const row of saved) result.set(String(row.dependency), { dependency: String(row.dependency), scope: scope(String(row.dependency)),
-    state: row.state as Health['state'], since: row.since as string, last_ok: row.last_ok as string | null, last_error: row.last_error as string | null });
+  for (const row of saved) {
+    const detail = JSON.parse(String(row.detail ?? '{}')) as Record<string, unknown>;
+    const coverage = detail.coverage === 'recent-topics' || detail.coverage === 'saved-history-replay' ? detail.coverage : undefined;
+    result.set(String(row.dependency), { dependency: String(row.dependency), scope: scope(String(row.dependency)),
+      state: row.state as Health['state'], since: row.since as string, last_ok: row.last_ok as string | null, last_error: row.last_error as string | null,
+      ...(coverage ? { coverage } : {}), ...(typeof detail.observed_at === 'string' ? { observed_at: detail.observed_at } : {}) });
+  }
   for (const account of db.prepare(`SELECT source,account FROM conversation UNION SELECT source,account FROM cursor ORDER BY source,account`).all()) {
     const dependency = `${account.source}:${account.account}`;
     const checkpoint = db.prepare('SELECT since FROM cursor WHERE source=? AND account=?').get(account.source!, account.account!);
     const row = result.get(dependency);
+    const source = result.get(String(account.source));
     result.set(dependency, { ...(row ?? { dependency, scope: 'account', state: 'unknown', since: null, last_ok: null, last_error: null }),
+      ...(source?.coverage ? { coverage: source.coverage } : {}),
       checkpoint: checkpoint ? String(checkpoint.since) : null });
   }
   if (!cfg.tickets.enabled) result.set('tickets', { dependency: 'tickets', scope: 'jobs', state: 'disabled', since: null, last_ok: null, last_error: null });

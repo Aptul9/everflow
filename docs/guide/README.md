@@ -1,37 +1,35 @@
-# Inbox dispatcher: from message to ticket and chat
+# Workdesk: from message to ticket and chat
 
-How the inbox dispatcher collects mail and chat messages, proposes tickets on a local page, and runs an approved ticket in an OpenChamber chat.
+Reader guide for source collection, local ticket proposals and approved OpenChamber work.
 
-- `inbox-dispatcher.docx`: the document for reading.
-- `inbox-dispatcher.md`: the same text in Markdown, and the source of the Word file.
-- `build.py`: builds the Word file from the Markdown.
-- `diagrams/`: the pictures and their sources.
+- `workdesk.md`: document source.
+- `workdesk.docx`: generated Word document.
+- `build.py`: existing Word generator, renamed inputs and header.
+- `diagrams/`: typed JSON sources and generated HTML/PNG diagrams.
 
-The text is read on 2026-11-06 from the branch `feat/triage-history` at `ff8373a`, which adds the earlier messages sent to triage on top of `feat/tickets-v2` at `387d402`, and from the instance folder `%LOCALAPPDATA%\inbox-dispatcher-v2`: its `config.toml` and its four `.ps1` scripts. The database, its sidecars, the log and the relay token are left out on purpose. Client names, accounts and hosts are left out of the text and the pictures. The page is not described in detail, because its layout is being redesigned on `feat/ticket-page-redesign`.
+Guide updated 2026-11-07 from current TypeScript source. Covers Outlook, Teams, relay, Google Chat through gweb and Gmail through gws. Existing instance paths remain unchanged. No database, sidecar, log, relay token or source credential is included in the guide build. Account and client names remain outside the document and diagrams.
 
-## Building the Word file
+## Generate diagrams
 
-```bash
+Run from the checkout. The architecture groups the two mail watchers and the two direct chat watchers into paired nodes; each remains a separate runtime source. The sequence follows one Teams message and retains its 120-second quiet window.
+
+```powershell
+node "$env:USERPROFILE/.claude/skills/archify/bin/archify.mjs" deliver architecture docs/guide/diagrams/workdesk-architecture.json docs/guide/diagrams/workdesk-architecture.html --quality showcase --json
+node "$env:USERPROFILE/.claude/skills/archify/bin/archify.mjs" deliver sequence docs/guide/diagrams/workdesk-at-a-glance.sequence.json docs/guide/diagrams/workdesk-at-a-glance.html --quality showcase --json
+```
+
+The HTML files are generated. Edit JSON and regenerate. Diagram PNGs use the same delivered HTML, light theme and `embed=1`, with Chrome headless at 2x scale. Architecture viewport: 1400x880; sequence viewport: 1400x820. Screenshot paths must be absolute. The architecture retains existing diagnosed label positions where routes share a corridor.
+
+## Generate Word
+
+Run from this folder after regenerating the PNGs:
+
+```powershell
 python build.py
 ```
 
-The script is the one of `note/archs/proxy` in the Notarify documentation, with two changes: it reads `inbox-dispatcher.md` instead of the Markdown file named after its folder, and the header carries `inbox-dispatcher` instead of the company name. It needs python-docx, pillow and pywin32, plus Word. The Word file has to be closed while it runs. The document has no Mermaid block: the two pictures and the tables carry the flow.
+Requires python-docx, Pillow, pywin32 and Word. The document must be closed. Word runs hidden to update the real contents field and page numbers. Existing formatting and generator are retained. Application watchers, runtime and tests remain TypeScript; this Python script is documentation tooling only.
 
-## Diagrams
+## Compatibility
 
-`inbox-dispatcher-architecture` shows the watchers, the database and job queue, triage, the page, the chat and the collector. `inbox-dispatcher-at-a-glance` shows one Teams message over time. The JSON files are the sources of the HTML pages and of the PNGs. From `diagrams/` in Git Bash:
-
-```bash
-node ~/.claude/skills/archify/bin/archify.mjs deliver architecture inbox-dispatcher-architecture.json inbox-dispatcher-architecture.html --quality showcase
-"/c/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=2 --window-size=1400,880 --screenshot="$(pwd -W)/inbox-dispatcher-architecture.png" "file:///$(pwd -W)/inbox-dispatcher-architecture.html?embed=1&theme=light"
-```
-
-```bash
-node ~/.claude/skills/archify/bin/archify.mjs deliver sequence inbox-dispatcher-at-a-glance.sequence.json inbox-dispatcher-at-a-glance.html --quality showcase
-node ~/.claude/skills/archify/bin/archify.mjs visual-check inbox-dispatcher-at-a-glance.html --json
-"/c/Program Files/Google/Chrome/Application/chrome.exe" --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=2 --window-size=1400,820 --screenshot="$(pwd -W)/inbox-dispatcher-at-a-glance.png" "file:///$(pwd -W)/inbox-dispatcher-at-a-glance.html?embed=1&theme=light"
-```
-
-The screenshot path has to be absolute, because a relative one fails with an access error. `visual-check` writes its evidence files next to the page, and they can be deleted once it reports a pass.
-
-In the architecture the label of the Teams line has a fixed `labelAt`, because the Outlook and relay lines join it at the left side of SQLite and the default place sits on their shared vertical. The label of the page line has one too, because by default it sits inside the page box.
+Product and document names are Workdesk. Checkout/repository names, `%LOCALAPPDATA%/inbox-dispatcher-v2`, database filenames, named-pipe locks and `INBOX_*` environment variables retain their original values. No instance migration or source activation is part of documentation generation.

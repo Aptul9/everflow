@@ -204,14 +204,14 @@ export function createKernel(input?: NativeBindings) {
     const created = Buffer.alloc(8);
     if (!api.GetProcessTimes!(handle, created, Buffer.alloc(8), Buffer.alloc(8), Buffer.alloc(8))) throw error('native.process-times');
     const name = Buffer.alloc(32768 * 2), length = [32768];
-    if (!api.QueryFullProcessImageNameW!(handle, 0, name, length)) throw error('native.process-image');
+    if (!api.QueryFullProcessImageNameW!(handle, 0, name, length)) throw Object.assign(error('native.process-image'), { created: created.readBigUInt64LE(0).toString() });
     if (!length[0] || length[0] >= 32768) throw new NativeError('native.process-image-limit');
     return { pid, created: created.readBigUInt64LE(0).toString(), image: name.toString('utf16le', 0, length[0] * 2) };
   }
   function checkPid(pid: number): void {
     if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 0xffffffff) throw new NativeError('native.invalid-pid');
   }
-  function matching(identity: ProcessIdentity, access: number, action: (handle: bigint) => boolean, absent: boolean): boolean {
+  function matching(identity: ProcessIdentity, access: number, action: (handle: bigint) => boolean, absent: boolean, exitWait = 0): boolean {
     checkPid(identity.pid);
     if (!/^\d+$/.test(identity.created) || !isAbsolute(identity.image)) throw new NativeError('native.invalid-process-identity');
     const pointer = api.OpenProcess!(access | 0x101000, 0, identity.pid) as bigint | null;
@@ -225,7 +225,12 @@ export function createKernel(input?: NativeBindings) {
       if (waiting(handle, 0)) return absent;
       let actual: ProcessIdentity;
       try { actual = processInfo(handle, identity.pid); }
-      catch (failure) { if (waiting(handle, 0)) return absent; throw failure; }
+      catch (failure) {
+        // A dying process can lose its image before the handle signals. Only wait, never terminate, on that evidence.
+        const sameCreation = failure instanceof NativeError && failure.code === 'native.process-image' && 'created' in failure && failure.created === identity.created;
+        if (waiting(handle, absent && sameCreation ? exitWait : 0)) return absent;
+        throw failure;
+      }
       if (actual.created !== identity.created || windowsPath(actual.image) !== windowsPath(identity.image)) return absent;
       return action(handle);
     } finally { close(handle); }
@@ -294,7 +299,7 @@ export function createKernel(input?: NativeBindings) {
         return basic.readBigUInt64LE(40) === BigInt(parent.pid) && this.running(parent) && !waiting(handle, 0);
       }, false);
     },
-    wait(identity: ProcessIdentity, milliseconds: number): boolean { return matching(identity, 0, (handle) => waiting(handle, milliseconds), true); },
+    wait(identity: ProcessIdentity, milliseconds: number): boolean { return matching(identity, 0, (handle) => waiting(handle, milliseconds), true, milliseconds); },
     terminate(identity: ProcessIdentity): boolean {
       if (identity.pid === process.pid) throw new NativeError('native.self-termination');
       return matching(identity, 1, (handle) => {

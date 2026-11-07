@@ -25,15 +25,17 @@ import type { Source } from '../watchers/source.ts';
 import { inside, plainParents, readBuildReceipt } from '../web/build-artifact.ts';
 import { failureFields } from '../cli.ts';
 
-const sources = ['outlook', 'teams', 'teamsrelay'] as const;
-const entrypoints = { outlook: 'outlook', teams: 'teams', teamsrelay: 'relay' };
+const sources = ['outlook', 'teams', 'teamsrelay', 'gchat', 'gmail'] as const;
+const entrypoints = { outlook: 'outlook', teams: 'teams', teamsrelay: 'relay', gchat: 'gchat', gmail: 'gmail' };
 const sourceSchema = z.looseObject({
   enabled: z.preprocess((value) => value === true, z.boolean()).default(false),
   entrypoint: z.string().min(1).optional(), poll_seconds: z.number().int().positive().max(86400).optional(),
   profile: z.string().min(1).optional(), bootstrap_cache: z.string().min(1).optional(),
   host: z.string().min(1).optional(), data_dir: z.string().min(1).optional(), owner: z.string().min(1).optional(),
+  account: z.email().optional(), self_id: z.string().min(1).regex(/^\S+$/).optional(), executable: z.string().min(1).optional(), topics: z.number().int().min(1).max(1000).optional(),
+  browser_refresh: z.preprocess((value) => value === true, z.boolean()).optional(),
 });
-const sourceSettings = z.looseObject({ outlook: sourceSchema.optional(), teams: sourceSchema.optional(), teamsrelay: sourceSchema.optional() });
+const sourceSettings = z.looseObject({ outlook: sourceSchema.optional(), teams: sourceSchema.optional(), teamsrelay: sourceSchema.optional(), gchat: sourceSchema.optional(), gmail: sourceSchema.optional() });
 type Event = { at?: string; source: string; code: string; [key: string]: unknown };
 export type Log = (event: Event) => void;
 const silent: Log = () => {};
@@ -48,6 +50,8 @@ export function validateRuntimeConfig(cfg: Config, buildReceipt: string) {
     if (!value?.enabled) continue;
     if (source === 'teams' && !value.profile) throw new DaemonError('source.profile-required');
     if (source === 'teamsrelay' && (!value.host || !value.data_dir || !value.owner)) throw new DaemonError('source.relay-options-required');
+    if ((source === 'gchat' || source === 'gmail') && !value.account) throw new DaemonError('source.google-account-required');
+    if (source === 'gchat' && !value.self_id) throw new DaemonError('source.google-self-required');
     const entry = resolve(artifact.root, value.entrypoint ?? `dist/watchers/${entrypoints[source]}.js`);
     if (!inside(artifact.root, entry)) throw new DaemonError('source.artifact-entry');
     const staged = artifact.files.find((file) => resolve(artifact.root, file.path).toLowerCase() === entry.toLowerCase());
@@ -75,6 +79,15 @@ export function sourceCommand(cfg: Config, db: DatabaseSync, source: Source, bui
     if (value.bootstrap_cache) args.push('--bootstrap-cache', local(value.bootstrap_cache));
   }
   if (source === 'teamsrelay') args.push('--host', value.host!, '--data-dir', value.data_dir!, '--owner', value.owner!);
+  if (source === 'gchat' || source === 'gmail') {
+    args.push('--account', value.account!);
+    if (value.executable) args.push('--executable', /[\\/]/.test(value.executable) ? local(value.executable) : value.executable);
+    if (source === 'gchat') {
+      args.push('--self-id', value.self_id!);
+      if (value.topics !== undefined) args.push('--topics', String(value.topics));
+      if (value.browser_refresh === true) args.push('--browser-refresh');
+    }
+  }
   return { source, executable: process.execPath, args, cwd: artifact.root,
     environment: { ...childEnvironment(), INBOX_DISPATCHER_SOURCE_OWNER: String(process.pid), INBOX_DISPATCHER_SOURCE_CONFIG: cfg._config_path, INBOX_DISPATCHER_ARTIFACT: buildReceipt } };
 }
@@ -121,6 +134,9 @@ function record(bytes: Buffer, source: string): unknown {
 }
 
 const diagnosticCodes = new Set(`source.unexpected source.invalid-message source.since-required source.poll source.invalid-timestamp source.invalid-account source.option-required
+cli.invalid-options cli.aborted cli.start cli.timeout cli.result-limit cli.failed cli.response-json
+gchat.invalid-options gchat.account-mismatch gchat.response-shape gchat.message-limit
+gmail.account-mismatch gmail.response-shape gmail.mime-shape gmail.mime-encoding gmail.body-unavailable gmail.message-time gmail.pagination-limit gmail.message-limit
 teams.scan-incomplete teams.accounts-missing teams.accounts-incomplete teams.region teams.origin teams.read-endpoint teams.refresh-account teams.http teams.response-json teams.response-limit teams.aborted teams.timeout teams.request-failed teams.response-shape teams.message-time teams.pagination-limit teams.page-shape teams.message-id
 outlook.invalid-wall-clock outlook.collection-limit outlook.reference-cleanup outlook.accounts-unavailable outlook.accounts-incomplete outlook.account-mismatch outlook.read-failed outlook.not-running outlook.duplicate-account outlook.event-read-failed outlook.event-overflow outlook.newmail
 relay.invalid-argument relay.absolute-path relay.invalid-host relay.invalid-limit relay.aborted relay.timeout relay.result-limit relay.ssh-start relay.ssh-failed relay.response-json relay.saved-json relay.saved-shape relay.invalid-slot relay.message-time relay.message-shape relay.app-unavailable relay.no-active-accounts relay.account-limit relay.scan-state relay.scan-incomplete relay.store-unavailable
@@ -398,7 +414,7 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
         try {
           if (entry.active === true) {
             if (!kernel().childOf(expectedChild, watcher)) { log({ source, code: 'source.child-identity', ...failureFields({ reason: 'identity-mismatch' }, stage) }); return; }
-            registry.set(expectedChild.pid, { ...expectedChild, source, kind: 'ssh', owner_pid: watcher.pid, owner_created: watcher.created });
+            registry.set(expectedChild.pid, { ...expectedChild, source, kind: source === 'gchat' || source === 'gmail' ? 'cli' : 'ssh', owner_pid: watcher.pid, owner_created: watcher.created });
           } else if (entry.active === false) {
             const registered = registry.get(expectedChild.pid);
             if (!registered || registered.owner_pid !== watcher.pid || registered.owner_created !== watcher.created || !sameProcess(registered, expectedChild)) return;

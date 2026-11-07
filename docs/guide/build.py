@@ -1,4 +1,4 @@
-"""Build inbox-dispatcher.docx from inbox-dispatcher.md, both next to this script.
+"""Build workdesk.docx from workdesk.md, both next to this script.
 
     python build.py
 
@@ -23,9 +23,9 @@ from docx.shared import Pt, RGBColor, Twips
 from PIL import Image, ImageChops
 
 HERE = Path(__file__).resolve().parent
-SRC = HERE / "inbox-dispatcher.md"
+SRC = HERE / "workdesk.md"
 OUT = SRC.with_suffix(".docx")
-COMPANY = "inbox-dispatcher"
+COMPANY = "Workdesk"
 
 NAVY, ACCENT, GRAY, LIGHT_GRAY = "1F3864", "2E75B6", "555555", "8C8C8C"
 ROW_BLUE, SEPARATOR, WHITE = "E8EDF5", "BFBFBF", "FFFFFF"

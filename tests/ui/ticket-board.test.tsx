@@ -20,6 +20,13 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); vi.resto
 function board(state = uiState()) { return render(<TicketBoard initialState={state} initialEtag={'"initial"'} token="per-start-token" />); }
 function ticket(id = 1, title = 'Reset access') { return screen.getByRole('article', { name: `Ticket #${id}: ${title}` }); }
 
+test('Google Chat recent-topic coverage is explicit on the health page', () => {
+  const state = uiState();
+  state.health.push(Object.assign({ dependency: 'gchat', scope: 'source' as const, state: 'ok' as const, since: null, last_ok: null, last_error: null }, { coverage: 'recent-topics' as const, observed_at: '2026-11-07T10:00:00Z' }));
+  board(state);
+  expect(screen.getByRole('region', { name: 'Health' }).textContent).toContain('Recent topics only');
+});
+
 test('six board columns have counts; health, Problems and persisted feedback remain outside columns', () => {
   board();
   expect(document.querySelectorAll('[data-column]')).toHaveLength(6);

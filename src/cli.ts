@@ -5,10 +5,11 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { plainParents, readBuildReceipt, samePath } from './web/build-artifact.ts';
 
-export const HELP = `Manual inbox dispatcher
-Usage: npm run inbox -- --artifact ABSOLUTE_BUILD_RECEIPT --config ABSOLUTE_CONFIG COMMAND
+export const HELP = `Workdesk
+Usage: npm run workdesk -- --artifact ABSOLUTE_BUILD_RECEIPT --config ABSOLUTE_CONFIG COMMAND
        node ABSOLUTE_STAGED_DIST_CLI --artifact ABSOLUTE_BUILD_RECEIPT --config ABSOLUTE_CONFIG COMMAND
 Artifact may also be supplied explicitly through INBOX_DISPATCHER_ARTIFACT.
+Legacy npm run inbox remains supported.
 No default configuration, checkout artifact or newest-stage fallback exists.
 
 Commands:

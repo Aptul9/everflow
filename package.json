@@ -1,5 +1,5 @@
 {
-  "name": "inbox-dispatcher",
+  "name": "workdesk",
   "version": "2.0.0",
   "private": true,
   "type": "module",
@@ -10,6 +10,7 @@
     "setup": "node scripts/setup.ts",
     "build": "node scripts/build.ts",
     "inbox": "node src/cli.ts",
+    "workdesk": "node src/cli.ts",
     "test": "vitest",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json"
   },

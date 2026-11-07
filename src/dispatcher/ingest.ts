@@ -10,7 +10,7 @@ export class IngestError extends TypeError {
   readonly code = 'source.invalid-record';
 }
 
-const sourceSchema = z.enum(['outlook', 'teams', 'teamsrelay', 'gchat']);
+const sourceSchema = z.enum(['outlook', 'teams', 'teamsrelay', 'gchat', 'gmail']);
 const idSchema = z.string().refine((value) => value.trim().length > 0, 'must be a nonempty string');
 const accountSchema = idSchema.refine((value) => value !== '*', 'must name a receiving account');
 const timestamp = z.string().superRefine((value, context) => {
@@ -31,7 +31,7 @@ const messageSchema = z.looseObject({
 const inventorySchema = z.strictObject({ source: sourceSchema, accounts: accountsSchema });
 const checkpointSchema = z.strictObject({
   source: sourceSchema, checkpoint: timestamp, accounts: accountsSchema.optional(),
-  coverage: z.literal('saved-history-replay').optional(), observed_at: timestamp.optional(),
+  coverage: z.enum(['saved-history-replay', 'recent-topics']).optional(), observed_at: timestamp.optional(),
 });
 
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -95,6 +95,13 @@ export function ingest(db: DatabaseSync, record: unknown): boolean {
       const future = utc(new Date(Date.now() + 5000).toISOString());
       if (checkpoint.checkpoint > future || checkpoint.observed_at && checkpoint.observed_at > future) throw new IngestError('checkpoint or observed_at is in the future');
       const known = db.prepare("SELECT account FROM cursor WHERE source=? AND account<>'*'").all(checkpoint.source).map((row) => String(row.account).toLowerCase());
+      if (checkpoint.source === 'gchat') {
+        if (checkpoint.coverage !== 'recent-topics' || !checkpoint.observed_at || !checkpoint.accounts?.length) throw new IngestError('gchat checkpoint requires recent-topics coverage, accounts and observed_at');
+        if (known.some((account) => !checkpoint.accounts!.includes(account))) throw new IngestError('gchat checkpoint omitted known accounts');
+        if (!db.prepare("SELECT 1 FROM cursor WHERE source=? AND account='*'").get(checkpoint.source)) throw new IngestError('checkpoint requires an initial source cursor');
+        healthOk(db, checkpoint.source, now, { coverage: 'recent-topics', observed_at: checkpoint.observed_at });
+        return true;
+      }
       if (checkpoint.source === 'teamsrelay') {
         if (checkpoint.coverage !== 'saved-history-replay' || !checkpoint.observed_at) throw new IngestError('relay checkpoint requires saved-history-replay coverage and observed_at');
         if (!db.prepare("SELECT 1 FROM cursor WHERE source=? AND account='*'").get(checkpoint.source)) throw new IngestError('checkpoint requires an initial source cursor');

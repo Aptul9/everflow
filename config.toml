@@ -37,6 +37,7 @@ outlook = 300
 teams = 120
 teamsrelay = 120
 gchat = 120
+gmail = 300
 
 [start]
 # Catch-up for a source with no cursor yet.
@@ -83,6 +84,24 @@ enabled = false
 entrypoint = "dist/watchers/relay.js"
 poll_seconds = 30
 # Explicit host, data_dir and owner are required. Saved stores are read-only.
+
+[sources.gchat]
+enabled = false
+entrypoint = "dist/watchers/gchat.js"
+poll_seconds = 30
+account = "antonio.maritato@ext.tecnomat.it"
+self_id = "101370931929254618444"
+topics = 200
+# API renewal first; approved fallback uses saved Chrome profile minimized, without prompts.
+browser_refresh = true
+# Recent-topic coverage only. Source remains disabled until explicitly enabled.
+
+[sources.gmail]
+enabled = false
+entrypoint = "dist/watchers/gmail.js"
+poll_seconds = 60
+account = "antonio.maritato@ext.tecnomat.it"
+# Uses installed gws and existing Gmail authentication. Inbox and Sent, read-only.
 
 # A receiving account names its client; for an account that is no client's (bandpey), the sender
 # domains and the addresses quoted in the text decide. Keywords pick the client's vault notes.
@@ -152,3 +171,8 @@ keywords = ["tesco"]
 [clients.itv]
 domains = ["itv.com"]
 keywords = ["itv"]
+
+[clients.tecnomat]
+accounts = ["antonio.maritato@ext.tecnomat.it"]
+domains = ["tecnomat.it", "ext.tecnomat.it"]
+keywords = ["tecnomat"]

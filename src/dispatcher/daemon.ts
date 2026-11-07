@@ -13,7 +13,7 @@ export { childEnvironment } from '../cli.ts';
 export class DaemonError extends Error {
   constructor(readonly code: string, readonly reason?: string) { super(code); }
 }
-export interface OwnedProcess extends ProcessIdentity { kind: 'watcher' | 'ssh'; source: Source; owner_pid: number; owner_created?: string }
+export interface OwnedProcess extends ProcessIdentity { kind: 'watcher' | 'ssh' | 'cli'; source: Source; owner_pid: number; owner_created?: string }
 export interface DaemonReceipt extends ProcessIdentity {
   version: 1; status: 'starting' | 'ready' | 'stopped'; run_id: string; config_path: string; db_path: string;
   artifact: string; port: number; started_at: string; heartbeat_at: string; argv: string[]; children: OwnedProcess[];
@@ -79,8 +79,8 @@ export function readDaemonReceipt(cfg: Pick<Config, 'db' | '_config_path'>): Dae
   if (!processIdentity(row) || row.version !== 1 || !uuid.test(row.run_id ?? '') || !['starting', 'ready', 'stopped'].includes(row.status ?? '')
     || typeof row.config_path !== 'string' || !samePath(row.config_path, cfg._config_path) || typeof row.db_path !== 'string' || !samePath(row.db_path, paths.db)
     || !Array.isArray(row.children) || row.children.length > 4096 || row.children.some((child: OwnedProcess) => !processIdentity(child)
-      || !['watcher', 'ssh'].includes(child.kind) || !['outlook', 'teams', 'teamsrelay'].includes(child.source) || !Number.isSafeInteger(child.owner_pid))) throw new DaemonError('daemon.receipt-identity');
-  if (row.children.some((child) => child.kind === 'ssh' && (typeof child.owner_created !== 'string' || !/^\d+$/.test(child.owner_created)))) throw new DaemonError('daemon.child-identity-unverified');
+      || !['watcher', 'ssh', 'cli'].includes(child.kind) || !['outlook', 'teams', 'teamsrelay', 'gchat', 'gmail'].includes(child.source) || !Number.isSafeInteger(child.owner_pid))) throw new DaemonError('daemon.receipt-identity');
+  if (row.children.some((child) => child.kind !== 'watcher' && (typeof child.owner_created !== 'string' || !/^\d+$/.test(child.owner_created)))) throw new DaemonError('daemon.child-identity-unverified');
   return row as DaemonReceipt;
 }
 

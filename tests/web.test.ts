@@ -14,7 +14,7 @@ test('serves the dynamic Next root, compiled assets, state and newest-first deta
   const root = await http(server.port, '/');
   expect(root.status).toBe(200);
   expect(root.headers['content-type']).toContain('text/html');
-  expect(root.text).toContain('Inbox dispatcher');
+  expect(root.text).toContain('Workdesk');
   expect(root.text).toContain('Review synthetic access');
   expect(root.text).not.toContain('<script>untrusted()</script>');
   token = rootToken(root.text);
@@ -68,7 +68,7 @@ test.each(['/', '/api/state', '/not-a-route', '/_next/static/not-real.js'])('rej
   for (const host of [`evil.invalid:${server.port}`, 'localhost', `localhost:${server.port + 1}`, `127.0.0.1:${server.port}.evil.invalid`, `LOCALHOST:${server.port}`]) {
     const response = await http(server.port, path, { headers: { host } });
     expect(response.status).toBe(403);
-    expect(response.text).not.toContain('Inbox dispatcher');
+    expect(response.text).not.toContain('Workdesk');
   }
   expect((await http(server.port, path, { noHost: true })).status).toBe(403);
   expect((await http(server.port, path, { headers: { host: [`127.0.0.1:${server.port}`, `localhost:${server.port}`] } })).status).toBe(403);

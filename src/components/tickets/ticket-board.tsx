@@ -101,7 +101,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
         <div className="flex min-w-0 items-center gap-2.5">
           <span aria-hidden="true" className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground shadow-sm"><Inbox className="size-4" /></span>
           <div className="leading-tight">
-            <h1 className="text-[15px] font-semibold tracking-tight">Inbox dispatcher</h1>
+            <h1 className="text-[15px] font-semibold tracking-tight">Workdesk</h1>
             <p className="text-xs text-muted-foreground">Local overview · {state.day}</p>
           </div>
         </div>

@@ -1,24 +1,24 @@
-# Inbox dispatcher: from message to ticket and chat
+# Workdesk: from message to ticket and chat
 
-How the inbox dispatcher collects mail and chat messages, proposes tickets on a local page, and runs an approved ticket in an OpenChamber chat.
+How Workdesk collects mail and chat messages, proposes tickets on a local page, and runs an approved ticket in an OpenChamber chat.
 
 ## Overview
 
-The dispatcher reads Outlook, Teams and the Teams relay, groups new messages by conversation, and asks a small model whether the group needs work. When it does, a ticket proposal appears on a local page. Nothing else happens until Start is pressed on that ticket.
+Workdesk reads Outlook, Teams, the Teams relay, Google Chat through gweb and Gmail through gws. It groups new messages by conversation and asks a small model whether the group needs work. When it does, a ticket proposal appears on a local page. Nothing else happens until Start is pressed on that ticket.
 
 Start opens one OpenChamber chat for the ticket and sends it a brief. The chat works under the normal rules of the assistant, and ends every turn with a STATUS line. The dispatcher reads that line back onto the ticket and into the chat title.
 
-The dispatcher never sends anything. It has no mail or chat send transport, writes no read receipts, sends no auto-replies, changes no read state at the source, and never starts, focuses or closes a desktop app. Outward-facing text is approved inside the chat, never on the page.
+The dispatcher never sends anything. It has no mail or chat send transport, writes no read receipts, sends no auto-replies and changes no read state at the source. It never starts, focuses or closes Outlook, Teams or providers. Google Chat can optionally bootstrap authentication from its saved Chrome profile, minimized and without prompts. Outward-facing text is approved inside the chat, never on the page.
 
 ## How the parts connect
 
-![Inbox dispatcher: the Outlook, Teams and relay watchers write messages to SQLite; triage takes quiet batches from the job queue, reads the Vault and writes proposals; the local page writes Start, Dismiss and Make ticket; SQLite jobs send the brief and new messages to the OpenChamber chat; the collector reads the STATUS line, renames the chat and writes the ticket report](diagrams/inbox-dispatcher-architecture.png)
+![Workdesk: Outlook, Gmail, Teams, Google Chat and relay watchers write messages to SQLite; triage reads the Vault and writes proposals; the local page approves work; jobs send input to OpenChamber; the collector stores the report](diagrams/workdesk-architecture.png)
 
 Each watcher is a child process that prints one JSON line per message. The daemon stores the lines in SQLite, and every later step runs as a job from the queue in the same database. The page reads and writes the same database through its own local server.
 
 ## One message, from arrival to report
 
-![One Teams message over time: Teams watcher, SQLite and job queue, triage, Vault, local page, OpenChamber chat and collector](diagrams/inbox-dispatcher-at-a-glance.png)
+![One Teams message over time: Teams watcher, SQLite and job queue, triage, Vault, local page, OpenChamber chat and collector](diagrams/workdesk-at-a-glance.png)
 
 Time runs from top to bottom in four phases. A message waits without a batch until its conversation has been quiet for the window of its source, then all new messages of that conversation become one batch. The chat phase starts only after Start.
 
@@ -44,11 +44,17 @@ Triage returns one JSON decision: `new`, `update` or `skip`, with title, client,
 | Outlook | COM against a Classic Outlook that is already open. The new Outlook is not supported | Every 60 seconds | Inbox and Sent of every configured account, mail and meeting items, body up to 50,000 characters |
 | Teams | HTTPS GET to the Teams chat service, with the tokens of the signed-in local Teams profile | Every 30 seconds | Every account found in the profile, all chats except system views such as call logs and notifications |
 | Teams relay | `sqlite3 -readonly` over SSH on the relay host, nothing installed there | Every 30 seconds | Saved history of the active relay accounts of one owner, text up to 2,000 characters |
+| Google Chat | Installed gweb, saved web session, HTTP renewal first; optional minimized-profile fallback | Every 30 seconds | Returned spaces and DMs, newest 200 topics, capped replies, own replies and attachment/link metadata |
+| Gmail | Installed gws, existing Gmail authentication, GET only | Every 30 seconds by default, 60 in example config | Inbox and Sent, paginated, MIME body up to 50,000 characters, attachment names and sizes |
 
-- Each scan reads back 2 minutes before the last checkpoint, so a message saved late is not lost.
+- Outlook, Teams and Gmail overlap by 2 minutes. Relay replays its initial floor. Google Chat retains its floor and rereads returned recent topics; it cannot prove complete history.
 - An expired Teams token is refreshed from the same profile. Teams is never restarted, and TLS is always verified.
 - A line a watcher cannot parse goes to quarantine, and that source stops advancing until the line is replayed.
 - A batch made only of own replies starts no triage. It is kept as context for the next chat turn of its ticket.
+- Google sources require an explicit account. Gmail verifies its authenticated email; Google Chat verifies its configured Google user id on each conversation read. A mismatch stops that scan.
+- Google Chat first retries rejected authentication through real HTTP cookie renewal. `browser_refresh = true` explicitly permits saved-profile fallback, minimized and without sign-in prompts. Otherwise Chrome is never opened. Older binaries fail on unsupported flags before session access. Revoked or signed-out sessions remain failures; permanent authentication is not promised.
+- Google Chat caps read replies at 20 and unread replies at 100 per topic. Topic and conversation limits can omit history; health reports `recent-topics`, never full coverage.
+- Neither Google watcher downloads attachment binaries or changes source labels/read state. CLI children have a 60-second deadline, 240 seconds for opted-in Chat bootstrap, and a 16 MiB output ceiling.
 
 ## Timings
 
@@ -56,7 +62,7 @@ All values are the defaults in `src/dispatcher/config.ts`; the running instance 
 
 | What | Value |
 |---|---|
-| Quiet window before a batch | Outlook 300 s, Teams 120 s, relay 120 s |
+| Quiet window before a batch | Outlook and Gmail 300 s; Teams, relay and Google Chat 120 s |
 | Scheduling and collect check | Every 10 s |
 | Page refresh | Every 10 s |
 | Sync of chat reports | Every 300 s |
@@ -88,7 +94,7 @@ All values are the defaults in `src/dispatcher/config.ts`; the running instance 
 
 ## Running it
 
-The instance lives in `%LOCALAPPDATA%\inbox-dispatcher-v2`, built from commit `387d402`. That build predates `ff8373a`, so its triage still sees only the new batch until it is rebuilt.
+The retained instance lives in `%LOCALAPPDATA%\inbox-dispatcher-v2`. Its old build does not gain new sources or the Workdesk name until a new completed artifact is selected. This change does not restart or reconfigure it. Checkout paths, instance paths, databases, locks and existing `INBOX_*` environment variables remain compatible. `npm run workdesk` is the current launcher; `npm run inbox` remains an alias.
 
 | File | Use |
 |---|---|
@@ -96,7 +102,7 @@ The instance lives in `%LOCALAPPDATA%\inbox-dispatcher-v2`, built from commit `3
 | `stop.ps1` | Stops them; waits 15 s, then ends the owned processes. OpenChamber chats keep running |
 | `status.ps1` | Shows whether the daemon runs, its process and port |
 | `open-page.ps1` | Opens `http://127.0.0.1:8789/` |
-| `config.toml` | The instance settings: tickets, chats and all three sources on, 60 minutes of catch-up at first start |
+| `config.toml` | The instance's explicitly selected settings, independent of the repository example |
 
 - There is no autostart, service or scheduled task. After a crash or a reboot the dispatcher stays down until `start.ps1` runs again.
 - OpenChamber has to be running. The dispatcher reads its port and password from `~/.config/openchamber/settings.json`.
@@ -108,7 +114,8 @@ The instance lives in `%LOCALAPPDATA%\inbox-dispatcher-v2`, built from commit `3
 
 - Outlook has not been checked live. Classic Outlook was closed during the live checks, so only the not-running error was seen.
 - Outlook new-mail events are not supported by the COM bridge in use, so Outlook is polled.
-- Google Chat is blocked on OAuth and has no watcher.
+- Google Chat uses gweb's private protocol and limited recent-topic history. Google can change that protocol without notice.
+- Gmail uses the one account authenticated in gws. A large text body exposed only through an external attachment id reports `gmail.body-unavailable`; its bytes are not fetched.
 - One client tenant has no relay account, so the relay does not cover it.
 - A chat creation still in flight when its job lease expires is not modeled. The 30 s request timeout is shorter than the 120 s lease.
 - The `keywords` of each client in `config.toml` are read but not used anywhere.

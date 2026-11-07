@@ -1,6 +1,8 @@
-# inbox-dispatcher
+# Workdesk
 
 TypeScript inbox collection, local ticket proposals and approved OpenChamber chats. SQLite holds the queue and processed markers. Source read state is never changed. The dispatcher has no mail or chat send transport and no channel-based approvals or alerts.
+
+Workdesk was previously named inbox-dispatcher. The checkout and GitHub repository retain their existing names. Existing instance paths, database files, named-pipe locks and `INBOX_*` environment variables remain unchanged. `npm run workdesk -- --help` is the current launcher; `npm run inbox` remains a compatibility alias. No state migration is required for the rename or new sources.
 
 Tickets and chats are disabled by default. Source collection has its own switches. Implementation and synthetic tests do not authorize live migration, source activation or chat activation.
 
@@ -12,7 +14,7 @@ Tickets and chats are disabled by default. Source collection has its own switche
 - For live triage, an explicit read-only knowledge-base root, model and ordered provider ids in `[triage]`. Provider routes come from `triage.provider_config_path` or the existing OpenCode JSONC settings. No provider is installed, started or selected automatically.
 - For approved chats, an already running OpenChamber server and its existing settings. An empty `opencode.url` reads `~/.config/openchamber/settings.json` for `desktopLocalPort` and `desktopUiPassword`. An explicit HTTP(S) `opencode.url` uses that server instead, with optional `INBOX_OPENCODE_PASSWORD`. `opencode.directory` identifies the session directory. A nonempty model uses `provider/model` form.
 
-The dispatcher never starts, focuses, closes or restarts a desktop app. Provider quota endpoints, provider lifecycle helpers and daemon autostart are absent. Source prerequisites are described below.
+The dispatcher never starts, focuses, closes or restarts Outlook, Teams or providers. Google Chat has an explicit opt-in for minimized authentication bootstrap. Provider quota endpoints, provider lifecycle helpers and daemon autostart are absent. Source prerequisites are described below.
 
 ## Build
 
@@ -71,6 +73,12 @@ enabled = false
 enabled = false
 
 [sources.teamsrelay]
+enabled = false
+
+[sources.gchat]
+enabled = false
+
+[sources.gmail]
 enabled = false
 ```
 
@@ -133,7 +141,7 @@ These values come from the exported schema in [config.ts](src/dispatcher/config.
   "chats": { "enabled": false },
   "web": { "port": 8789 },
   "triage": { "providers": [], "model": "", "tool_limit": 8, "timeout_seconds": 120, "min_confidence": 0.75, "history_messages": 40 },
-  "windows": { "outlook": 300, "teams": 120, "teamsrelay": 120 },
+  "windows": { "outlook": 300, "teams": 120, "teamsrelay": 120, "gchat": 120, "gmail": 300 },
   "jobs": {
     "triage_concurrency": 3,
     "turn_concurrency": 4,
@@ -158,7 +166,7 @@ These values come from the exported schema in [config.ts](src/dispatcher/config.
 }
 ```
 
-Quiet windows are 300 seconds for Outlook and 120 seconds for Teams and relay. An own-only batch gets `answered` and starts no turn. Own messages remain timeline and next-turn context. A mixed batch still follows routing and triage rules.
+Quiet windows are 300 seconds for Outlook and Gmail, 120 seconds for Teams, relay and Google Chat. An own-only batch gets `answered` and starts no turn. Own messages remain timeline and next-turn context. A mixed batch still follows routing and triage rules.
 
 There are 3 triage slots and 4 reserved/in-flight chat-turn slots. Jobs hold fenced 120-second leases renewed every 30 seconds. Expired leases return to the queue. Collection, scheduling and daemon heartbeat use 10-second intervals. The page independently refreshes every 10 seconds. Direct-chat report sync runs every 300 seconds.
 
@@ -237,13 +245,35 @@ Inspect `dependency`, `state`, `since`, `last_ok`, `last_error` and account chec
 
 ## Sources
 
-Source flags are independent of tickets/chats and default to disabled. Only enabled sources are launched. Default compiled entrypoints are `dist/watchers/outlook.js`, `dist/watchers/teams.js` and `dist/watchers/relay.js` inside the selected artifact. No external watcher checkout or executable fallback is used.
+Source flags are independent of tickets/chats and default to disabled. Only enabled sources are launched. Default compiled entrypoints are `dist/watchers/outlook.js`, `dist/watchers/teams.js`, `dist/watchers/relay.js`, `dist/watchers/gchat.js` and `dist/watchers/gmail.js` inside the selected artifact. No external watcher checkout is used. Google watchers invoke their installed CLI dependencies, not external watcher code.
 
 - Outlook: [outlook.ts](src/watchers/outlook.ts) attaches to an already running Classic Outlook instance. Modern Outlook is unsupported. Every configured Outlook account's DeliveryStore Inbox and Sent folders are covered, for item classes 43, 53 and 54. A missing account, unreadable folder or failed covered item prevents a complete checkpoint. Scans use UTC DASL date filters, minute resolution and 2 minutes of overlap. OLE wall-clock conversion handles local timezone and DST; ambiguous fall-back times use the first occurrence. Polling defaults to 60 seconds. Native NewMailEx is unavailable with the pinned winax bridge because connection-point disposal is not supported. Polling is authoritative.
 - Teams: [teams.ts](src/watchers/teams.ts) requires an explicit `[sources.teams] profile` identifying an existing signed-in local WebView profile. The reader uses its Cookies snapshot and adjacent Local State under the same Windows user, plus an instance-owned DPAPI cache. The runtime supplies private cache/snapshot paths; an optional bootstrap cache must be an explicitly selected compatible DPAPI cache. Expiring or rejected tokens refresh from the existing profile, never by restarting Teams. Missing profiles, unsupported cookies, expired accounts and certificate failures remain failures. Requests use the system CA store and never disable TLS validation. Cached, discovered and persisted expected accounts all contribute to coverage; the checkpoint requires every known account. Polling defaults to 30 seconds with 2 minutes of overlap. Source read receipts are never written.
 - Relay: [relay.ts](src/watchers/relay.ts) requires `[sources.teamsrelay] host`, absolute remote `data_dir` and `owner`, existing noninteractive SSH access and an already installed remote `sqlite3`. Only that owner's active stores are queried through `sqlite3 -readonly -json`, query-only transactions and checked arguments. Nothing is installed or deployed. The fixed initial floor, including a 2-minute overlap, is replayed on each 30-second default poll and after restart. List-scan time and `observed_at` are health evidence, not message-body completeness, so they do not advance that floor. Main saved message text is capped at 2000 characters; quoted context can be prefixed separately. Only retained saved history is available. Receiving-account/native-id deduplication preserves legacy relay identity.
 
-Google Chat is blocked on OAuth and has no shipped watcher. Tesco is absent from the recorded relay inventory. Neither is claimed as a working live integration. Source feasibility and unit fixtures do not replace later real-source acceptance.
+- Google Chat: [gchat.ts](src/watchers/gchat.ts) uses the installed `gweb` web-session CLI, without an OAuth project. `[sources.gchat] account` and `self_id` must explicitly identify the account and Google user id; every conversation read verifies the authenticated id. `gweb chat read SPACE_ID -n 1 --json --no-refresh` reports `self_id`. Rejected Google authentication attempts real HTTP cookie renewal and retries the read. By default the watcher passes `--no-refresh`, which forbids browser fallback. Only literal `[sources.gchat] browser_refresh = true` permits `--background-refresh`: gweb may open its saved Chrome profile minimized, capture existing sign-in cookies and retry. The saved session must contain a profile directory, recorded through explicit `gweb login --profile-dir "Profile 29" --wait 0`. No focus change, interactive sign-in or new consent is performed. A revoked session or required sign-in remains a visible failure; continuous authentication is not guaranteed. Older binaries fail on unsupported flags before session access. Polling defaults to 30 seconds; `topics` defaults to 200, allowed range 1..1000. Every space/DM returned by `chat ls` is reread, preserving native conversation/message/thread identities, own replies, edits, returned tombstones and attachment/link metadata. No files are downloaded. Topic limits, the upstream conversation-list limit and caps of 100 unread/20 read replies per topic mean this is recent-history coverage only. `coverage: "recent-topics"` and `observed_at` appear in source health. A successful scan does not advance a completeness cursor; unavailable older topics/replies remain outside coverage.
+- Gmail: [gmail.ts](src/watchers/gmail.ts) uses the installed Google Workspace CLI `gws` and its existing authentication. `[sources.gmail] account` is required and must match `gmail users getProfile`. Access needs `gmail.readonly` or an existing broader mail scope; the watcher performs GET operations only. Polling defaults to 30 seconds, configurable through `poll_seconds`. It searches Inbox and Sent with epoch-second bounds, two minutes of overlap and all returned pages, up to 100 pages of 500 results. Full message bodies are MIME-decoded, preferring plain text over HTML alternatives, capped at 50000 characters. Attachment names and sizes are stored without fetching binaries. Large text bodies provided only as external attachment data fail explicitly with `gmail.body-unavailable`. Native thread ids group conversations; message ids deduplicate replays. Sent labels or a matching From address identify own replies. Unread labels, flags and source read state remain unchanged. A failed profile, page, message or MIME decode prevents the complete checkpoint. Gmail draft, spam and trash folders are not collected.
+
+Both Google watchers use [cli-json.ts](src/watchers/cli-json.ts): no shell, 60-second subprocess deadline (240 seconds for opted-in Chat browser refresh), 16 MiB output ceiling, cancellation and exact-identity child tracking. Raw CLI stderr is discarded; fixed error codes and exit status reach source health. Optional `executable` selects an installed CLI by name or path, never an arbitrary command string. A changed authenticated account fails closed. CLI installation, interactive login, browser focus and consent are never performed by the daemon.
+
+Example source settings for a separately approved instance:
+
+```toml
+[sources.gchat]
+enabled = false
+account = "me@example.invalid"
+self_id = "GOOGLE_USER_ID"
+poll_seconds = 30
+topics = 200
+browser_refresh = false
+
+[sources.gmail]
+enabled = false
+account = "me@example.invalid"
+poll_seconds = 60
+```
+
+The original three sources remain independent. Tesco is absent from the recorded relay inventory. Synthetic fixtures do not establish real-source acceptance; read-only scratch checks and their observed limits are recorded separately.
 
 ## Local request security
 
@@ -317,7 +347,7 @@ Before any connection, spawn or file read, the guard refuses the held database, 
 ## Later rollout gates
 
 - Live checks touch only owned scratch instances. Held database access, migration or a live copy requires explicit approval before any operation.
-- Live source startup and source/profile acceptance require their own approved scope. Google Chat and absent relay accounts remain blocked until actual evidence changes that status.
+- Live source startup and source/profile acceptance require their own approved scope. Google Chat/Gmail adapters do not activate an existing instance; absent relay accounts remain outside coverage.
 - The review period uses tickets on and chats off. It ends only on Antonio's explicit decision. Chat activation and any harmless real-chat proof require separate approval.
 - Default-branch merge remains a separate decision. Passing implementation tests do not authorize it.
 - V1 proof cleanup requires explicit confirmation naming the artifacts. Backups remain retained. No proof, cache or backup deletion is part of this procedure.

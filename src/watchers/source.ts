@@ -8,7 +8,7 @@ import { createKernel, NativeError, spawnedIdentity } from '../windows/kernel.ts
 import type { ProcessIdentity } from '../windows/kernel.ts';
 import type { ChildProcess, Serializable } from 'node:child_process';
 
-export type Source = 'outlook' | 'teams' | 'teamsrelay';
+export type Source = 'outlook' | 'teams' | 'teamsrelay' | 'gchat' | 'gmail';
 export interface SourceMessage {
   source: Source;
   account: string;
@@ -23,7 +23,7 @@ export interface SourceMessage {
   attachments: { name: string; size?: number | null }[];
   ref: Record<string, any>;
 }
-export type SourceRecord = SourceMessage | { source: Source; accounts: string[] } | { source: Source; checkpoint: string; accounts?: string[]; coverage?: 'saved-history-replay'; observed_at?: string };
+export type SourceRecord = SourceMessage | { source: Source; accounts: string[] } | { source: Source; checkpoint: string; accounts?: string[]; coverage?: 'saved-history-replay' | 'recent-topics'; observed_at?: string };
 export type Emit = (record: SourceRecord) => void;
 
 export class SourceError extends Error {
@@ -92,7 +92,7 @@ export function safeSourceDiagnostic(error: unknown, source: Source): { source: 
 export function writeDiagnostic(error: unknown, source: Source): void { process.stderr.write(JSON.stringify(safeSourceDiagnostic(error, source)) + '\n'); }
 export function writeRecord(record: SourceRecord): void { process.stdout.write(JSON.stringify(record) + '\n'); }
 
-export function watcherArguments(args: string[], extra: Record<string, { type: 'string'; multiple?: boolean }> = {}): { since: string; once: boolean; poll: number; expectedAccounts: string[]; values: Record<string, any> } {
+export function watcherArguments(args: string[], extra: Record<string, { type: 'string' | 'boolean'; multiple?: boolean }> = {}): { since: string; once: boolean; poll: number; expectedAccounts: string[]; values: Record<string, any> } {
   const { values } = parseArgs({ args, strict: true, allowPositionals: false, options: {
     since: { type: 'string' }, once: { type: 'boolean' }, poll: { type: 'string' }, 'expected-account': { type: 'string', multiple: true }, ...extra,
   } });

@@ -55,6 +55,8 @@ export interface Health {
   last_ok: string | null;
   last_error: string | null;
   checkpoint?: string | null;
+  coverage?: 'recent-topics' | 'saved-history-replay';
+  observed_at?: string;
 }
 
 export interface ParkedJob {

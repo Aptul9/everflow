@@ -38,7 +38,7 @@ function Row({ name, item }: { name: string; item: Health }) {
       <span className="ml-auto shrink-0 text-muted-foreground">{item.state}</span>
     </div>
     {item.last_error && <p className="mt-0.5 line-clamp-2 pl-4 text-[11px] leading-snug text-destructive">{item.last_error}</p>}
-    {item.checkpoint && <p className="pl-4 text-[11px] text-muted-foreground">Checkpoint <Time value={item.checkpoint} /></p>}
+    {item.checkpoint && <p className="pl-4 text-[11px] text-muted-foreground">{item.coverage === 'recent-topics' ? 'Latest stored' : 'Checkpoint'} <Time value={item.checkpoint} /></p>}
   </li>;
 }
 
@@ -155,6 +155,7 @@ export function Pipeline({ state }: { state: OverviewState }) {
         <div data-node="inputs" className="flex flex-col gap-2 sm:grid sm:grid-cols-2 lg:flex">
           {inputs.map((input, index) => <Node key={input.name} id={`input-${index}`} title={input.name} icon={<Inbox />} state={input.state}
             issues={[input.quarantine.length > 0 && <Issue key="q" href={`#problem-quarantine-${input.quarantine[0]!.id}`}>{input.quarantine.length} quarantined</Issue>]}>
+            {input.source?.coverage === 'recent-topics' && <p className="mt-1.5 text-[11px] text-warning">Recent topics only{input.source.observed_at && <>. Observed <Time value={input.source.observed_at} /></>}</p>}
             {(input.source?.last_error || input.accounts.length > 0) && <ul className="mt-1.5 divide-y divide-border/60">
               {input.source?.last_error && <li className="py-1"><p className="line-clamp-2 text-[11px] leading-snug text-destructive">{input.source.last_error}</p></li>}
               {input.accounts.map((item) => <Row key={item.dependency} name={item.dependency.slice(input.name.length + 1)} item={item} />)}
