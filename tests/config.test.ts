@@ -55,7 +55,7 @@ gchat = 120
   const cfg = loadConfig(relative(process.cwd(), config));
   expect(cfg._config_path).toBe(resolve(config));
   expect(cfg.db).toEqual({ path });
-  expect(cfg.vault).toEqual({ path: join(root, 'knowledge') });
+  expect(cfg.vault).toEqual({ path: join(root, 'knowledge'), guide: '' });
   expect(cfg.opencode).toMatchObject({ directory: join(root, 'knowledge'), model: 'synthetic/model' });
   expect(cfg.clients).toMatchObject({ synthetic: { accounts: ['Me@Example.Invalid'], domains: ['Example.Invalid'], keywords: ['synthetic'], custom: 'retained' } });
   expect(cfg.sources).toEqual({ teams: { account: 'source@example.invalid', read_only: true } });

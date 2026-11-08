@@ -49,6 +49,17 @@ test('candidate validation uses only offered ids and does not coerce strings', (
 
 const run = api.assess;
 
+test('configured vault guide reaches the triage system prompt and an empty guide adds nothing', async () => {
+  const { cfg } = kbFixture();
+  using db = openDb(cfg.db.path);
+  await using peer = await scriptedPeer(() => ({ body: text(JSON.stringify(decision())) }));
+  await run(cfg, context(), [], 'new', undefined, { db, providers: { first: provider(peer.baseURL) } });
+  cfg.vault.guide = '01_Projects/<slug>.md holds one page per client engagement.';
+  await run(cfg, context(), [], 'new', undefined, { db, providers: { first: provider(peer.baseURL) } });
+  expect(peer.requests[0]!.system).not.toContain('Vault layout');
+  expect(peer.requests[1]!.system).toContain("Vault layout, from Antonio's configuration (trusted): 01_Projects/<slug>.md holds one page per client engagement.");
+});
+
 test('real HTTP peer searches, reads and returns strict JSON with matching tool ids and only two tools', async () => {
   const { cfg } = kbFixture();
   using db = openDb(cfg.db.path);

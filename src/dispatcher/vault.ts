@@ -5,7 +5,7 @@ import { excluded, isNotePath, safeComponent } from './policy.ts';
 export { isNotePath } from './policy.ts';
 
 export const VAULT_LIMITS = {
-  hits: 50, noteBytes: 32_768, entries: 2_048, files: 256, searchBytes: 1_048_576, depth: 16, queryChars: 256, snippetChars: 240,
+  hits: 50, noteBytes: 32_768, searchNoteBytes: 262_144, entries: 16_384, files: 4_096, searchBytes: 67_108_864, depth: 16, queryChars: 256, snippetChars: 240,
 } as const;
 
 export interface Note { path: string; title: string; text: string; truncated: boolean }
@@ -64,12 +64,29 @@ function checkedFile(root: string, path: string): { absolute: string; stat: fs.S
 function readNote(root: string, relativePath: string, cap: number, consumed: (bytes: number) => void): Note {
   numericLimit(cap, VAULT_LIMITS.noteBytes);
   const { absolute, stat } = checkedFile(root, relativePath);
+  return readChecked(absolute, stat, relativePath, cap, consumed, () => checkedFile(root, relativePath).stat);
+}
+
+// Search validates the root once and each folder on entry. Names come from the directory listing, so they are
+// already long names and need no alias expansion; only the final component's type and identity are checked.
+function searchNote(folder: string, relativePath: string, cap: number, consumed: (bytes: number) => void): Note {
+  const absolute = join(folder, basename(relativePath));
+  const check = () => {
+    let stat: fs.Stats;
+    try { stat = fs.lstatSync(absolute); } catch { throw new VaultError('Note is missing or inaccessible'); }
+    if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink > 1) throw new VaultError('Note must be a regular, unlinked file');
+    return stat;
+  };
+  return readChecked(absolute, check(), relativePath, cap, consumed, check);
+}
+
+function readChecked(absolute: string, stat: fs.Stats, relativePath: string, cap: number, consumed: (bytes: number) => void, recheck: () => fs.Stats): Note {
   let fd: number;
   try { fd = fs.openSync(absolute, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0)); }
   catch { throw new VaultError('Note is missing, linked or inaccessible'); }
   try {
     const opened = fs.fstatSync(fd);
-    const rechecked = checkedFile(root, relativePath).stat;
+    const rechecked = recheck();
     if (!opened.isFile() || opened.nlink > 1 || opened.dev !== stat.dev || opened.ino !== stat.ino
       || opened.dev !== rechecked.dev || opened.ino !== rechecked.ino) throw new VaultError('Note path changed during open');
     const buffer = Buffer.alloc(Math.min(opened.size, cap));
@@ -94,42 +111,58 @@ export function vaultRead(root: string, relativePath: string, cap = 16_384): Not
   return readNote(root, relativePath, cap, () => {});
 }
 
+// A note matches when its path or text contains every word of the query. Folders are walked in name order,
+// so numbered top-level folders (01_Projects before 04_Archive) rank first.
 export function vaultSearch(root: string, query: string, limit = 10): SearchHit[] {
   numericLimit(limit, VAULT_LIMITS.hits);
   if (typeof query !== 'string' || !query.trim() || query.length > VAULT_LIMITS.queryChars) throw new TypeError('Query must contain 1 to 256 characters');
   const base = directory(root);
   const hits: SearchHit[] = [];
   const pending = [{ path: '', depth: 0 }];
-  const needle = query.toLowerCase();
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   let entries = 0;
   let files = 0;
   let bytes = VAULT_LIMITS.searchBytes as number;
   while (pending.length && entries < VAULT_LIMITS.entries && files < VAULT_LIMITS.files && bytes > 0 && hits.length < limit) {
     const next = pending.pop()!;
+    const folder = next.path ? join(base, next.path) : base;
     let dir: fs.Dir;
-    try { dir = fs.opendirSync(directory(next.path ? join(base, next.path) : base)); }
-    catch (error) { if (error instanceof VaultError) continue; throw error; }
+    try {
+      if (next.path) {
+        const stat = fs.lstatSync(folder);
+        if (stat.isSymbolicLink() || !stat.isDirectory()) continue;
+      }
+      dir = fs.opendirSync(folder);
+    } catch (error) { if (error instanceof VaultError || (error as NodeJS.ErrnoException).code) continue; throw error; }
+    const listed: fs.Dirent[] = [];
     try {
       let entry: fs.Dirent | null;
-      while (entries < VAULT_LIMITS.entries && files < VAULT_LIMITS.files && bytes > 0 && hits.length < limit && (entry = dir.readSync())) {
-        entries++;
-        if (!safeComponent(entry.name) || entry.isSymbolicLink()) continue;
-        const path = next.path ? `${next.path}/${entry.name}` : entry.name;
-        if (entry.isDirectory()) {
-          if (next.depth < VAULT_LIMITS.depth) pending.push({ path, depth: next.depth + 1 });
-          continue;
-        }
-        if (!entry.isFile() || !isNotePath(path)) continue;
-        files++;
-        const cap = Math.min(bytes, VAULT_LIMITS.noteBytes);
-        let note: Note;
-        try { note = readNote(base, path, cap, (count) => { bytes -= count; }); }
-        catch (error) { if (error instanceof VaultError) continue; throw error; }
-        const lines = note.text.split(/\r?\n/);
-        const index = lines.findIndex((line) => line.toLowerCase().includes(needle));
-        if (index >= 0) hits.push({ path, title: note.title, line: index + 1, snippet: lines[index]!.slice(0, VAULT_LIMITS.snippetChars) });
-      }
+      while (entries < VAULT_LIMITS.entries && (entry = dir.readSync())) { entries++; listed.push(entry); }
     } finally { dir.closeSync(); }
+    listed.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    const folders: string[] = [];
+    for (const entry of listed) {
+      if (files >= VAULT_LIMITS.files || bytes <= 0 || hits.length >= limit) break;
+      if (!safeComponent(entry.name) || entry.isSymbolicLink()) continue;
+      const path = next.path ? `${next.path}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (next.depth < VAULT_LIMITS.depth) folders.push(path);
+        continue;
+      }
+      if (!entry.isFile() || !isNotePath(path)) continue;
+      files++;
+      const cap = Math.min(bytes, VAULT_LIMITS.searchNoteBytes);
+      let note: Note;
+      try { note = searchNote(folder, path, cap, (count) => { bytes -= count; }); }
+      catch (error) { if (error instanceof VaultError) continue; throw error; }
+      const haystack = `${path}\n${note.text}`.toLowerCase();
+      if (!words.every((word) => haystack.includes(word))) continue;
+      const lines = note.text.split(/\r?\n/);
+      const found = lines.findIndex((line) => words.some((word) => line.toLowerCase().includes(word)));
+      const index = Math.max(found, 0);
+      hits.push({ path, title: note.title, line: index + 1, snippet: (lines[index] ?? '').slice(0, VAULT_LIMITS.snippetChars) });
+    }
+    for (const path of folders.reverse()) pending.push({ path, depth: next.depth + 1 });
   }
   return hits;
 }

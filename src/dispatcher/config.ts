@@ -38,7 +38,7 @@ const configSchema = z.looseObject({
   db: z.looseObject({ path: z.string().min(1) }),
   tickets: rollout,
   chats: rollout,
-  vault: z.looseObject({ path: z.string().min(1).default('.') }).prefault({}),
+  vault: z.looseObject({ path: z.string().min(1).default('.'), guide: z.string().max(4_000).default('') }).prefault({}),
   opencode: z.looseObject({
     url: z.string().default(''), directory: z.string().min(1).default('.'), model: z.string().default(''),
     timeout_seconds: positive.max(120).optional(),
