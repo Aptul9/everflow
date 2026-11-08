@@ -83,8 +83,10 @@ All values are the defaults in `src/dispatcher/config.ts`; the running instance 
 - Start approves a proposal. Open chat with note approves it too, and the note becomes the instruction quoted in the brief. Both need tickets and chats switched on.
 - Approval creates one chat named `[Working] #<id> <title>`. After each turn the chat is renamed `[<stage>] #<id> <title>`, with the stage `Needs you`, `Working`, `Waiting on them`, `Idle`, `Done` or `Failed`.
 - The last line of every turn must read `STATUS: <working|needs_you|waiting_them|blocked|done> | <one line>`. `done` closes the ticket. A turn without a valid STATUS line parks its job.
-- Dismiss closes a ticket with an optional reason. The reasons are passed to every later triage.
-- Make ticket turns a skipped or backlog batch into a ticket, or adds it to the ticket the conversation already belongs to. It does not approve the ticket.
+- Dismiss closes a ticket with an optional reason. The reasons are passed to every later triage. The same dialog can mute the ticket's chat.
+- Mute keeps a chat out of triage for 8 hours, 1 day, 1 week or until unmuted, from a Skipped batch or from Dismiss. Its new messages land under Skipped as `Muted`. Muted chats are listed on the page with Unmute.
+- Make ticket turns a skipped, backlog or muted batch into a ticket, or adds it to the ticket the conversation already belongs to. It does not approve the ticket. On a muted batch it also ends the mute.
+- `accounts = [...]` under a source keeps only those receiving accounts; messages of the others are dropped before storage and the page shows them as `off`. No list means every account. The list is read at start.
 - New messages on an approved ticket go to the same chat. If a turn is still running, they wait and go in the next turn.
 - New messages on a ticket closed less than 14 days ago reopen it. Later messages make a new proposal with the old ticket as context.
 - A failed chat turn gets a recovery turn that tells the chat to check sent items, pull requests and files before repeating anything. After 2 recoveries the ticket shows as Failed.
@@ -94,7 +96,7 @@ All values are the defaults in `src/dispatcher/config.ts`; the running instance 
 
 ## Running it
 
-The retained instance lives in `%LOCALAPPDATA%\inbox-dispatcher-v2`. Its old build does not gain new sources or the Workdesk name until a new completed artifact is selected. This change does not restart or reconfigure it. Checkout paths, instance paths, databases, locks and existing `INBOX_*` environment variables remain compatible. `npm run workdesk` is the current launcher; `npm run inbox` remains an alias.
+The trial instance lives in `%LOCALAPPDATA%\workdesk`, with its own database. The older weekend instance in `%LOCALAPPDATA%\inbox-dispatcher-v2` is retained and stays stopped. Checkout paths, instance paths, databases, locks and existing `INBOX_*` environment variables remain compatible. `npm run workdesk` is the current launcher; `npm run inbox` remains an alias.
 
 | File | Use |
 |---|---|

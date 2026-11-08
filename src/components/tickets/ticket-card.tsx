@@ -118,7 +118,7 @@ export function TicketCard(props: {
   expired: boolean;
   pending: ReadonlySet<string>;
   errors: Record<string, string>;
-  post: (key: string, path: string, input?: Record<string, string>) => Promise<unknown>;
+  post: (key: string, path: string, input?: Record<string, string | number | null>) => Promise<unknown>;
   now: number;
 }) {
   const { ticket, post } = props;
@@ -182,10 +182,10 @@ export function TicketCard(props: {
           icon={<MessageSquarePlus aria-hidden="true" />} className="h-9 flex-1 sm:h-8" disabled={props.expired || props.pending.has(keys.chat)}
           onConfirm={(note) => post(keys.chat, `/api/ticket/${ticket.id}/chat`, { note })} />
       </>}
-      <ActionDialog label="Dismiss" display={ticket.lifecycle === 'proposed' && props.chats ? null : 'Dismiss'} title={`Dismiss ticket #${ticket.id}`} confirm="Confirm dismiss" shortcut="d"
+      <ActionDialog label="Dismiss" display={ticket.lifecycle === 'proposed' && props.chats ? null : 'Dismiss'} title={`Dismiss ticket #${ticket.id}`} confirm="Confirm dismiss" shortcut="d" mute="optional"
         size={ticket.lifecycle === 'proposed' && props.chats ? 'icon-sm' : 'sm'} icon={<X aria-hidden="true" />}
         className={cn('h-9 sm:h-8', ticket.lifecycle === 'proposed' && props.chats ? 'w-9 sm:w-8' : 'flex-1')} disabled={props.expired || props.pending.has(keys.dismiss)}
-        onConfirm={(reason) => post(keys.dismiss, `/api/ticket/${ticket.id}/dismiss`, { reason })} />
+        onConfirm={(reason, mute) => post(keys.dismiss, `/api/ticket/${ticket.id}/dismiss`, mute === undefined ? { reason } : { reason, mute_hours: mute })} />
     </div>}
     <div className="flex items-center gap-1 border-t px-2 py-1">
       <Toggle expanded={messagesOpen} controls={messagesId} onClick={() => setMessagesOpen(!messagesOpen)} icon={<MessagesSquare aria-hidden="true" />}>Messages ({ticket.messages.length})</Toggle>

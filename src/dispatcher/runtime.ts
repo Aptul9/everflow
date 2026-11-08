@@ -17,6 +17,7 @@ import { claim, complete, defer, enqueue, fail, hasPendingInput, healthError, he
 import type { Job } from './jobs.ts';
 import { handleTriage } from './kb-agent.ts';
 import { connect } from './opencode.ts';
+import { sourceAccounts } from './policy.ts';
 import { utc } from './time.ts';
 import { createKernel, sameProcess, spawnedIdentity } from '../windows/kernel.ts';
 import type { ProcessIdentity } from '../windows/kernel.ts';
@@ -34,6 +35,7 @@ const sourceSchema = z.looseObject({
   host: z.string().min(1).optional(), data_dir: z.string().min(1).optional(), owner: z.string().min(1).optional(),
   account: z.email().optional(), self_id: z.string().min(1).regex(/^\S+$/).optional(), executable: z.string().min(1).optional(), topics: z.number().int().min(1).max(1000).optional(),
   browser_refresh: z.preprocess((value) => value === true, z.boolean()).optional(),
+  accounts: z.array(z.string().trim().min(1).refine((value) => value !== '*' && !/[\r\n\0]/.test(value))).optional(),
 });
 const sourceSettings = z.looseObject({ outlook: sourceSchema.optional(), teams: sourceSchema.optional(), teamsrelay: sourceSchema.optional(), gchat: sourceSchema.optional(), gmail: sourceSchema.optional() });
 type Event = { at?: string; source: string; code: string; [key: string]: unknown };
@@ -150,6 +152,12 @@ com.abi-layout com.initialize com.closed com.unowned com.unowned-point com.clean
 
 export function createSourceReader(db: DatabaseSync, cfg: Config, source: Source, log: Log = silent) {
   const publish: Log = (event) => log({ at: utc(), ...event });
+  const allowed = sourceAccounts(cfg, source);
+  // Messages of accounts switched off are dropped unstored; inventory and checkpoints still keep coverage complete.
+  const off = (value: unknown) => {
+    const item = value as Record<string, unknown>;
+    return allowed !== null && !('checkpoint' in item) && !('accounts' in item) && typeof item.account === 'string' && !allowed.has(item.account.trim().toLowerCase());
+  };
   const blocked = () => !!db.prepare('SELECT 1 FROM quarantine WHERE source=? AND replayed_at IS NULL LIMIT 1').get(source);
   const reject = (bytes: Buffer, error: IngestError, truncated: boolean) => {
     const saved = prefix(bytes, truncated), at = utc();
@@ -165,6 +173,7 @@ export function createSourceReader(db: DatabaseSync, cfg: Config, source: Source
         if (truncated) throw new IngestError('source.line-limit');
         const value = record(bytes, source);
         if (blocked()) throw new IngestError('source.blocked-by-quarantine');
+        if (off(value)) return false;
         const changed = ingest(db, value);
         if ('checkpoint' in (value as object)) {
           healthOk(db, source);

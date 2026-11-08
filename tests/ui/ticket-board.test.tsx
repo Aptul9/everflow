@@ -149,6 +149,38 @@ test('Retry parked job and Make ticket for all skipped outcomes use guarded loca
   }
 });
 
+test('skipped chat Mute, dismiss with mute, muted list Unmute and switched-off accounts use guarded local actions', async () => {
+  const state = uiState();
+  state.skipped.push({ id: 13, title: 'Muted source', outcome: 'muted', source: 'teams', account: 'test@example.invalid', created_at: '2026-11-06T06:00:00.000000Z', messages: [] });
+  state.muted = [{ id: 5, title: 'Noisy group', source: 'teams', account: 'test@example.invalid', until: '9999-12-31T23:59:59.000000Z', forever: true }];
+  state.health.push({ dependency: 'teams:off@example.invalid', scope: 'account', state: 'disabled', since: null, last_ok: null, last_error: null });
+  board(state);
+  expect(screen.queryByRole('button', { name: 'Mute chat of batch #13' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Make ticket from batch #13' })).toBeTruthy();
+  expect(screen.getByRole('region', { name: 'Health' }).textContent).toContain('off@example.invalid');
+  expect(screen.getByRole('region', { name: 'Health' }).textContent).toMatch(/off@example\.invalidoff/);
+
+  await userEvent.click(screen.getByRole('button', { name: 'Mute chat of batch #10' }));
+  const mute = screen.getByRole('dialog', { name: 'Mute Skipped source' });
+  expect((within(mute).getByRole('combobox', { name: 'Mute for' }) as HTMLSelectElement).value).toBe('24');
+  await userEvent.selectOptions(within(mute).getByRole('combobox', { name: 'Mute for' }), '168');
+  await userEvent.click(within(mute).getByRole('button', { name: 'Mute chat' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(fetcher).toHaveBeenCalledWith('/api/batch/10/mute', expect.objectContaining({ method: 'POST', body: JSON.stringify({ hours: 168 }) }));
+
+  await userEvent.click(within(ticket()).getByRole('button', { name: 'Dismiss' }));
+  const dismiss = screen.getByRole('dialog', { name: 'Dismiss ticket #1' });
+  await userEvent.selectOptions(within(dismiss).getByRole('combobox', { name: 'Mute this chat' }), 'always');
+  await userEvent.click(within(dismiss).getByRole('button', { name: 'Confirm dismiss' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(fetcher).toHaveBeenCalledWith('/api/ticket/1/dismiss', expect.objectContaining({ method: 'POST', body: JSON.stringify({ reason: '', mute_hours: null }) }));
+
+  const muted = screen.getByRole('region', { name: 'Muted chats (1)' });
+  expect(muted.textContent).toContain('until unmuted');
+  await userEvent.click(within(muted).getByRole('button', { name: 'Unmute Noisy group' }));
+  expect(fetcher).toHaveBeenCalledWith('/api/conversation/5/unmute', expect.objectContaining({ method: 'POST', body: '{}' }));
+});
+
 test('j/k focus cards; s/c/d and slash activate visible controls', async () => {
   const user = userEvent.setup();
   board();

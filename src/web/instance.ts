@@ -31,7 +31,8 @@ export function initialize(current: WebInstance): void {
   using db = new DatabaseSync(current.config.db.path, { readOnly: true, timeout: 30_000 });
   if (db.prepare('PRAGMA user_version').get()!.user_version !== 2
     || !db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='ticket'").get()
-    || !db.prepare('PRAGMA table_info(ticket)').all().some((column) => column.name === 'session_title')) {
+    || !db.prepare('PRAGMA table_info(ticket)').all().some((column) => column.name === 'session_title')
+    || !db.prepare('PRAGMA table_info(conversation)').all().some((column) => column.name === 'muted_until')) {
     throw new Error('Web instance requires an initialized current database');
   }
   owner[key] = current;

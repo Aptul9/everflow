@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../dispatcher/config.ts';
-import { batchMessages, detail, feedback } from '../dispatcher/tickets.ts';
+import { sourceAccounts } from '../dispatcher/policy.ts';
+import { batchMessages, detail, feedback, MUTE_FOREVER } from '../dispatcher/tickets.ts';
 import type { Message } from '../dispatcher/tickets.ts';
 import { utc } from '../dispatcher/time.ts';
-import type { Health, OverviewState, Reference, SourceMessage, TicketCard, TicketDetail } from '../lib/web-types.ts';
+import type { Health, OverviewState, Reference, SkippedBatch, SourceMessage, TicketCard, TicketDetail } from '../lib/web-types.ts';
 
 export function calendarDay(at: string | Date): string {
   const date = new Date(at);
@@ -55,7 +56,9 @@ function health(db: DatabaseSync, cfg: Config): Health[] {
     const checkpoint = db.prepare('SELECT since FROM cursor WHERE source=? AND account=?').get(account.source!, account.account!);
     const row = result.get(dependency);
     const source = result.get(String(account.source));
+    const allowed = sourceAccounts(cfg, String(account.source));
     result.set(dependency, { ...(row ?? { dependency, scope: 'account', state: 'unknown', since: null, last_ok: null, last_error: null }),
+      ...(allowed && account.account !== '*' && !allowed.has(String(account.account).toLowerCase()) ? { state: 'disabled' as const } : {}),
       ...(source?.coverage ? { coverage: source.coverage } : {}),
       checkpoint: checkpoint ? String(checkpoint.since) : null });
   }
@@ -78,11 +81,14 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
     else groups.working.push(ticket);
   }
   const skipped = db.prepare(`SELECT b.id,c.title,c.source,c.account,b.outcome,b.created_at FROM batch b JOIN conversation c ON c.id=b.conversation
-    WHERE b.outcome IN ('not_on_us','backlog','answered') ORDER BY b.created_at DESC,b.id DESC`).all().map((row) => ({
+    WHERE b.outcome IN ('not_on_us','backlog','answered','muted') ORDER BY b.created_at DESC,b.id DESC`).all().map((row) => ({
     id: Number(row.id), title: row.title as string | null, source: String(row.source), account: String(row.account),
-    outcome: row.outcome as 'not_on_us' | 'backlog' | 'answered', created_at: String(row.created_at),
+    outcome: row.outcome as SkippedBatch['outcome'], created_at: String(row.created_at),
     messages: batchMessages(db, Number(row.id)).reverse().map(message),
   }));
+  const muted = db.prepare('SELECT id,title,source,account,muted_until FROM conversation WHERE muted_until > ? ORDER BY muted_until,id').all(utc(at.toISOString()))
+    .map((row) => ({ id: Number(row.id), title: row.title as string | null, source: String(row.source), account: String(row.account),
+      until: String(row.muted_until), forever: row.muted_until === MUTE_FOREVER }));
   const jobs = db.prepare("SELECT id,kind,ticket,last_error,updated_at,payload FROM job WHERE state='parked' ORDER BY updated_at DESC,id DESC").all().map((row) => {
     const evidence = (JSON.parse(String(row.payload)) as { assessment_error?: { raw?: unknown; parse_error?: unknown } }).assessment_error;
     return { id: Number(row.id), kind: String(row.kind), ticket: row.ticket === null ? null : Number(row.ticket),
@@ -94,7 +100,7 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
   const triage = db.prepare("SELECT id,batch,at,reason,raw FROM triage_log WHERE action='invalid' ORDER BY at DESC,id DESC").all()
     .map((row) => ({ id: Number(row.id), batch: row.batch === null ? null : Number(row.batch), at: String(row.at),
       raw: row.raw as string | null, parse_error: row.reason as string | null }));
-  return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped,
+  return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped, muted,
     health: health(db, cfg), problems: { jobs, quarantine, triage }, feedback: feedback(db) };
 }
 

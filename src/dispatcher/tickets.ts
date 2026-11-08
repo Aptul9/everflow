@@ -609,6 +609,33 @@ export function dismiss(db: DatabaseSync, ticket: number, reason = '', at?: stri
   return finishTicket(db, ticket, 'dismissed', reason, at, actor);
 }
 
+export const MUTE_FOREVER = '9999-12-31T23:59:59.000000Z';
+
+// Later batches of a muted conversation skip triage and forwarding until muted_until. hours null: until unmuted; 0: unmute.
+export function mute(db: DatabaseSync, conversation: number, hours: number | null, at?: string): number {
+  return transaction(db, () => {
+    validId(conversation, 'conversation');
+    if (hours !== null && (!Number.isSafeInteger(hours) || hours < 0 || hours > 8_760)) throw new TicketError('ticket.invalid-input', 'Mute hours must be 0..8760 or null');
+    const until = hours === null ? MUTE_FOREVER : hours === 0 ? null : utc(new Date(Date.parse(utc(at)) + hours * 3_600_000).toISOString());
+    if (db.prepare('UPDATE conversation SET muted_until=? WHERE id=?').run(until, conversation).changes === 0) {
+      throw new TicketError('ticket.not-found', `Conversation ${conversation} not found`);
+    }
+    return conversation;
+  });
+}
+
+export function muteBatch(db: DatabaseSync, batch: number, hours: number | null, at?: string): number {
+  return transaction(db, () => mute(db, getBatch(db, batch).conversation, hours, at));
+}
+
+export function muteTicket(db: DatabaseSync, ticket: number, hours: number | null, at?: string): number[] {
+  return transaction(db, () => {
+    getTicket(db, ticket);
+    return db.prepare("SELECT conversation FROM ticket_conversation WHERE ticket=? AND kind IN ('primary','linked') ORDER BY conversation").all(ticket)
+      .map((row) => mute(db, Number(row.conversation), hours, at));
+  });
+}
+
 export function makeTicket(db: DatabaseSync, batch: number, at?: string, actor: 'you' | 'chat' = 'you'): number {
   return transaction(db, () => {
     const now = utc(at);
@@ -616,7 +643,8 @@ export function makeTicket(db: DatabaseSync, batch: number, at?: string, actor: 
     const key = `make-ticket:batch:${batch}`;
     const made = db.prepare('SELECT ticket FROM timeline WHERE event_key=?').get(key);
     if (made) return Number(made.ticket);
-    if (!['not_on_us', 'backlog', 'answered'].includes(row.outcome ?? '')) throw new TicketError('ticket.conflict', 'Make ticket requires a skipped, backlog or answered batch');
+    if (!['not_on_us', 'backlog', 'answered', 'muted'].includes(row.outcome ?? '')) throw new TicketError('ticket.conflict', 'Make ticket requires a skipped, backlog, answered or muted batch');
+    if (row.outcome === 'muted') mute(db, row.conversation, 0, now);
     const linked = db.prepare("SELECT ticket FROM ticket_conversation WHERE conversation=? AND kind IN ('primary','linked')").get(row.conversation);
     let owner = linked ? getTicket(db, Number(linked.ticket)) : null;
     if (owner && (owner.lifecycle === 'done' || owner.lifecycle === 'dismissed')) {

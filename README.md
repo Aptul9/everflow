@@ -174,7 +174,9 @@ Approved sessions can be archived after 24 hours idle once local and remote pend
 
 ## Page and approval
 
-The page shows Needs you, Working, Waiting on them, Failed, Done today and Skipped, plus source/dependency health and Problems. Start approves the proposal. Open chat with note records Antonio's exact instruction and approves it. Dismiss records the optional reason. These local actions enqueue work; they do not perform provider or source writes in the HTTP request.
+The page shows Needs you, Working, Waiting on them, Failed, Done today and Skipped, plus source/dependency health, Problems and muted chats. Start approves the proposal. Open chat with note records Antonio's exact instruction and approves it. Dismiss records the optional reason. These local actions enqueue work; they do not perform provider or source writes in the HTTP request.
+
+Mute keeps a chat out of triage for 8 hours, 1 day, 1 week or until unmuted. It is offered on a Skipped batch and in the Dismiss dialog, where it mutes the dismissed ticket's routed conversations. New batches of a muted chat are stored as `muted` under Skipped, with no triage or forwarding; own-only batches stay `answered`. Make ticket on a muted batch ends that chat's mute. Muted chats are listed on the page with Unmute, and a timed mute ends by itself.
 
 Chat creation requires both rollout switches enabled and explicit ticket approval. Chats off disables the chat actions during review. A created session has Antonio's normal OpenChamber tools and rules, with no dispatcher deny override. Outward-facing text requires his approval in that chat before sending. The page does not approve outward text. No Teams self-chat or other channel approves or alerts on tickets.
 
@@ -187,6 +189,8 @@ Each completed turn ends with `STATUS: <working|needs_you|waiting_them|blocked|d
 The first explicit v2 start persists `triage_after`, defaulting to that start's UTC time. A quoted aware `[start] triage_after` can set the initial cutoff. The persisted value wins on later starts. Unbatched messages with `stored_at` strictly before the cutoff become `backlog`, regardless of their source `sent_at`. They appear under Skipped rather than generating old proposals. Make ticket converts a skipped batch into a ticket or reuses its current routed ticket. A fresh proposal is not approved for chat by that action. Dismiss reasons and Make ticket counts remain visible as feedback.
 
 `start` runs migration for its explicit instance before collection. For nonempty pre-v2 databases, [db.ts](src/dispatcher/db.ts) creates a uniquely named `.pre-v2-...db` SQLite backup and validates integrity and schema before upgrading. Source rows, cursors, numeric message identities and triage history are retained. Old work-item, draft, consent and send tables are removed from the migrated instance. Tickets begin empty. Old OpenChamber sessions are not resumed as v2 tickets.
+
+Opening a v2 database adds the nullable `conversation.muted_until` column when it is missing. Existing rows keep their values, the schema version stays 2 and no backup is made for this step.
 
 Source lookback defaults to zero and is capped at seven days for initial collection. Outlook and Teams resume with a rolling seven-day lower bound. Relay retains its saved initial replay floor across restarts. This policy does not change the stored-at backlog cutoff.
 
@@ -228,7 +232,7 @@ Use actual internal ids from ticket details, `job list` and Problems. Set `$tick
 & node $cli --artifact $receipt --config $config quarantine replay --all
 ```
 
-Inspect the exact job error, fix its config, source reader or parser cause, then retry the same job. CLI retry accepts parked work or failed queued work. Page Retry accepts parked work. Relink and merge refuse reserved, prepared, admitted or unresolved input rather than changing its target. Corrections write timeline entries. Closing preserves unresolved input for reconciliation.
+Inspect the exact job error, fix its config, source reader or parser cause, then retry the same job. CLI retry accepts parked work or failed queued work. Page Retry accepts parked work. Make ticket also accepts a `muted` batch. Relink and merge refuse reserved, prepared, admitted or unresolved input rather than changing its target. Corrections write timeline entries. Closing preserves unresolved input for reconciliation.
 
 Quarantine replay reuses the saved line after the underlying cause is fixed. It does not repair invalid bytes. Earlier unreplayed rows must be resolved first. Truncated input cannot be replayed. `--all` commits replay, messages, cursors and receipts together or rolls back the whole selection. Do not edit away failures or skip the barrier to advance a source.
 
@@ -245,7 +249,9 @@ Inspect `dependency`, `state`, `since`, `last_ok`, `last_error` and account chec
 
 ## Sources
 
-Source flags are independent of tickets/chats and default to disabled. Only enabled sources are launched. Default compiled entrypoints are `dist/watchers/outlook.js`, `dist/watchers/teams.js`, `dist/watchers/relay.js`, `dist/watchers/gchat.js` and `dist/watchers/gmail.js` inside the selected artifact. No external watcher checkout is used. Google watchers invoke their installed CLI dependencies, not external watcher code.
+Source flags are independent of tickets/chats and default to disabled. Only enabled sources are launched.
+
+An optional `accounts` list under `[sources.<name>]` limits an enabled source to those receiving accounts, compared case-insensitively. Messages of other accounts are dropped before storage and never reach triage. Account inventory and checkpoints still cover every account, so coverage stays complete and an account added later starts from that moment, without a backlog of the off period. Without the list every account of the source is on. The page shows an account outside the list as `off`. A changed list takes effect on the next start. Default compiled entrypoints are `dist/watchers/outlook.js`, `dist/watchers/teams.js`, `dist/watchers/relay.js`, `dist/watchers/gchat.js` and `dist/watchers/gmail.js` inside the selected artifact. No external watcher checkout is used. Google watchers invoke their installed CLI dependencies, not external watcher code.
 
 - Outlook: [outlook.ts](src/watchers/outlook.ts) attaches to an already running Classic Outlook instance. Modern Outlook is unsupported. Every configured Outlook account's DeliveryStore Inbox and Sent folders are covered, for item classes 43, 53 and 54. A missing account, unreadable folder or failed covered item prevents a complete checkpoint. Scans use UTC DASL date filters, minute resolution and 2 minutes of overlap. OLE wall-clock conversion handles local timezone and DST; ambiguous fall-back times use the first occurrence. Polling defaults to 60 seconds. Native NewMailEx is unavailable with the pinned winax bridge because connection-point disposal is not supported. Polling is authoritative.
 - Teams: [teams.ts](src/watchers/teams.ts) requires an explicit `[sources.teams] profile` identifying an existing signed-in local WebView profile. The reader uses its Cookies snapshot and adjacent Local State under the same Windows user, plus an instance-owned DPAPI cache. The runtime supplies private cache/snapshot paths; an optional bootstrap cache must be an explicitly selected compatible DPAPI cache. Expiring or rejected tokens refresh from the existing profile, never by restarting Teams. Missing profiles, unsupported cookies, expired accounts and certificate failures remain failures. Requests use the system CA store and never disable TLS validation. Cached, discovered and persisted expected accounts all contribute to coverage; the checkpoint requires every known account. Polling defaults to 30 seconds with 2 minutes of overlap. Source read receipts are never written.

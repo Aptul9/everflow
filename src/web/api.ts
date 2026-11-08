@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { approve } from '../dispatcher/approval.ts';
 import { transaction } from '../dispatcher/db.ts';
 import { retry } from '../dispatcher/jobs.ts';
-import { dismiss, makeTicket, TicketError } from '../dispatcher/tickets.ts';
+import { dismiss, makeTicket, mute, muteBatch, muteTicket, TicketError } from '../dispatcher/tickets.ts';
 import { HttpError, instance, withDatabase } from './instance.ts';
 import type { WebInstance } from './instance.ts';
 import { readState, representation, ticketDetail } from './state.ts';
@@ -11,7 +11,10 @@ import { readState, representation, ticketDetail } from './state.ts';
 export const MAX_BODY_BYTES = 32_768;
 const empty = z.strictObject({});
 const note = z.strictObject({ note: z.string().max(8_000).refine((value) => value.trim().length > 0, 'Note is required') });
-const reason = z.strictObject({ reason: z.string().max(2_000).optional() });
+// null mutes until unmuted
+const hours = z.number().int().min(1).max(8_760).nullable();
+const reason = z.strictObject({ reason: z.string().max(2_000).optional(), mute_hours: hours.optional() });
+const muteFor = z.strictObject({ hours });
 
 export function allowedHost(host: string | undefined | null, port: number): boolean {
   return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
@@ -91,20 +94,26 @@ export function ticketGet(request: Request, id: string): Response {
   } catch (error) { return errorResponse(error); }
 }
 
-export async function actionPost(request: Request, scope: 'ticket' | 'batch' | 'job', id: string, action: string): Promise<Response> {
+export async function actionPost(request: Request, scope: 'ticket' | 'batch' | 'job' | 'conversation', id: string, action: string): Promise<Response> {
   try {
     const current = instance();
     guardPost(request.headers, current);
     const value = validId(id);
-    const schema = scope === 'ticket' && action === 'chat' ? note : scope === 'ticket' && action === 'dismiss' ? reason : empty;
-    const input = await body(request, schema) as { note?: string; reason?: string };
+    const schema = scope === 'ticket' && action === 'chat' ? note : scope === 'ticket' && action === 'dismiss' ? reason : scope === 'batch' && action === 'mute' ? muteFor : empty;
+    const input = await body(request, schema) as { note?: string; reason?: string; mute_hours?: number | null; hours?: number | null };
     if (!current.config.tickets.enabled) throw new HttpError(409, 'tickets.disabled', 'Tickets disabled');
     if (scope === 'ticket' && ['start', 'chat'].includes(action) && !current.config.chats.enabled) throw new HttpError(409, 'chats.disabled', 'Chats off');
     const result = withDatabase(true, (db) => transaction(db, () => {
       if (scope === 'ticket' && action === 'start') return { ticket: approve(current.config, db, value) };
       if (scope === 'ticket' && action === 'chat') return { ticket: approve(current.config, db, value, input.note!) };
-      if (scope === 'ticket' && action === 'dismiss') return { ticket: dismiss(db, value, input.reason ?? '') };
+      if (scope === 'ticket' && action === 'dismiss') {
+        dismiss(db, value, input.reason ?? '');
+        if (input.mute_hours !== undefined) muteTicket(db, value, input.mute_hours);
+        return { ticket: value };
+      }
       if (scope === 'batch' && action === 'ticket') return { ticket: makeTicket(db, value) };
+      if (scope === 'batch' && action === 'mute') return { conversation: muteBatch(db, value, input.hours!) };
+      if (scope === 'conversation' && action === 'unmute') return { conversation: mute(db, value, 0) };
       if (scope === 'job' && action === 'retry') {
         const job = db.prepare('SELECT state FROM job WHERE id=?').get(value);
         if (!job) throw new HttpError(404, 'job.not-found', `Job ${value} not found`);

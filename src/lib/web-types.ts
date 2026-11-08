@@ -74,9 +74,18 @@ export interface SkippedBatch {
   title: string | null;
   source: string;
   account: string;
-  outcome: 'not_on_us' | 'backlog' | 'answered';
+  outcome: 'not_on_us' | 'backlog' | 'answered' | 'muted';
   created_at: string;
   messages: SourceMessage[];
+}
+
+export interface MutedConversation {
+  id: number;
+  title: string | null;
+  source: string;
+  account: string;
+  until: string;
+  forever: boolean;
 }
 
 export interface OverviewState {
@@ -85,6 +94,7 @@ export interface OverviewState {
   day: string;
   groups: Record<Exclude<Group, 'skipped'>, TicketCard[]>;
   skipped: SkippedBatch[];
+  muted: MutedConversation[];
   health: Health[];
   problems: {
     jobs: ParkedJob[];

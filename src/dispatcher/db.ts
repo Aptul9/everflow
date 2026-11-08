@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS cursor (
   PRIMARY KEY (source, account));
 CREATE TABLE IF NOT EXISTS conversation (
   id INTEGER PRIMARY KEY, source TEXT NOT NULL, account TEXT NOT NULL, native_id TEXT NOT NULL,
-  title TEXT, approval TEXT NOT NULL DEFAULT 'approve', last_message_at TEXT,
+  title TEXT, approval TEXT NOT NULL DEFAULT 'approve', last_message_at TEXT, muted_until TEXT,
   UNIQUE (source, account, native_id));
 CREATE TABLE IF NOT EXISTS person (
   id INTEGER PRIMARY KEY, email TEXT UNIQUE, teams_oid TEXT UNIQUE, gchat_id TEXT UNIQUE, name TEXT);
@@ -169,6 +169,11 @@ function refineChat(db: DatabaseSync): void {
   });
 }
 
+function refineConversation(db: DatabaseSync): void {
+  if (db.prepare('PRAGMA table_info(conversation)').all().some((column) => column.name === 'muted_until')) return;
+  transaction(db, () => db.exec('ALTER TABLE conversation ADD COLUMN muted_until TEXT'));
+}
+
 function scopeLegacyKeys(db: DatabaseSync): void {
   if (!db.prepare('PRAGMA table_info(message)').all().some((column) => column.name === 'native_id')) {
     db.exec('ALTER TABLE message ADD COLUMN native_id TEXT');
@@ -218,6 +223,7 @@ export function openDb(path: string): DatabaseSync {
     else if (from !== 2) throw new Error(`Schema version ${from} requires await migrate(path) before openDb(path)`);
     refineJobs(db);
     refineChat(db);
+    refineConversation(db);
     db.exec('PRAGMA journal_mode = WAL');
     return db;
   } catch (error) {

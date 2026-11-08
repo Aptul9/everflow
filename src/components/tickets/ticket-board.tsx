@@ -1,6 +1,6 @@
 'use client';
 
-import { FilePlus, Inbox, Keyboard, MessagesSquare, RefreshCw, Search, TriangleAlert, WifiOff } from 'lucide-react';
+import { Bell, BellOff, FilePlus, Inbox, Keyboard, MessagesSquare, RefreshCw, Search, TriangleAlert, WifiOff } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { groups } from '../../lib/web-types.ts';
 import type { Group, OverviewState, SkippedBatch } from '../../lib/web-types.ts';
@@ -16,13 +16,16 @@ import type { Tone } from './ticket-card.tsx';
 import { useOverview } from './use-overview.ts';
 
 const columnTone: Record<Group, Tone> = { needs_you: 'needs', working: 'working', waiting_them: 'waiting', failed: 'failed', done_today: 'done', skipped: 'skipped' };
-const outcomes: Record<SkippedBatch['outcome'], string> = { not_on_us: 'Not on us', backlog: 'Backlog', answered: 'Answered' };
+const outcomes: Record<SkippedBatch['outcome'], string> = { not_on_us: 'Not on us', backlog: 'Backlog', answered: 'Answered', muted: 'Muted' };
+type Post = (key: string, path: string, input?: Record<string, string | number | null>) => Promise<unknown>;
 
-function BatchCard(props: { batch: SkippedBatch; enabled: boolean; expired: boolean; pending: ReadonlySet<string>; errors: Record<string, string>; post: (key: string, path: string) => Promise<unknown> }) {
+function BatchCard(props: { batch: SkippedBatch; enabled: boolean; expired: boolean; pending: ReadonlySet<string>; errors: Record<string, string>; post: Post }) {
   const { batch } = props;
   const key = `batch:${batch.id}:ticket`;
+  const muteKey = `batch:${batch.id}:mute`;
   const messagesId = useId();
   const [messagesOpen, setMessagesOpen] = useState(false);
+  const error = props.errors[key] || props.errors[muteKey];
   return <div className="rounded-lg border bg-card shadow-xs">
     <div className="space-y-2 p-3">
       <div className="flex min-w-0 items-center gap-2 text-xs">
@@ -31,17 +34,41 @@ function BatchCard(props: { batch: SkippedBatch; enabled: boolean; expired: bool
       </div>
       <h4 className="text-sm leading-snug font-semibold"><span className="sr-only">{`Batch #${batch.id}:`}</span>{' '}{batch.title ?? '(no title)'}</h4>
       <p className="truncate text-xs text-muted-foreground" title={`${batch.source} · ${batch.account}`}>{batch.source} · {batch.account}</p>
-      {props.errors[key] && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{props.errors[key]}</p>}
+      {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
     </div>
-    {props.enabled && <div className="border-t px-3 py-2">
-      <Button type="button" variant="outline" size="sm" className="h-9 w-full sm:h-8" aria-label={`Make ticket from batch #${batch.id}`} disabled={props.expired || props.pending.has(key)}
+    {props.enabled && <div className="flex items-center gap-1.5 border-t px-3 py-2">
+      <Button type="button" variant="outline" size="sm" className="h-9 flex-1 sm:h-8" aria-label={`Make ticket from batch #${batch.id}`} disabled={props.expired || props.pending.has(key)}
         onClick={() => { void props.post(key, `/api/batch/${batch.id}/ticket`).catch(() => {}); }}><FilePlus aria-hidden="true" />Make ticket</Button>
+      {batch.outcome !== 'muted' && <ActionDialog label={`Mute chat of batch #${batch.id}`} display="Mute" title={`Mute ${batch.title ?? 'this chat'}`} confirm="Mute chat" mute="only" size="sm"
+        icon={<BellOff aria-hidden="true" />} className="h-9 sm:h-8" disabled={props.expired || props.pending.has(muteKey)}
+        onConfirm={(_value, hours) => props.post(muteKey, `/api/batch/${batch.id}/mute`, { hours: hours ?? null })} />}
     </div>}
     <div className="border-t px-2 py-1">
       <Toggle expanded={messagesOpen} controls={messagesId} onClick={() => setMessagesOpen(!messagesOpen)} icon={<MessagesSquare aria-hidden="true" />}>Messages ({batch.messages.length})</Toggle>
     </div>
     {messagesOpen && <div className="px-2 pb-2"><MessageList id={messagesId} messages={batch.messages} /></div>}
   </div>;
+}
+
+function MutedChats(props: { state: OverviewState; expired: boolean; pending: ReadonlySet<string>; errors: Record<string, string>; post: Post }) {
+  if (!props.state.muted.length) return null;
+  return <section aria-label={`Muted chats (${props.state.muted.length})`} className="rounded-lg border bg-card px-3 py-2.5 shadow-xs">
+    <h2 className="flex items-center gap-2 text-sm font-semibold"><BellOff aria-hidden="true" className="size-4 text-muted-foreground" />Muted chats<span className="text-xs font-normal text-muted-foreground">{props.state.muted.length}</span></h2>
+    <ul className="mt-1.5 divide-y divide-border/60">
+      {props.state.muted.map((chat) => {
+        const key = `conversation:${chat.id}:unmute`;
+        return <li key={chat.id} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-1.5 text-xs">
+          <span className="min-w-0 truncate font-medium">{chat.title ?? '(no title)'}</span>
+          <span className="min-w-0 truncate text-muted-foreground">{chat.source} · {chat.account}</span>
+          <span className="ml-auto shrink-0 text-muted-foreground">{chat.forever ? 'until unmuted' : <>until <Time value={chat.until} /></>}</span>
+          {props.state.tickets_enabled && <Button type="button" variant="outline" size="sm" className="h-8" aria-label={`Unmute ${chat.title ?? `chat ${chat.id}`}`}
+            disabled={props.expired || props.pending.has(key)} onClick={() => { void props.post(key, `/api/conversation/${chat.id}/unmute`).catch(() => {}); }}>
+            <Bell aria-hidden="true" />Unmute</Button>}
+          {props.errors[key] && <p role="alert" className="w-full text-destructive">{props.errors[key]}</p>}
+        </li>;
+      })}
+    </ul>
+  </section>;
 }
 
 export function TicketBoard(props: { initialState: OverviewState; initialEtag: string; token: string; initialNow?: number }) {
@@ -144,16 +171,17 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
 
       <Pipeline state={state} />
       <Problems state={state} expired={expired} pending={pending} errors={errors} post={post} />
+      <MutedChats state={state} expired={expired} pending={pending} errors={errors} post={post} />
 
       <main id="tickets" tabIndex={-1} className="space-y-3 outline-none">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <h2 className="text-sm font-semibold">Board</h2>
           <p className="text-xs text-muted-foreground">{needle ? `${columns.reduce((sum, column) => sum + column.shown, 0)} matching "${query.trim()}"` : `${tickets.length} tickets today, ${state.skipped.length} skipped batches`}</p>
           {state.tickets_enabled && <div className="ml-auto">
-            <ActionDialog label={`Dismiss selected (${chosen.length})`} title={`Dismiss ${chosen.length} selected tickets`} confirm="Confirm dismiss" size="sm" className="h-9 sm:h-8"
-              disabled={chosen.length === 0 || expired} onConfirm={async (reason) => {
+            <ActionDialog label={`Dismiss selected (${chosen.length})`} title={`Dismiss ${chosen.length} selected tickets`} confirm="Confirm dismiss" size="sm" className="h-9 sm:h-8" mute="optional"
+              disabled={chosen.length === 0 || expired} onConfirm={async (reason, mute) => {
                 const results = await Promise.all(chosen.map(async (id) => {
-                  try { await post(`ticket:${id}:dismiss`, `/api/ticket/${id}/dismiss`, { reason }); return id; } catch { return null; }
+                  try { await post(`ticket:${id}:dismiss`, `/api/ticket/${id}/dismiss`, mute === undefined ? { reason } : { reason, mute_hours: mute }); return id; } catch { return null; }
                 }));
                 setSelected((previous) => new Set([...previous].filter((id) => !results.includes(id))));
               }} />

@@ -35,7 +35,7 @@ function Row({ name, item }: { name: string; item: Health }) {
     <div className="flex min-w-0 items-center gap-2 text-xs">
       <Dot state={item.state} />
       <span className="min-w-0 truncate">{name}</span>
-      <span className="ml-auto shrink-0 text-muted-foreground">{item.state}</span>
+      <span className="ml-auto shrink-0 text-muted-foreground">{item.scope === 'account' && item.state === 'disabled' ? 'off' : item.state}</span>
     </div>
     {item.last_error && <p className="mt-0.5 line-clamp-2 pl-4 text-[11px] leading-snug text-destructive">{item.last_error}</p>}
     {item.checkpoint && <p className="pl-4 text-[11px] text-muted-foreground">{item.coverage === 'recent-topics' ? 'Latest stored' : 'Checkpoint'} <Time value={item.checkpoint} /></p>}

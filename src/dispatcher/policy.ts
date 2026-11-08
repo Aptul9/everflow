@@ -15,6 +15,12 @@ export function isNotePath(value: string): boolean {
     && /\.md$/i.test(value) && value.split('/').every(safeComponent);
 }
 
+// null: every account of the source is on. A list turns every other account of that source off.
+export function sourceAccounts(cfg: object, source: string): Set<string> | null {
+  const value = (cfg as { sources?: Record<string, { accounts?: unknown } | undefined> }).sources?.[source]?.accounts;
+  return Array.isArray(value) ? new Set(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim().toLowerCase())) : null;
+}
+
 export function clientsFor(cfg: Pick<Config, 'clients'>, account: string, addresses: readonly string[]): string[] {
   const clients = Object.entries(cfg.clients);
   const hit = clients.filter(([, client]) => client.accounts.some((value) => value.toLowerCase() === account.toLowerCase()));

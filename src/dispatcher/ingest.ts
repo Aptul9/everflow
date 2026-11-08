@@ -216,8 +216,10 @@ export function schedule(db: DatabaseSync, cfg: Config, at?: string): number[] {
         continue;
       }
       const own = pending.every((message) => message.sender_is_me === 1);
+      const until = db.prepare('SELECT muted_until FROM conversation WHERE id=?').get(conversation.id!)?.muted_until;
+      const muted = !own && typeof until === 'string' && utc(until) > now;
       const id = Number(db.prepare('INSERT INTO batch(conversation,state,created_at,done_at,outcome) VALUES (?,?,?,?,?)')
-        .run(conversation.id!, own ? 'done' : 'pending', now, own ? now : null, own ? 'answered' : 'pending').lastInsertRowid);
+        .run(conversation.id!, own || muted ? 'done' : 'pending', now, own || muted ? now : null, own ? 'answered' : muted ? 'muted' : 'pending').lastInsertRowid);
       db.prepare('UPDATE message SET batch=? WHERE conversation=? AND batch IS NULL').run(id, conversation.id!);
       if (own) {
         const linked = db.prepare("SELECT ticket FROM ticket_conversation WHERE conversation=? AND kind IN ('primary','linked')").get(conversation.id!);
