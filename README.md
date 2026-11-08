@@ -32,6 +32,19 @@ Dependencies, npm configuration, profile, cache, node-gyp headers and temporary 
 
 No checkout `dist` or `.next` is required. Do not invoke Next.js directly in the checkout. Staging is not an OS sandbox or a complete filesystem/network audit.
 
+## Daily use
+
+`scripts/workdesk.ps1` drives one instance folder, by default `%LOCALAPPDATA%\workdesk`, which holds `config.toml`, the database and `build.txt`. `build` runs `npm run build` in this checkout and writes the new receipt path to `build.txt`; no other step selects a build. `start`, `stop` and `status` call the pinned build's CLI with that config, and `open` opens the page of the running instance. `-Instance <folder>` selects another instance folder.
+
+```powershell
+.\scripts\workdesk.ps1 build
+.\scripts\workdesk.ps1 start
+.\scripts\workdesk.ps1 open
+.\scripts\workdesk.ps1 stop
+```
+
+A rebuilt instance uses the new build after `stop` and `start`.
+
 ## Select an artifact
 
 Keep one completed receipt selected explicitly. Never select the newest directory or fall back to checkout output. These PowerShell bindings create a new synthetic instance directory only:

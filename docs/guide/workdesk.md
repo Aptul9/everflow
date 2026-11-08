@@ -98,15 +98,18 @@ All values are the defaults in `src/dispatcher/config.ts`; the running instance 
 
 The trial instance lives in `%LOCALAPPDATA%\workdesk`, with its own database. The older weekend instance in `%LOCALAPPDATA%\inbox-dispatcher-v2` is retained and stays stopped. Checkout paths, instance paths, databases, locks and existing `INBOX_*` environment variables remain compatible. `npm run workdesk` is the current launcher; `npm run inbox` remains an alias.
 
-| File | Use |
+Everything runs through `scripts\workdesk.ps1 <command>` in the repository.
+
+| Command or file | Use |
 |---|---|
-| `start.ps1` | Starts the daemon, the watchers and the page |
-| `stop.ps1` | Stops them; waits 15 s, then ends the owned processes. OpenChamber chats keep running |
-| `status.ps1` | Shows whether the daemon runs, its process and port |
-| `open-page.ps1` | Opens `http://127.0.0.1:8789/` |
+| `build` | Builds the checkout and pins the new build in `build.txt` of the instance folder |
+| `start` | Starts the daemon, the watchers and the page |
+| `stop` | Stops them; waits 15 s, then ends the owned processes. OpenChamber chats keep running |
+| `status` | Shows whether the daemon runs, its process and port |
+| `open` | Opens the page of the running instance |
 | `config.toml` | The instance's explicitly selected settings, independent of the repository example |
 
-- There is no autostart, service or scheduled task. After a crash or a reboot the dispatcher stays down until `start.ps1` runs again.
+- There is no autostart, service or scheduled task. After a crash or a reboot the dispatcher stays down until `scripts\workdesk.ps1 start` runs again.
 - OpenChamber has to be running. The dispatcher reads its port and password from `~/.config/openchamber/settings.json`.
 - The data is `dispatcher.db` in the same folder. The log is `dispatcher.db.log`, rotated at 10,485,760 bytes with 5 files kept. The Teams token cache and profile snapshots are in `dispatcher.db.sources`.
 - The page listens on `127.0.0.1` only, and its buttons need the token of the current server start. After a restart the page has to be reloaded.
