@@ -67,7 +67,7 @@ test('I1 chats-off old pre-turn reservation looks up and persists an accepted ta
   using db = openDb(f.path); prepareStart(db);
   const owner = ticket(db, 'Accepted old create');
   const store = JSON.parse(String(db.prepare("SELECT detail FROM health WHERE dependency='daemon'").get()!.detail)).store_id;
-  peer.sessions.set('ses_accepted', remoteSession('ses_accepted', f.cfg.opencode.directory, { inbox_dispatcher: { store_id: store, ticket: owner } }));
+  peer.sessions.set('ses_accepted', remoteSession('ses_accepted', f.cfg.opencode.directory, { workdesk: { store_id: store, ticket: owner } }));
   const id = enqueue(db, 'start_chat', 'old-create-lookup', {}, owner);
   const job = claim(db, f.cfg, 'old-create-run')!;
   await startChat(f.cfg, db, job, { peer: connect(f.cfg) });

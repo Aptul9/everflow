@@ -10,7 +10,7 @@ export interface WebInstance {
   token: string;
 }
 
-const key = Symbol.for('inbox-dispatcher.web.instance');
+const key = Symbol.for('workdesk.web.instance');
 const owner = process as NodeJS.Process & { [key]?: WebInstance };
 
 export class HttpError extends Error {

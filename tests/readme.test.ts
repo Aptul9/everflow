@@ -161,10 +161,10 @@ test('documented test launcher preserves all caller metadata and selects React t
   const reactProbe = "import * as React from 'react'; console.log(JSON.stringify({ nodeEnv: process.env.NODE_ENV, act: typeof React.act }));";
   const code = `${prefix}\nconst result = spawnSync(process.execPath, ['--input-type=module-typescript', '--eval', ${JSON.stringify(reactProbe)}], { cwd: artifact.root, env, encoding: 'utf8' });
 assert.equal(result.status, 0, result.stderr);
-console.log(JSON.stringify({ react: JSON.parse(result.stdout), receipt: env.TEST_BUILD_RECEIPT, artifact: env.INBOX_DISPATCHER_ARTIFACT,
-  legacy: env.TEST_TRACKED_LEGACY_PATHS, root: env.INBOX_DISPATCHER_BUILD_ROOT }));`;
+console.log(JSON.stringify({ react: JSON.parse(result.stdout), receipt: env.TEST_BUILD_RECEIPT, artifact: env.WORKDESK_ARTIFACT,
+  legacy: env.TEST_TRACKED_LEGACY_PATHS, root: env.WORKDESK_BUILD_ROOT }));`;
   const result = spawnSync(process.execPath, ['--input-type=module-typescript', '--eval', code], { cwd: f.artifact.root,
-    env: { ...f.env, TEST_BUILD_RECEIPT: f.receipt, INBOX_DISPATCHER_ARTIFACT: f.receipt, TEST_TRACKED_LEGACY_PATHS: process.env.TEST_TRACKED_LEGACY_PATHS },
+    env: { ...f.env, TEST_BUILD_RECEIPT: f.receipt, WORKDESK_ARTIFACT: f.receipt, TEST_TRACKED_LEGACY_PATHS: process.env.TEST_TRACKED_LEGACY_PATHS },
     encoding: 'utf8', windowsHide: true, timeout: 15000 });
   expect(result.error).toBeUndefined(); expect(result.status, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual({ react: { nodeEnv: 'test', act: 'function' }, receipt: f.receipt, artifact: f.receipt,

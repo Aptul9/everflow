@@ -96,7 +96,7 @@ All values are the defaults in `src/dispatcher/config.ts`; the running instance 
 
 ## Running it
 
-The trial instance lives in `%LOCALAPPDATA%\workdesk`, with its own database. The older weekend instance in `%LOCALAPPDATA%\inbox-dispatcher-v2` is retained and stays stopped. Checkout paths, instance paths, databases, locks and existing `INBOX_*` environment variables remain compatible. `npm run workdesk` is the current launcher; `npm run inbox` remains an alias.
+The trial instance lives in `%LOCALAPPDATA%\workdesk`, with its own database. The older weekend instance in `%LOCALAPPDATA%\inbox-dispatcher-v2` is retained and stays stopped. Environment variables are named `WORKDESK_*`. `npm run workdesk` is the only launcher.
 
 Everything runs through `scripts\workdesk.ps1 <command>` in the repository.
 
@@ -111,7 +111,7 @@ Everything runs through `scripts\workdesk.ps1 <command>` in the repository.
 
 - There is no autostart, service or scheduled task. After a crash or a reboot the dispatcher stays down until `scripts\workdesk.ps1 start` runs again.
 - OpenChamber has to be running. The dispatcher reads its port and password from `~/.config/openchamber/settings.json`.
-- The data is `dispatcher.db` in the same folder. The log is `dispatcher.db.log`, rotated at 10,485,760 bytes with 5 files kept. The Teams token cache and profile snapshots are in `dispatcher.db.sources`.
+- The data is `workdesk.db` in the same folder. The log is `workdesk.db.log`, rotated at 10,485,760 bytes with 5 files kept. The Teams token cache and profile snapshots are in `workdesk.db.sources`.
 - The page listens on `127.0.0.1` only, and its buttons need the token of the current server start. After a restart the page has to be reloaded.
 - The `config.toml` in the repository has every switch off and is not the running configuration.
 

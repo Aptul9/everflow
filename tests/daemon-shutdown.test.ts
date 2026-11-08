@@ -26,7 +26,7 @@ test('failed graceful shutdown retains the OS writer pipe until exact owned proc
     const daemon=await startDaemon({configPath:${JSON.stringify(f.config)},buildReceipt:${JSON.stringify(process.env.TEST_BUILD_RECEIPT)},runId:${JSON.stringify(randomUUID())},port:0});
     process.send({type:'ready',receipt:daemon.receipt});
     process.on('message',async value=>{if(value?.stop){try{await daemon.close();process.send({type:'closed',code:'unexpected-success'});}catch(error){process.send({type:'closed',code:error.code||error.message});}}});`);
-  const child = fork(program, [], { cwd: artifact.root, env: { ...isolatedEnvironment(artifact.root, process.env), INBOX_DISPATCHER_ARTIFACT: process.env.TEST_BUILD_RECEIPT! }, execArgv: [], windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  const child = fork(program, [], { cwd: artifact.root, env: { ...isolatedEnvironment(artifact.root, process.env), WORKDESK_ARTIFACT: process.env.TEST_BUILD_RECEIPT! }, execArgv: [], windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   let stdout = '', stderr = ''; child.stdout!.on('data', (part: Buffer) => { stdout += part.toString(); }); child.stderr!.on('data', (part: Buffer) => { stderr += part.toString(); });
   const entered = Promise.withResolvers<void>(), closed = Promise.withResolvers<string>(), events: unknown[] = [];
   let ready = false, fetched = false;

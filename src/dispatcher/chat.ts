@@ -120,7 +120,7 @@ function quoteMessages(db: DatabaseSync, messages: readonly Message[]): string {
     attachments: JSON.parse(message.attachments ?? '[]'), ref: JSON.parse(message.ref ?? '{}') })), null, 2);
 }
 
-function instructions(cfg: Config, ticket: number, buildReceipt = process.env.INBOX_DISPATCHER_ARTIFACT): string {
+function instructions(cfg: Config, ticket: number, buildReceipt = process.env.WORKDESK_ARTIFACT): string {
   const artifact = readBuildReceipt(buildReceipt);
   const quoted = (value: string) => `'${value.replaceAll("'", "''")}'`;
   return `${contract}\nUse canonical files and Antonio's normal shared-file approval workflow. This brief grants no shared write or outside-send approval.

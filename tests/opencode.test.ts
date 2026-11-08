@@ -10,7 +10,7 @@ import { claimed, proposed, row } from './chat-support.ts';
 import { remoteSession, scriptedPeer, PEER_AT } from './opencode-support.ts';
 import { scratch } from './support.ts';
 
-beforeEach(() => vi.stubEnv('INBOX_OPENCODE_PASSWORD', ''));
+beforeEach(() => vi.stubEnv('WORKDESK_OPENCODE_PASSWORD', ''));
 afterEach(() => vi.unstubAllEnvs());
 
 function config(url: string) {
@@ -29,7 +29,7 @@ test('uses the typed client and omits permissions while persisting a store/ticke
   const call = peer.calls.find((call) => call.method === 'POST')!;
   expect(call.body).not.toHaveProperty('permissions');
   expect(call.body).toMatchObject({ location: { directory: cfg.opencode.directory }, model: { providerID: 'synthetic-provider', id: 'model/with/slash' },
-    metadata: { inbox_dispatcher: { store_id: 'store-one', ticket: 7 } } });
+    metadata: { workdesk: { store_id: 'store-one', ticket: 7 } } });
   expect(await api.findTicket('store-one', 7)).toBe(session.id);
   expect(await api.findTicket('another-store', 7)).toBeNull();
   expect(await api.get(session.id)).toMatchObject({ id: session.id });
@@ -127,7 +127,7 @@ test('transport has an explicit timeout and propagates cancellation', async () =
 test('tag lookup scans every archived page, omits order with opaque cursors, rejects duplicates', async () => {
   await using peer = await scriptedPeer();
   const { cfg } = config(peer.url);
-  const tagged = remoteSession('ses_tagged', cfg.opencode.directory, { inbox_dispatcher: { store_id: 'durable-store', ticket: 9 } });
+  const tagged = remoteSession('ses_tagged', cfg.opencode.directory, { workdesk: { store_id: 'durable-store', ticket: 9 } });
   peer.state.hook = (call, response) => {
     if (call.url.pathname !== '/api/session') return false;
     const archived = call.url.searchParams.get('archived');
@@ -267,7 +267,7 @@ test('tag lookup treats Windows directory casing/separators as the same configur
   await using peer = await scriptedPeer();
   const { cfg } = config(peer.url);
   const tagged = remoteSession('ses_normalized', cfg.opencode.directory.replaceAll('\\', '/').toUpperCase() + '/',
-    { inbox_dispatcher: { store_id: 'store-normalized', ticket: 5 } });
+    { workdesk: { store_id: 'store-normalized', ticket: 5 } });
   peer.state.hook = (_call, response) => { peer.json(response, { data: [tagged], cursor: {} }); return true; };
   expect(await transport.connect(cfg).findTicket('store-normalized', 5)).toBe('ses_normalized');
 });

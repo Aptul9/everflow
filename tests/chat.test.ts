@@ -10,7 +10,7 @@ import { AT, addBatch, chatFixture, claimed, proposed, row } from './chat-suppor
 import { remoteSession, scriptedPeer, PEER_AT } from './opencode-support.ts';
 import { snapshot } from './support.ts';
 
-beforeEach(() => { vi.stubEnv('INBOX_OPENCODE_PASSWORD', ''); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(AT)); });
+beforeEach(() => { vi.stubEnv('WORKDESK_OPENCODE_PASSWORD', ''); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(AT)); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 test.each(['working', 'needs_you', 'waiting_them', 'blocked', 'done'] as const)('parses final completed STATUS enum %s', (status) => {

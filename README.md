@@ -2,7 +2,7 @@
 
 TypeScript inbox collection, local ticket proposals and approved OpenChamber chats. SQLite holds the queue and processed markers. Source read state is never changed. The dispatcher has no mail or chat send transport and no channel-based approvals or alerts.
 
-Workdesk was previously named inbox-dispatcher. The checkout and GitHub repository retain their existing names. Existing instance paths, database files, named-pipe locks and `INBOX_*` environment variables remain unchanged. `npm run workdesk -- --help` is the current launcher; `npm run inbox` remains a compatibility alias. No state migration is required for the rename or new sources.
+Workdesk was previously named inbox-dispatcher. The rename covers the GitHub repository, the checkout, `WORKDESK_*` environment variables, named-pipe locks, OpenChamber session tags and build and scratch paths. `npm run workdesk -- --help` is the only launcher. A build made before the rename keeps its own names and paths, so an instance pinned to it keeps working until it is rebuilt. Chats created by such a build carry the old `inbox_dispatcher` session tag and are not found by later builds. No database migration is required.
 
 Tickets and chats are disabled by default. Source collection has its own switches. Implementation and synthetic tests do not authorize live migration, source activation or chat activation.
 
@@ -12,7 +12,7 @@ Tickets and chats are disabled by default. Source collection has its own switche
 - MSVC C++ build tools with a Windows SDK. The recorded toolchain uses Visual Studio 2026 Build Tools. Native compilation also requires a node-gyp-compatible Python interpreter. It is build tooling only. The application, watchers, CLI and tests use TypeScript/Node.
 - Network access to the lockfile's dependency downloads during the private build. Source-specific access is separate and unnecessary for the disabled synthetic instance below.
 - For live triage, an explicit read-only knowledge-base root, model and ordered provider ids in `[triage]`. Provider routes come from `triage.provider_config_path` or the existing OpenCode JSONC settings. No provider is installed, started or selected automatically.
-- For approved chats, an already running OpenChamber server and its existing settings. An empty `opencode.url` reads `~/.config/openchamber/settings.json` for `desktopLocalPort` and `desktopUiPassword`. An explicit HTTP(S) `opencode.url` uses that server instead, with optional `INBOX_OPENCODE_PASSWORD`. `opencode.directory` identifies the session directory. A nonempty model uses `provider/model` form.
+- For approved chats, an already running OpenChamber server and its existing settings. An empty `opencode.url` reads `~/.config/openchamber/settings.json` for `desktopLocalPort` and `desktopUiPassword`. An explicit HTTP(S) `opencode.url` uses that server instead, with optional `WORKDESK_OPENCODE_PASSWORD`. `opencode.directory` identifies the session directory. A nonempty model uses `provider/model` form.
 
 The dispatcher never starts, focuses, closes or restarts Outlook, Teams or providers. Google Chat has an explicit opt-in for minimized authentication bootstrap. Provider quota endpoints, provider lifecycle helpers and daemon autostart are absent. Source prerequisites are described below.
 
@@ -28,7 +28,7 @@ This is the clean setup and production-build command. No checkout dependency ins
 
 The build supplies only named root inputs, including this README, and approved TypeScript/TSX/CSS source and the historical SQL test fixture. It excludes the default instance configuration, environment files, Git metadata, documentation trees, databases and user state. Source links, junctions and hard links are rejected. Dependency links and output traces must remain inside the stage. Project, Turbopack and tracing roots are pinned to that stage.
 
-Dependencies, npm configuration, profile, cache, node-gyp headers and temporary files are private to the stage. Build output currently lives under `C:/Users/Antonio/AppData/Local/Temp/opencode/inbox-dispatcher-v2/source-builds`, as declared in [build-artifact.ts](src/web/build-artifact.ts). The final JSON line contains `buildReceipt`, an absolute path to a completed `build-receipt.json`. A prepared stage is not a runnable artifact.
+Dependencies, npm configuration, profile, cache, node-gyp headers and temporary files are private to the stage. Build output currently lives under `C:/Users/Antonio/AppData/Local/Temp/opencode/workdesk/source-builds`, as declared in [build-artifact.ts](src/web/build-artifact.ts). The final JSON line contains `buildReceipt`, an absolute path to a completed `build-receipt.json`. A prepared stage is not a runnable artifact.
 
 No checkout `dist` or `.next` is required. Do not invoke Next.js directly in the checkout. Staging is not an OS sandbox or a complete filesystem/network audit.
 
@@ -55,12 +55,12 @@ $receipt = Read-Host 'Absolute completed buildReceipt path from npm run build'
 $build = Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json
 if ($build.status -ne 'complete') { throw 'Completed build receipt required' }
 $cli = Join-Path $build.root 'dist/cli.js'
-$scratch = Join-Path $env:LOCALAPPDATA ('Temp/opencode/inbox-dispatcher-v2/manual-' + [guid]::NewGuid().ToString('N'))
+$scratch = Join-Path $env:LOCALAPPDATA ('Temp/opencode/workdesk/manual-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $scratch -ErrorAction Stop | Out-Null
 $config = Join-Path $scratch 'config.toml'
 ```
 
-Both receipt and config paths passed to the CLI must be absolute. Every non-help command validates a completed artifact before opening the explicit instance config. `INBOX_DISPATCHER_ARTIFACT` is an alternative explicit receipt input; examples retain `--artifact` on each command. The checkout package launcher forwards to the selected compiled CLI. No default config or artifact fallback exists.
+Both receipt and config paths passed to the CLI must be absolute. Every non-help command validates a completed artifact before opening the explicit instance config. `WORKDESK_ARTIFACT` is an alternative explicit receipt input; examples retain `--artifact` on each command. The checkout package launcher forwards to the selected compiled CLI. No default config or artifact fallback exists.
 
 ## Disabled instance
 
@@ -321,20 +321,20 @@ Keep both artifact variables and the fresh Git metadata. The inline TypeScript l
 
 ```powershell
 $env:TEST_BUILD_RECEIPT = $receipt
-$env:INBOX_DISPATCHER_ARTIFACT = $receipt
+$env:WORKDESK_ARTIFACT = $receipt
 $run = @'
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { isolatedEnvironment } from './scripts/build.ts';
 import { readBuildReceipt } from './src/web/build-artifact.ts';
 const artifact = readBuildReceipt(process.env.TEST_BUILD_RECEIPT);
-assert.equal(process.env.INBOX_DISPATCHER_ARTIFACT, process.env.TEST_BUILD_RECEIPT);
+assert.equal(process.env.WORKDESK_ARTIFACT, process.env.TEST_BUILD_RECEIPT);
 assert(process.env.TEST_TRACKED_LEGACY_PATHS !== undefined);
 assert(Array.isArray(JSON.parse(process.env.TEST_TRACKED_LEGACY_PATHS)));
 const env = { ...isolatedEnvironment(artifact.root, process.env),
   NODE_ENV: 'test',
   TEST_BUILD_RECEIPT: process.env.TEST_BUILD_RECEIPT,
-  INBOX_DISPATCHER_ARTIFACT: process.env.INBOX_DISPATCHER_ARTIFACT,
+  WORKDESK_ARTIFACT: process.env.WORKDESK_ARTIFACT,
   TEST_TRACKED_LEGACY_PATHS: process.env.TEST_TRACKED_LEGACY_PATHS };
 for (const args of [
   ['node_modules/typescript/bin/tsc', '--noEmit'],
@@ -357,7 +357,7 @@ try {
 
 ## Live checks
 
-[live-checks.ts](scripts/live-checks.ts) drives acceptance on owned scratch instances. Every command requires `--opt-in`, a `--scenario` name and a `--run-root` under `C:/Users/Antonio/AppData/Local/Temp/opencode/inbox-dispatcher-v2/live-checks`. Run it with Node from the completed stage, never from the checkout.
+[live-checks.ts](scripts/live-checks.ts) drives acceptance on owned scratch instances. Every command requires `--opt-in`, a `--scenario` name and a `--run-root` under `C:/Users/Antonio/AppData/Local/Temp/opencode/workdesk/live-checks`. Run it with Node from the completed stage, never from the checkout.
 
 Before any connection, spawn or file read, the guard refuses the held database, its sidecars and the relay token. It also refuses case, stream, trailing-dot and short-name spellings, traversal, paths outside the run root, link or junction components, hard-linked state and existing databases not recorded in the run manifest. The only accepted seed is `data/backups/pre-review-resume-20261104-234928.db`, copied into a fresh run. A final-component symlink among read-only inputs is resolved to its declared target, which then passes the same checks.
 

@@ -10,9 +10,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { parseArgs } from 'node:util';
 import { inside, plainParents, readBuildReceipt, samePath } from '../src/web/build-artifact.ts';
 
-export const SCRATCH_ROOT = resolve('C:/Users/Antonio/AppData/Local/Temp/opencode/inbox-dispatcher-v2');
+export const SCRATCH_ROOT = resolve('C:/Users/Antonio/AppData/Local/Temp/opencode/workdesk');
 export const LIVE_ROOT = join(SCRATCH_ROOT, 'live-checks');
-export const CHECKOUT = resolve('C:/Users/Antonio/Downloads/personal projects/inbox-dispatcher');
+export const CHECKOUT = resolve('C:/Users/Antonio/Downloads/personal projects/workdesk');
 export const SEED_BACKUP = 'data/backups/pre-review-resume-20261104-234928.db';
 export const MANIFEST = 'run-manifest.json';
 const PROTECTED = ['data/dispatcher.db', 'data/teamsrelay.token'];
@@ -337,7 +337,7 @@ function ownSession(db: DatabaseSync, plan: RunPlan, ticket: number, peer: Retur
   const store = JSON.parse(String(db.prepare("SELECT detail FROM health WHERE dependency='daemon'").get()!.detail)).store_id;
   return { id: String(row.session_id), async verify() {
     const session = await peer.get(String(row.session_id));
-    const tag = session.metadata?.inbox_dispatcher as { store_id?: unknown; ticket?: unknown } | undefined;
+    const tag = session.metadata?.workdesk as { store_id?: unknown; ticket?: unknown } | undefined;
     if (tag?.store_id !== store || tag?.ticket !== ticket || !(samePath(session.location.directory, join(plan.runRoot, 'sessions')))) refuse('session.not-owned');
     return session;
   } };

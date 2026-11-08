@@ -90,7 +90,7 @@ test('relay owner disconnect aborts and observes its actual synthetic SSH child 
         errorListeners:target?.listenerCount('error'),closeListeners:target?.listenerCount('close'),
         stdoutListeners:target?.stdout.listenerCount('data'),stderrListeners:target?.stderr.listenerCount('data')})+'\\n');}
     },{},fallback.signal);process.exitCode=code;if(process.connected)process.disconnect();`);
-  const child = fork(script, [], { cwd: artifact.root, env: { ...isolatedEnvironment(artifact.root, process.env), INBOX_DISPATCHER_SOURCE_OWNER: String(process.pid) }, execArgv: [], windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  const child = fork(script, [], { cwd: artifact.root, env: { ...isolatedEnvironment(artifact.root, process.env), WORKDESK_SOURCE_OWNER: String(process.pid) }, execArgv: [], windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   using kernel = createKernel();
   const watcherIdentity = spawnedIdentity(child, (pid) => kernel.processIdentity(pid));
   let output = '', stderr = '';

@@ -21,7 +21,7 @@ export async function startServer(options: { configPath: string; buildReceipt: s
   const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   if (!samePath(moduleRoot, artifact.root) || !samePath(process.cwd(), artifact.root)) throw new Error('Launch the compiled staged server with its staged working directory');
   if (!options || typeof options.configPath !== 'string' || !isAbsolute(options.configPath)) throw new Error('Absolute explicit instance config required');
-  process.env.INBOX_DISPATCHER_BUILD_ROOT = artifact.root;
+  process.env.WORKDESK_BUILD_ROOT = artifact.root;
   const next = createRequire(import.meta.url)('next') as (options: NextServerOptions) => Pick<NextServer, 'prepare' | 'close' | 'getRequestHandler'>;
   const config = loadConfig(options.configPath);
   const requestedPort = options.port ?? config.web.port;

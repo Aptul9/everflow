@@ -8,7 +8,7 @@ import { AT, addBatch, chatFixture, claimed, proposed, row } from './chat-suppor
 import { remoteSession, scriptedPeer, PEER_AT } from './opencode-support.ts';
 import { snapshot } from './support.ts';
 
-beforeEach(() => { vi.stubEnv('INBOX_OPENCODE_PASSWORD', ''); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(AT)); });
+beforeEach(() => { vi.stubEnv('WORKDESK_OPENCODE_PASSWORD', ''); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(AT)); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 test('lost create response reconciles durable tag across DB/client restart without another create', async () => {
@@ -483,7 +483,7 @@ test.each(['unreachable', 'duplicate'] as const)('start %s lookup never falls th
   if (mode === 'unreachable') peer.state.hook = (_call, response) => { peer.json(response, {}, 503); return true; };
   else {
     for (const id of ['ses_duplicate_1', 'ses_duplicate_2']) peer.sessions.set(id, remoteSession(id, cfg.opencode.directory,
-      { inbox_dispatcher: { store_id: store, ticket } }));
+      { workdesk: { store_id: store, ticket } }));
   }
   chat.approve(cfg, db, ticket, '');
   const job = claimed(db, cfg);

@@ -15,11 +15,11 @@ import { snapshot } from './support.ts';
 type Peer = Awaited<ReturnType<typeof scriptedPeer>>;
 type Tag = { store_id?: unknown; ticket?: unknown } | undefined;
 
-beforeEach(() => { vi.stubEnv('INBOX_OPENCODE_PASSWORD', ''); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(AT)); });
+beforeEach(() => { vi.stubEnv('WORKDESK_OPENCODE_PASSWORD', ''); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(AT)); });
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 const source = ['message', 'conversation', 'cursor'];
-const tag = (session: { metadata?: unknown }) => (session.metadata as { inbox_dispatcher?: Tag } | undefined)?.inbox_dispatcher;
+const tag = (session: { metadata?: unknown }) => (session.metadata as { workdesk?: Tag } | undefined)?.workdesk;
 const store = (db: DatabaseSync) => JSON.parse(String(db.prepare("SELECT detail FROM health WHERE dependency='daemon'").get()!.detail)).store_id as string;
 const prompts = (peer: Peer) => peer.calls.filter((call) => call.method === 'POST' && call.url.pathname.endsWith('/prompt'));
 const count = (db: DatabaseSync, sql: string, ...values: (string | number)[]) => Number(db.prepare(sql).get(...values)!.n);
@@ -58,7 +58,7 @@ function invariants(db: DatabaseSync, peer: Peer) {
 
 function approvedSession(db: DatabaseSync, peer: Peer, cfg: ReturnType<typeof chatFixture>['cfg'], fields: Record<string, string> = {}) {
   const ticket = proposed(db, { lifecycle: 'active', approved_at: AT, approval_note: '', session_id: 'ses_1', ...fields });
-  peer.sessions.set('ses_1', remoteSession('ses_1', cfg.opencode.directory, { inbox_dispatcher: { store_id: store(db), ticket } }));
+  peer.sessions.set('ses_1', remoteSession('ses_1', cfg.opencode.directory, { workdesk: { store_id: store(db), ticket } }));
   return ticket;
 }
 

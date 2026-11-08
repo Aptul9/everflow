@@ -10,7 +10,7 @@ const artifact = readBuildReceipt(buildReceipt);
 process.chdir(artifact.root);
 const { startServer } = await import(pathToFileURL(artifact.server).href) as typeof import('../src/server.ts');
 const { openDb } = await import(pathToFileURL(join(artifact.root, 'dist', 'dispatcher', 'db.js')).href) as typeof import('../src/dispatcher/db.ts');
-const scratch = 'C:/Users/Antonio/AppData/Local/Temp/opencode/inbox-dispatcher-v2';
+const scratch = 'C:/Users/Antonio/AppData/Local/Temp/opencode/workdesk';
 if (!values.root || !isAbsolute(values.root)) throw new Error('Explicit absolute --root inside approved scratch required');
 const root = resolve(values.root);
 const inside = relative(resolve(scratch), root);

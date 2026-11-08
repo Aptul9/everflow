@@ -32,4 +32,4 @@ Requires python-docx, Pillow, pywin32 and Word. The document must be closed. Wor
 
 ## Compatibility
 
-Product and document names are Workdesk. Checkout/repository names, `%LOCALAPPDATA%/inbox-dispatcher-v2`, database filenames, named-pipe locks and `INBOX_*` environment variables retain their original values. No instance migration or source activation is part of documentation generation.
+Product, repository, checkout, environment variables (`WORKDESK_*`) and named-pipe locks use the name Workdesk. The retained weekend instance `%LOCALAPPDATA%/inbox-dispatcher-v2` keeps its folder name. No instance migration or source activation is part of documentation generation.

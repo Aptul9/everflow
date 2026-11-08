@@ -15,7 +15,7 @@ path = "C:/Users/Antonio/OneDrive/Documenti/Vault"
 [opencode]
 # Empty url: OpenChamber's own opencode server, through OpenChamber's local port with its UI password
 # (desktopLocalPort, desktopUiPassword in ~/.config/openchamber/settings.json). A url here means a plain
-# `opencode serve` with basic auth, password from INBOX_OPENCODE_PASSWORD.
+# `opencode serve` with basic auth, password from WORKDESK_OPENCODE_PASSWORD.
 url = ""
 directory = "C:/Users/Antonio/OneDrive/Documenti/Vault"
 model = "meridian-everbright/claude-opus-5-5"

@@ -8,8 +8,7 @@ import { plainParents, readBuildReceipt, samePath } from './web/build-artifact.t
 export const HELP = `Workdesk
 Usage: npm run workdesk -- --artifact ABSOLUTE_BUILD_RECEIPT --config ABSOLUTE_CONFIG COMMAND
        node ABSOLUTE_STAGED_DIST_CLI --artifact ABSOLUTE_BUILD_RECEIPT --config ABSOLUTE_CONFIG COMMAND
-Artifact may also be supplied explicitly through INBOX_DISPATCHER_ARTIFACT.
-Legacy npm run inbox remains supported.
+Artifact may also be supplied explicitly through WORKDESK_ARTIFACT.
 No default configuration, checkout artifact or newest-stage fallback exists.
 
 Commands:
@@ -55,7 +54,7 @@ export interface Command {
   name: string; args: number[]; configPath?: string; buildReceipt?: string; port?: number; reason?: string; all?: boolean; runId?: string;
 }
 
-export function parseCommand(args: string[], artifactEnvironment = process.env.INBOX_DISPATCHER_ARTIFACT): Command {
+export function parseCommand(args: string[], artifactEnvironment = process.env.WORKDESK_ARTIFACT): Command {
   const parsed = (() => {
     try { return parseArgs({ args, strict: true, allowPositionals: true, tokens: true, options: {
       help: { type: 'boolean', short: 'h' }, config: { type: 'string' }, artifact: { type: 'string' }, port: { type: 'string' },
@@ -107,7 +106,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     return child.status ?? 1;
   }
   process.chdir(artifact.root);
-  process.env.INBOX_DISPATCHER_ARTIFACT = command.buildReceipt!;
+  process.env.WORKDESK_ARTIFACT = command.buildReceipt!;
   const { loadConfig } = await import('./dispatcher/config.ts');
   const cfg = loadConfig(command.configPath!);
   if (command.name === '_run') {

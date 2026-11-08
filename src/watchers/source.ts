@@ -108,7 +108,7 @@ export function requiredOption(values: Record<string, unknown>, key: string): st
   return value;
 }
 
-function sourceOwner(): boolean { return process.connected === true && process.env.INBOX_DISPATCHER_SOURCE_OWNER === String(process.ppid); }
+function sourceOwner(): boolean { return process.connected === true && process.env.WORKDESK_SOURCE_OWNER === String(process.ppid); }
 
 export interface ChildTracker { owner: ProcessIdentity; capture(pid: number): ProcessIdentity; send(value: unknown): void | Promise<void> }
 export async function trackSourceChild(child: ChildProcess, input?: ChildTracker): Promise<void> {

@@ -158,7 +158,7 @@ function loadSettings(options: TransportOptions) {
 // Constructing the client starts no service, opens no connection and subscribes to no events.
 export function connect(cfg: Config, options: TransportOptions = {}) {
   let url = cfg.opencode.url;
-  let password = options.password ?? process.env.INBOX_OPENCODE_PASSWORD ?? '';
+  let password = options.password ?? process.env.WORKDESK_OPENCODE_PASSWORD ?? '';
   const openchamber = !url;
   if (openchamber) {
     const settings = loadSettings(options);
@@ -187,7 +187,7 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
       const [providerID, ...model] = cfg.opencode.model.split('/');
       if (cfg.opencode.model && (!providerID || !model.join('/'))) throw new TypeError('OpenCode model must be provider/model');
       return client.session.create({ title, location: { directory: cfg.opencode.directory },
-        metadata: { inbox_dispatcher: { store_id: store, ticket } },
+        metadata: { workdesk: { store_id: store, ticket } },
         ...(cfg.opencode.model ? { model: { providerID: providerID!, id: model.join('/') } } : {}) }, request(signal));
     },
     async findTicket(store: string, ticket: number, signal?: AbortSignal): Promise<string | null> {
@@ -199,7 +199,7 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
           const page = await client.session.list({ directory: cfg.opencode.directory, archived, limit: 100,
             ...(cursor ? { cursor } : { order: 'desc' }) }, request(signal));
           for (const session of page.data) {
-            const tag = session.metadata?.inbox_dispatcher;
+            const tag = session.metadata?.workdesk;
             if (tag && typeof tag === 'object' && !Array.isArray(tag) && tag.store_id === store && tag.ticket === ticket
               && directoryKey(session.location.directory) === directoryKey(cfg.opencode.directory)) matches.add(session.id);
           }

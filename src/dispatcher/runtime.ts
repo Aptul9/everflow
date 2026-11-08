@@ -91,7 +91,7 @@ export function sourceCommand(cfg: Config, db: DatabaseSync, source: Source, bui
     }
   }
   return { source, executable: process.execPath, args, cwd: artifact.root,
-    environment: { ...childEnvironment(), INBOX_DISPATCHER_SOURCE_OWNER: String(process.pid), INBOX_DISPATCHER_SOURCE_CONFIG: cfg._config_path, INBOX_DISPATCHER_ARTIFACT: buildReceipt } };
+    environment: { ...childEnvironment(), WORKDESK_SOURCE_OWNER: String(process.pid), WORKDESK_SOURCE_CONFIG: cfg._config_path, WORKDESK_ARTIFACT: buildReceipt } };
 }
 
 export function createLog(path: string, policy: Pick<Config['jobs'], 'log_files' | 'log_max_bytes'>): Log {
