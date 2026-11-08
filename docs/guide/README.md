@@ -2,9 +2,7 @@
 
 Reader guide for source collection, local ticket proposals and approved OpenChamber work.
 
-- `workdesk.md`: document source.
-- `workdesk.docx`: generated Word document.
-- `build.py`: existing Word generator, renamed inputs and header.
+- `workdesk.md`: the guide.
 - `diagrams/`: typed JSON sources and generated HTML/PNG diagrams.
 
 Guide updated 2026-11-07 from current TypeScript source. Covers Outlook, Teams, relay, Google Chat through gweb and Gmail through gws. Existing instance paths remain unchanged. No database, sidecar, log, relay token or source credential is included in the guide build. Account and client names remain outside the document and diagrams.
@@ -19,16 +17,6 @@ node "$env:USERPROFILE/.claude/skills/archify/bin/archify.mjs" deliver sequence 
 ```
 
 The HTML files are generated. Edit JSON and regenerate. Diagram PNGs use the same delivered HTML, light theme and `embed=1`, with Chrome headless at 2x scale. Architecture viewport: 1400x880; sequence viewport: 1400x820. Screenshot paths must be absolute. The architecture retains existing diagnosed label positions where routes share a corridor.
-
-## Generate Word
-
-Run from this folder after regenerating the PNGs:
-
-```powershell
-python build.py
-```
-
-Requires python-docx, Pillow, pywin32 and Word. The document must be closed. Word runs hidden to update the real contents field and page numbers. Existing formatting and generator are retained. Application watchers, runtime and tests remain TypeScript; this Python script is documentation tooling only.
 
 ## Compatibility
 

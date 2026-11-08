@@ -28,6 +28,8 @@ export function ActionDialog(props: {
   variant?: 'default' | 'outline';
   size?: 'default' | 'sm' | 'icon-sm';
   className?: string;
+  placeholder?: string;
+  safe?: boolean;
   onConfirm: (value: string, mute: MuteChoice) => Promise<unknown>;
 }) {
   const id = useId();
@@ -78,7 +80,7 @@ export function ActionDialog(props: {
           </div>
           <Textarea ref={field} id={id} value={value} onChange={(event) => setValue(event.target.value)} maxLength={limit}
             aria-invalid={!!error} aria-describedby={error ? `${id}-error` : undefined} rows={5}
-            placeholder={props.note ? 'Exact instruction for the chat' : 'Why this is closed, for feedback'} />
+            placeholder={props.placeholder ?? (props.note ? 'Exact instruction for the chat' : 'Why this is closed, for feedback')} />
         </div>}
         {props.mute && <div className="space-y-1.5">
           <label htmlFor={`${id}-mute`} className="text-sm font-medium">{only ? 'Mute for' : 'Mute this chat'}</label>
@@ -90,7 +92,7 @@ export function ActionDialog(props: {
         {error && <p id={`${id}-error`} role="alert" className="text-sm text-destructive">{error}</p>}
         <DialogFooter className="gap-2">
           <DialogClose asChild><Button type="button" variant="outline" className="h-10 sm:h-9">Cancel</Button></DialogClose>
-          <Button type="submit" disabled={saving} variant={props.note || only ? 'default' : 'destructive'} className="h-10 sm:h-9">{saving ? 'Saving...' : props.confirm}</Button>
+          <Button type="submit" disabled={saving} variant={props.note || only || props.safe ? 'default' : 'destructive'} className="h-10 sm:h-9">{saving ? 'Saving...' : props.confirm}</Button>
         </DialogFooter>
       </form>
     </DialogContent>

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { approve } from '../dispatcher/approval.ts';
 import { transaction } from '../dispatcher/db.ts';
 import { retry } from '../dispatcher/jobs.ts';
-import { dismiss, makeTicket, mute, muteBatch, muteTicket, TicketError } from '../dispatcher/tickets.ts';
+import { close, dismiss, makeTicket, mute, muteBatch, muteTicket, TicketError } from '../dispatcher/tickets.ts';
 import { HttpError, instance, withDatabase } from './instance.ts';
 import type { WebInstance } from './instance.ts';
 import { readState, representation, ticketDetail } from './state.ts';
@@ -99,7 +99,7 @@ export async function actionPost(request: Request, scope: 'ticket' | 'batch' | '
     const current = instance();
     guardPost(request.headers, current);
     const value = validId(id);
-    const schema = scope === 'ticket' && action === 'chat' ? note : scope === 'ticket' && action === 'dismiss' ? reason : scope === 'batch' && action === 'mute' ? muteFor : empty;
+    const schema = scope === 'ticket' && action === 'chat' ? note : scope === 'ticket' && ['dismiss', 'close'].includes(action) ? reason : scope === 'batch' && action === 'mute' ? muteFor : empty;
     const input = await body(request, schema) as { note?: string; reason?: string; mute_hours?: number | null; hours?: number | null };
     if (!current.config.tickets.enabled) throw new HttpError(409, 'tickets.disabled', 'Tickets disabled');
     if (scope === 'ticket' && ['start', 'chat'].includes(action) && !current.config.chats.enabled) throw new HttpError(409, 'chats.disabled', 'Chats off');
@@ -111,6 +111,7 @@ export async function actionPost(request: Request, scope: 'ticket' | 'batch' | '
         if (input.mute_hours !== undefined) muteTicket(db, value, input.mute_hours);
         return { ticket: value };
       }
+      if (scope === 'ticket' && action === 'close') return { ticket: close(db, value, input.reason ?? '') };
       if (scope === 'batch' && action === 'ticket') return { ticket: makeTicket(db, value) };
       if (scope === 'batch' && action === 'mute') return { conversation: muteBatch(db, value, input.hours!) };
       if (scope === 'conversation' && action === 'unmute') return { conversation: mute(db, value, 0) };

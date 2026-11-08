@@ -187,7 +187,7 @@ Approved sessions can be archived after 24 hours idle once local and remote pend
 
 ## Page and approval
 
-The page shows Needs you, Working, Waiting on them, Failed, Done today and Skipped, plus source/dependency health, Problems and muted chats. Start approves the proposal. Open chat with note records Antonio's exact instruction and approves it. Dismiss records the optional reason. These local actions enqueue work; they do not perform provider or source writes in the HTTP request.
+The page shows Needs you, Working, Waiting on them, Failed, Done today and Skipped, plus source/dependency health, Problems and muted chats. Start approves the proposal. Open chat with note records Antonio's exact instruction and approves it. Dismiss records the optional reason as triage feedback. Done closes a ticket handled by hand with an optional note; it is not triage feedback, and new linked messages within 14 days reopen it. During the trial each chat brief asks the chat to report a failing or missing tool in the turn and in `99_Inbox/workdesk-tool-issues.md` under the configured vault. These local actions enqueue work; they do not perform provider or source writes in the HTTP request.
 
 Mute keeps a chat out of triage for 8 hours, 1 day, 1 week or until unmuted. It is offered on a Skipped batch and in the Dismiss dialog, where it mutes the dismissed ticket's routed conversations. New batches of a muted chat are stored as `muted` under Skipped, with no triage or forwarding; own-only batches stay `answered`. Make ticket on a muted batch ends that chat's mute. Muted chats are listed on the page with Unmute, and a timed mute ends by itself.
 

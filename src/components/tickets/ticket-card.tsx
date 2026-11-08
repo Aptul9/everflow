@@ -1,6 +1,6 @@
 'use client';
 
-import { BookOpen, Clock, GitCommitVertical, MessageSquarePlus, MessagesSquare, Play, RotateCw, X } from 'lucide-react';
+import { BookOpen, Check, Clock, GitCommitVertical, MessageSquarePlus, MessagesSquare, Play, RotateCw, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { SourceMessage, TicketCard as CardData, TicketDetail } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
@@ -127,9 +127,10 @@ export function TicketCard(props: {
   const timelineId = useId();
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
-  const keys = { start: `ticket:${ticket.id}:start`, chat: `ticket:${ticket.id}:chat`, dismiss: `ticket:${ticket.id}:dismiss` };
+  const keys = { start: `ticket:${ticket.id}:start`, chat: `ticket:${ticket.id}:chat`, dismiss: `ticket:${ticket.id}:dismiss`, close: `ticket:${ticket.id}:close` };
   const terminal = ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed';
-  const error = props.errors[keys.start] || props.errors[keys.chat] || props.errors[keys.dismiss];
+  const error = props.errors[keys.start] || props.errors[keys.chat] || props.errors[keys.dismiss] || props.errors[keys.close];
+  const compact = ticket.lifecycle === 'proposed' && props.chats;
   const minutes = Math.max(0, Math.floor((props.now - Date.parse(ticket.created_at)) / 60_000));
   const age = minutes < 60 ? `${minutes}m` : minutes < 1_440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1_440)}d`;
   const style = tones[tone(ticket)];
@@ -182,6 +183,10 @@ export function TicketCard(props: {
           icon={<MessageSquarePlus aria-hidden="true" />} className="h-9 flex-1 sm:h-8" disabled={props.expired || props.pending.has(keys.chat)}
           onConfirm={(note) => post(keys.chat, `/api/ticket/${ticket.id}/chat`, { note })} />
       </>}
+      <ActionDialog label="Mark done" display={compact ? null : 'Done'} title={`Mark ticket #${ticket.id} done`} confirm="Confirm done" safe
+        placeholder="What was done by hand (optional)" size={compact ? 'icon-sm' : 'sm'} icon={<Check aria-hidden="true" />}
+        className={cn('h-9 sm:h-8', compact ? 'w-9 sm:w-8' : 'flex-1')} disabled={props.expired || props.pending.has(keys.close)}
+        onConfirm={(reason) => post(keys.close, `/api/ticket/${ticket.id}/close`, { reason })} />
       <ActionDialog label="Dismiss" display={ticket.lifecycle === 'proposed' && props.chats ? null : 'Dismiss'} title={`Dismiss ticket #${ticket.id}`} confirm="Confirm dismiss" shortcut="d" mute="optional"
         size={ticket.lifecycle === 'proposed' && props.chats ? 'icon-sm' : 'sm'} icon={<X aria-hidden="true" />}
         className={cn('h-9 sm:h-8', ticket.lifecycle === 'proposed' && props.chats ? 'w-9 sm:w-8' : 'flex-1')} disabled={props.expired || props.pending.has(keys.dismiss)}

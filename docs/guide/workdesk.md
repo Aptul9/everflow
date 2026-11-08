@@ -84,6 +84,8 @@ All values are the defaults in `src/dispatcher/config.ts`; the running instance 
 - Approval creates one chat named `[Working] #<id> <title>`. After each turn the chat is renamed `[<stage>] #<id> <title>`, with the stage `Needs you`, `Working`, `Waiting on them`, `Idle`, `Done` or `Failed`.
 - The last line of every turn must read `STATUS: <working|needs_you|waiting_them|blocked|done> | <one line>`. `done` closes the ticket. A turn without a valid STATUS line parks its job.
 - Dismiss closes a ticket with an optional reason. The reasons are passed to every later triage. The same dialog can mute the ticket's chat.
+- Done closes a ticket that was handled by hand, with an optional note. It is not a Dismiss and is not passed to triage as negative feedback. New messages in its conversation within 14 days reopen it.
+- During the trial every chat brief asks the chat to report a failing or missing tool in the turn and to append one line to `99_Inbox/workdesk-tool-issues.md` in the Vault.
 - Mute keeps a chat out of triage for 8 hours, 1 day, 1 week or until unmuted, from a Skipped batch or from Dismiss. Its new messages land under Skipped as `Muted`. Muted chats are listed on the page with Unmute.
 - Make ticket turns a skipped, backlog or muted batch into a ticket, or adds it to the ticket the conversation already belongs to. It does not approve the ticket. On a muted batch it also ends the mute.
 - `accounts = [...]` under a source keeps only those receiving accounts; messages of the others are dropped before storage and the page shows them as `off`. No list means every account. The list is read at start.

@@ -152,7 +152,11 @@ test('commits double Start once, note approval, dismiss feedback, Make ticket an
   expect((await post(`/api/ticket/${second}/chat`, JSON.stringify({ note: 'Exact instruction\nSecond line' }))).status).toBe(200);
   expect(db.prepare('SELECT approval_note FROM ticket WHERE id=?').get(second)!.approval_note).toBe('Exact instruction\nSecond line');
   expect((await post(`/api/ticket/${second}/chat`, '{"note":"different"}')).status).toBe(409);
+  expect((await post(`/api/ticket/${second}/close`, '{"reason":"Done by hand"}')).status).toBe(200);
+  expect(db.prepare('SELECT lifecycle,report_line FROM ticket WHERE id=?').get(second)).toMatchObject({ lifecycle: 'done', report_line: 'Done by hand' });
+  expect((await post(`/api/ticket/${second}/close`, '{"reason":"x"}')).status).toBe(200);
   expect((await post(`/api/ticket/${fixture.active}/dismiss`, '{"reason":"Duplicate request"}')).status).toBe(200);
+  expect((await post(`/api/ticket/${fixture.active}/close`, '{}')).status).toBe(409);
   for (const batch of [fixture.skipped, fixture.backlog, fixture.answered]) expect((await post(`/api/batch/${batch}/ticket`)).status).toBe(200);
   expect((await post(`/api/batch/${fixture.skipped}/ticket`)).status).toBe(200);
   expect((await post(`/api/job/${fixture.failedJob}/retry`)).status).toBe(200);

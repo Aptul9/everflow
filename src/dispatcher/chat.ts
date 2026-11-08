@@ -124,6 +124,7 @@ function instructions(cfg: Config, ticket: number, buildReceipt = process.env.WO
   const artifact = readBuildReceipt(buildReceipt);
   const quoted = (value: string) => `'${value.replaceAll("'", "''")}'`;
   return `${contract}\nUse canonical files and Antonio's normal shared-file approval workflow. This brief grants no shared write or outside-send approval.
+Workdesk is in trial. When a tool, MCP server, command or access you need fails or is missing, state the tool and the exact error in this turn, append one line "- <UTC time> #${ticket} <tool> | <exact error>" to ${join(cfg.vault.path, '99_Inbox', 'workdesk-tool-issues.md')}, then continue with what works.
 Node executable: ${process.execPath}
 Staged directory: ${artifact.root}
 Completed artifact receipt: ${buildReceipt}

@@ -101,6 +101,18 @@ test('dismiss dialog accepts optional reason and displays actual server errors b
   await waitFor(() => expect(document.activeElement).toBe(trigger));
 });
 
+test('done dialog closes a ticket with an optional reason and does not dismiss it', async () => {
+  fetcher.mockImplementation(async (_input: string, init?: RequestInit) => init?.method === 'POST' ? Response.json({ ticket: 1 }) : new Response(null, { status: 304 }));
+  board();
+  await userEvent.click(within(ticket()).getByRole('button', { name: 'Mark done' }));
+  const dialog = screen.getByRole('dialog', { name: 'Mark ticket #1 done' });
+  await userEvent.type(within(dialog).getByRole('textbox', { name: 'Reason (optional)' }), 'Replied by hand');
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Confirm done' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(fetcher).toHaveBeenCalledWith('/api/ticket/1/close', expect.objectContaining({ method: 'POST', body: JSON.stringify({ reason: 'Replied by hand' }) }));
+  expect(fetcher).not.toHaveBeenCalledWith('/api/ticket/1/dismiss', expect.anything());
+});
+
 test('empty required note focuses its field without posting approval', async () => {
   board();
   await userEvent.click(within(ticket()).getByRole('button', { name: 'Open chat with note' }));
