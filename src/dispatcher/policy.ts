@@ -21,6 +21,10 @@ export function sourceAccounts(cfg: object, source: string): Set<string> | null 
   return Array.isArray(value) ? new Set(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim().toLowerCase())) : null;
 }
 
+export function sourceEnabled(cfg: object, source: string): boolean {
+  return (cfg as { sources?: Record<string, { enabled?: unknown } | undefined> }).sources?.[source]?.enabled === true;
+}
+
 export function clientsFor(cfg: Pick<Config, 'clients'>, account: string, addresses: readonly string[]): string[] {
   const clients = Object.entries(cfg.clients);
   const hit = clients.filter(([, client]) => client.accounts.some((value) => value.toLowerCase() === account.toLowerCase()));

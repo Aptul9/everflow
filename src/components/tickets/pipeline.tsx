@@ -24,6 +24,7 @@ function worstOf(states: State[]): State {
   return states.reduce<State>((current, next) => rank[next] > rank[current] ? next : current, 'ok');
 }
 const worst = (items: Health[]) => worstOf(items.map((item) => item.state));
+const label = (state: State) => state === 'unknown' ? 'not used yet' : state === 'disabled' ? 'off' : state;
 
 function Dot({ state, className }: { state: State; className?: string }) {
   return <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', dot[state], state === 'retrying' && 'animate-pulse', className)} />;
@@ -35,7 +36,7 @@ function Row({ name, item }: { name: string; item: Health }) {
     <div className="flex min-w-0 items-center gap-2 text-xs">
       <Dot state={item.state} />
       <span className="min-w-0 truncate">{name}</span>
-      <span className="ml-auto shrink-0 text-muted-foreground">{item.scope === 'account' && item.state === 'disabled' ? 'off' : item.state}</span>
+      <span className="ml-auto shrink-0 text-muted-foreground">{label(item.state)}</span>
     </div>
     {item.last_error && <p className="mt-0.5 line-clamp-2 pl-4 text-[11px] leading-snug text-destructive">{item.last_error}</p>}
     {item.checkpoint && <p className="pl-4 text-[11px] text-muted-foreground">{item.coverage === 'recent-topics' ? 'Latest stored' : 'Checkpoint'} <Time value={item.checkpoint} /></p>}
@@ -54,7 +55,7 @@ function Node(props: { id: string; title: string; icon: React.ReactNode; state: 
     <div className="flex min-w-0 items-center gap-2">
       <span aria-hidden="true" className="grid size-6 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground [&_svg]:size-3.5">{props.icon}</span>
       <h3 className="min-w-0 truncate text-sm font-semibold">{props.title}</h3>
-      <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"><Dot state={props.state} />{props.status ?? props.state}</span>
+      <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"><Dot state={props.state} />{props.status ?? label(props.state)}</span>
     </div>
     {props.children}
     {props.issues?.some(Boolean) && <div className="mt-2 flex flex-wrap gap-1">{props.issues}</div>}
@@ -77,11 +78,16 @@ export function Pipeline({ state }: { state: OverviewState }) {
   const accounts = health.filter((item) => item.scope === 'account');
   const known = new Set(sources.map((item) => item.dependency));
   const orphans = [...new Set(accounts.map((item) => item.dependency.split(':')[0]!).filter((name) => !known.has(name)))];
-  const inputs = [
+  const listed = [
     ...sources.map((source) => ({ name: source.dependency, source: source as Health | null, accounts: accounts.filter((item) => item.dependency.startsWith(`${source.dependency}:`)) })),
     ...orphans.map((name) => ({ name, source: null as Health | null, accounts: accounts.filter((item) => item.dependency.startsWith(`${name}:`)) })),
-  ].map((input) => ({ ...input, state: worst([...(input.source ? [input.source] : []), ...input.accounts]),
-    quarantine: state.problems.quarantine.filter((item) => item.source === input.name) }));
+  ].map((input) => {
+    const live = input.accounts.filter((item) => item.state !== 'disabled');
+    return { ...input, live, off: input.accounts.filter((item) => item.state === 'disabled'), state: worst([...(input.source ? [input.source] : []), ...live]),
+      quarantine: state.problems.quarantine.filter((item) => item.source === input.name) };
+  });
+  const inputs = listed.filter((input) => input.source?.state !== 'disabled');
+  const switchedOff = listed.filter((input) => input.source?.state === 'disabled').map((input) => input.name);
   const daemon = health.filter((item) => item.scope === 'daemon');
   const maintenance = health.filter((item) => item.scope === 'jobs' && item.dependency !== 'tickets');
   const providers = health.filter((item) => item.scope === 'provider');
@@ -158,10 +164,15 @@ export function Pipeline({ state }: { state: OverviewState }) {
             {input.source?.coverage === 'recent-topics' && <p className="mt-1.5 text-[11px] text-warning">Recent topics only{input.source.observed_at && <>. Observed <Time value={input.source.observed_at} /></>}</p>}
             {(input.source?.last_error || input.accounts.length > 0) && <ul className="mt-1.5 divide-y divide-border/60">
               {input.source?.last_error && <li className="py-1"><p className="line-clamp-2 text-[11px] leading-snug text-destructive">{input.source.last_error}</p></li>}
-              {input.accounts.map((item) => <Row key={item.dependency} name={item.dependency.slice(input.name.length + 1)} item={item} />)}
+              {input.live.map((item) => <Row key={item.dependency} name={item.dependency.slice(input.name.length + 1)} item={item} />)}
+              {input.off.length > 0 && <li className="py-1"><details className="group">
+                <summary className="inline-flex cursor-pointer items-center gap-1 rounded text-xs text-muted-foreground hover:text-foreground">{input.off.length} account{input.off.length === 1 ? '' : 's'} off<ChevronDown aria-hidden="true" className="size-3.5 transition-transform group-open:rotate-180" /></summary>
+                <ul className="mt-1 divide-y divide-border/60">{input.off.map((item) => <Row key={item.dependency} name={item.dependency.slice(input.name.length + 1)} item={item} />)}</ul>
+              </details></li>}
             </ul>}
           </Node>)}
           {inputs.length === 0 && <p className="rounded-lg border border-dashed px-3 py-4 text-xs text-muted-foreground">No sources enabled.</p>}
+          {switchedOff.length > 0 && <p className="px-1 text-[11px] text-muted-foreground">Off: {switchedOff.join(', ')}</p>}
         </div>
       </Stage>
 

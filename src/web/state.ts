@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../dispatcher/config.ts';
-import { sourceAccounts } from '../dispatcher/policy.ts';
+import { sourceAccounts, sourceEnabled } from '../dispatcher/policy.ts';
 import { batchMessages, detail, feedback, MUTE_FOREVER } from '../dispatcher/tickets.ts';
 import type { Message } from '../dispatcher/tickets.ts';
 import { utc } from '../dispatcher/time.ts';
@@ -51,14 +51,18 @@ function health(db: DatabaseSync, cfg: Config): Health[] {
       state: row.state as Health['state'], since: row.since as string, last_ok: row.last_ok as string | null, last_error: row.last_error as string | null,
       ...(coverage ? { coverage } : {}), ...(typeof detail.observed_at === 'string' ? { observed_at: detail.observed_at } : {}) });
   }
-  for (const account of db.prepare(`SELECT source,account FROM conversation UNION SELECT source,account FROM cursor ORDER BY source,account`).all()) {
+  for (const source of sources) {
+    if (!sourceEnabled(cfg, source)) result.set(source, { ...result.get(source)!, state: 'disabled' });
+  }
+  for (const account of db.prepare(`SELECT source,account FROM conversation UNION SELECT source,account FROM cursor WHERE account<>'*' ORDER BY source,account`).all()) {
     const dependency = `${account.source}:${account.account}`;
     const checkpoint = db.prepare('SELECT since FROM cursor WHERE source=? AND account=?').get(account.source!, account.account!);
     const row = result.get(dependency);
     const source = result.get(String(account.source));
     const allowed = sourceAccounts(cfg, String(account.source));
+    const off = !sourceEnabled(cfg, String(account.source)) || allowed && !allowed.has(String(account.account).toLowerCase());
     result.set(dependency, { ...(row ?? { dependency, scope: 'account', state: 'unknown', since: null, last_ok: null, last_error: null }),
-      ...(allowed && account.account !== '*' && !allowed.has(String(account.account).toLowerCase()) ? { state: 'disabled' as const } : {}),
+      ...(off ? { state: 'disabled' as const } : {}),
       ...(source?.coverage ? { coverage: source.coverage } : {}),
       checkpoint: checkpoint ? String(checkpoint.since) : null });
   }

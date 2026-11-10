@@ -27,6 +27,29 @@ test('Google Chat recent-topic coverage is explicit on the health page', () => {
   expect(screen.getByRole('region', { name: 'Health' }).textContent).toContain('Recent topics only');
 });
 
+test('switched-off sources and accounts fold away and unused dependencies say so', () => {
+  const state = uiState();
+  const at = '2026-11-06T06:00:00.000000Z';
+  state.health.push(
+    { dependency: 'outlook', scope: 'source', state: 'disabled', since: null, last_ok: null, last_error: null },
+    { dependency: 'teamsrelay', scope: 'source', state: 'ok', since: at, last_ok: at, last_error: null },
+    { dependency: 'teamsrelay:on@example.invalid', scope: 'account', state: 'ok', since: at, last_ok: at, last_error: null },
+    { dependency: 'teamsrelay:off@example.invalid', scope: 'account', state: 'disabled', since: null, last_ok: null, last_error: null },
+  );
+  board(state);
+  const health = screen.getByRole('region', { name: 'Health' });
+  expect(within(health).queryByRole('heading', { name: 'outlook' })).toBeNull();
+  expect(within(health).getByText('Off: outlook')).toBeTruthy();
+  const relay = health.querySelector('[data-node="input-1"]')!;
+  expect(within(relay as HTMLElement).getByRole('heading', { name: 'teamsrelay' })).toBeTruthy();
+  expect(relay.textContent).toContain('ok');
+  const off = within(relay as HTMLElement).getByText('1 account off').closest('details')!;
+  expect(off.open).toBe(false);
+  expect(off.textContent).toContain('off@example.invalid');
+  expect(health.querySelector('[data-node="openchamber"]')!.textContent).toContain('not used yet');
+  expect(health.querySelector('[data-node="openchamber"]')!.textContent).not.toContain('unknown');
+});
+
 test('six board columns have counts; health, Problems and persisted feedback remain outside columns', () => {
   board();
   expect(document.querySelectorAll('[data-column]')).toHaveLength(6);

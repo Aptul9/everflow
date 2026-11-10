@@ -56,6 +56,19 @@ test('a source account list stores only listed accounts and keeps checkpoint cov
   expect(storedAccounts(every)).toEqual(['off@example.invalid', 'on@example.invalid']);
 });
 
+test('a source switched off in config reads disabled and the source-wide cursor is no account', () => {
+  const f = instance('[sources.teams]\nenabled = false\n[sources.teamsrelay]\nenabled = true\naccounts = ["on@example.invalid"]\n');
+  using db = openDb(f.path);
+  const cursor = db.prepare('INSERT INTO cursor(source,account,since) VALUES (?,?,?)');
+  for (const [source, account] of [['teams', '*'], ['teams', 'on@example.invalid'], ['teamsrelay', '*'], ['teamsrelay', 'on@example.invalid'], ['teamsrelay', 'off@example.invalid']]) cursor.run(source!, account!, AT);
+  const health = db.prepare('INSERT INTO health(dependency,state,since) VALUES (?,?,?)');
+  for (const [dependency, state] of [['teams', 'stopped'], ['teams:on@example.invalid', 'ok'], ['teamsrelay', 'ok'], ['teamsrelay:on@example.invalid', 'ok']]) health.run(dependency!, state!, AT);
+  const states = Object.fromEntries(readState(db, f.cfg, new Date(later(2))).health.map((item) => [item.dependency, item.state]));
+  expect(states).toMatchObject({ teams: 'disabled', 'teams:on@example.invalid': 'disabled', teamsrelay: 'ok', 'teamsrelay:on@example.invalid': 'ok', 'teamsrelay:off@example.invalid': 'disabled', outlook: 'disabled' });
+  expect(states).not.toHaveProperty('teams:*');
+  expect(states).not.toHaveProperty('teamsrelay:*');
+});
+
 test('an invalid source account list fails runtime validation', () => {
   const f = instance();
   for (const accounts of [['*'], [''], 'me@example.invalid', ['line\nbreak@example.invalid']]) {
