@@ -138,6 +138,17 @@ test('a dismissed or done ticket clears from the board on its own or with the sk
   expect(within(ticket()).queryByRole('button', { name: /^Clear ticket/ })).toBeNull();
 });
 
+test('a ticket with a chat says where the chat is, from the moment it opens', () => {
+  const state = uiState();
+  state.groups.working[0]!.session_id = 'ses_synthetic123';
+  state.groups.working[0]!.session_title = null;
+  board(state);
+  const card = screen.getByRole('article', { name: 'Ticket #3: Active work' });
+  const chat = within(card).getByText('Chat open in OpenChamber, project Vault');
+  expect(chat.closest('[title]')!.getAttribute('title')).toBe('Session ses_synthetic123');
+  expect(within(ticket()).queryByText(/Chat open in OpenChamber/)).toBeNull();
+});
+
 test('a batch in triage shows at the top of Needs you before its ticket exists', async () => {
   const state = uiState();
   state.triaging = [{ id: 20, title: 'Fresh request', source: 'teamsrelay', account: 'me@example.invalid', created_at: '2026-11-06T05:58:00.000000Z', job: 'running',

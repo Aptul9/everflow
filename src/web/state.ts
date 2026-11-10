@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { basename } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../dispatcher/config.ts';
 import { sourceAccounts, sourceEnabled } from '../dispatcher/policy.ts';
@@ -31,7 +32,7 @@ export function ticketDetail(db: DatabaseSync, id: number): TicketDetail {
     summary: row.summary, ask: row.ask, proposal: row.proposal, confidence: row.confidence, maybe_ticket: row.maybe_ticket,
     kb_notes: (JSON.parse(row.kb_notes) as unknown[]).filter((value): value is string => typeof value === 'string'),
     created_at: row.created_at, last_activity_at: row.last_activity_at, closed_at: row.closed_at, report: row.report,
-    report_line: row.report_line, session_title: row.session_title, reason: timeline.find((event) => event.kind === 'triage')?.body ?? null,
+    report_line: row.report_line, session_id: row.session_id, session_title: row.session_title, reason: timeline.find((event) => event.kind === 'triage')?.body ?? null,
     timeline_revision: representation(timeline).etag, messages, refs };
   return { ticket, messages, refs, timeline };
 }
@@ -115,7 +116,7 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
     AND NOT EXISTS (SELECT 1 FROM triage_log v WHERE v.batch=t.batch AND v.id>t.id AND v.action IN ('new','update','skip')) ORDER BY at DESC,id DESC`).all()
     .map((row) => ({ id: Number(row.id), batch: row.batch === null ? null : Number(row.batch), at: String(row.at),
       raw: row.raw as string | null, parse_error: row.reason as string | null }));
-  return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped, triaging, muted,
+  return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped, triaging, chat_project: basename(cfg.opencode.directory || ''), muted,
     health: health(db, cfg), problems: { jobs, quarantine, triage }, feedback: feedback(db) };
 }
 

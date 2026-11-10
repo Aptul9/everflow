@@ -34,6 +34,7 @@ export interface TicketCard {
   closed_at: string | null;
   report: string | null;
   report_line: string | null;
+  session_id: string | null;
   session_title: string | null;
   reason: string | null;
   timeline_revision: string;
@@ -108,6 +109,8 @@ export interface OverviewState {
   groups: Record<Group, TicketCard[]>;
   skipped: SkippedBatch[];
   triaging: TriageBatch[];
+  // Folder name of the OpenChamber project that holds ticket chats
+  chat_project: string;
   muted: MutedConversation[];
   health: Health[];
   problems: {

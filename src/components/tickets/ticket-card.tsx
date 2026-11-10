@@ -187,6 +187,7 @@ export function TicketCard(props: {
   onSelect: (checked: boolean) => void;
   enabled: boolean;
   chats: boolean;
+  chatProject?: string;
   expired: boolean;
   pending: ReadonlySet<string>;
   errors: Record<string, string>;
@@ -221,6 +222,9 @@ export function TicketCard(props: {
           onClick={() => { void post(keys.clear, `/api/ticket/${ticket.id}/clear`).catch(() => {}); }}><X aria-hidden="true" /></Button>}
       </div>
       <h4 id={heading} className="text-sm leading-snug font-semibold"><span className="sr-only">{`Ticket #${ticket.id}:`}</span>{' '}{ticket.title}</h4>
+      {ticket.session_id && !terminal && <p title={`Session ${ticket.session_id}`} className="flex min-w-0 items-center gap-1.5 rounded-md bg-info-soft px-2 py-1 text-xs font-medium text-info">
+        <MessagesSquare aria-hidden="true" className="size-3.5 shrink-0" /><span className="min-w-0">{`Chat open in OpenChamber${props.chatProject ? `, project ${props.chatProject}` : ''}`}</span>
+      </p>}
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
         <Badge className={cn('border-transparent px-1.5 text-[11px]', style.badge)}>{ticket.lifecycle === 'proposed' ? 'Proposed' : ticket.stage}</Badge>
         {ticket.lifecycle === 'proposed' && ticket.stage === 'Failed' && <Badge variant="destructive" className="px-1.5 text-[11px]">Failed</Badge>}

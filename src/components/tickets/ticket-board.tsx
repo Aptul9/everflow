@@ -299,7 +299,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
                 selected={batchSelection.has(batch.id)} onSelect={(checked) => setBatchSelection((previous) => { const next = new Set(previous); if (checked) next.add(batch.id); else next.delete(batch.id); return next; })}
                 now={now} onDrag={(active) => setDragging(active ? { kind: 'batch', id: batch.id } : null)} />)}
               {column.triaging.map((batch) => <TriageCard key={batch.id} batch={batch} now={now} />)}
-              {column.cards.map((ticket) => <TicketCard key={ticket.id} ticket={ticket} enabled={state.tickets_enabled} chats={state.chats_enabled} expired={expired} now={now}
+              {column.cards.map((ticket) => <TicketCard key={ticket.id} ticket={ticket} enabled={state.tickets_enabled} chats={state.chats_enabled} chatProject={state.chat_project} expired={expired} now={now}
                 selected={clearable.has(ticket.id) ? clearSelection.has(ticket.id) : selected.has(ticket.id)}
                 onSelect={(checked) => toggle(clearable.has(ticket.id) ? setClearSelection : setSelected, ticket.id, checked)}
                 onDrag={(active) => setDragging(active ? { kind: 'ticket', ticket } : null)}
