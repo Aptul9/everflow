@@ -25,7 +25,7 @@ function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options:
   const id = `${scope}-model`;
   return <div className="mt-2 border-t pt-2">
     <p className="mb-1 text-[11px] text-muted-foreground">{scope === 'triage' ? 'Next triage call' : 'Next new ticket chat'}</p>
-    <div className="flex min-w-0 gap-1.5">
+    <div className="grid min-w-0 gap-1.5">
       <label htmlFor={id} className="sr-only">{scope === 'triage' ? 'Triage model' : 'Chat model'}</label>
       <select id={id} value={choice.model} disabled={props.disabled} title={choice.model}
         onChange={(event) => {
@@ -36,13 +36,18 @@ function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options:
             if (choice.effort && next.length && !next.includes(choice.effort)) await save(`${scope}.effort`, '');
           })().catch(() => {});
         }}
-        className="h-8 min-w-0 flex-1 truncate rounded-md border bg-card px-1.5 text-xs disabled:opacity-50">
-        {list.map((option) => <option key={option.id} value={option.id}>{option.id === choice.default_model ? `${option.name} (default)` : option.name}</option>)}
+        className="h-8 w-full min-w-0 truncate rounded-md border bg-card px-1.5 text-xs disabled:opacity-50">
+        {list.map((option) => {
+          // Providers can share a display name (Copilot and Azure Sonnet), so a repeated name carries its provider
+          const shared = list.filter((other) => other.name === option.name).length > 1;
+          const name = shared && option.id.includes('/') ? `${option.name} · ${option.id.split('/')[0]}` : option.name;
+          return <option key={option.id} value={option.id}>{option.id === choice.default_model ? `${name} (default)` : name}</option>;
+        })}
       </select>
       <label htmlFor={`${id}-effort`} className="sr-only">{scope === 'triage' ? 'Triage effort' : 'Chat effort'}</label>
       <select id={`${id}-effort`} value={choice.effort ?? ''} disabled={props.disabled}
         onChange={(event) => { void save(`${scope}.effort`, event.target.value).catch(() => {}); }}
-        className="h-8 shrink-0 rounded-md border bg-card px-1.5 text-xs disabled:opacity-50">
+        className="h-8 w-full rounded-md border bg-card px-1.5 text-xs disabled:opacity-50">
         <option value="">Default effort</option>
         {efforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
       </select>
