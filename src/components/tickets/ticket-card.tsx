@@ -1,6 +1,6 @@
 'use client';
 
-import { BookOpen, Check, Clock, GitCommitVertical, MessageSquarePlus, MessagesSquare, Play, RotateCw, X } from 'lucide-react';
+import { BookOpen, Check, ChevronDown, Clock, GitCommitVertical, MessageSquarePlus, MessagesSquare, Play, RotateCw, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { SourceMessage, TicketCard as CardData, TicketDetail } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
@@ -102,10 +102,10 @@ function Timeline({ id, ticket, revision }: { id: string; ticket: number; revisi
   </div>;
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, expanded, children }: { label: string; expanded: boolean; children: React.ReactNode }) {
   return <div className="min-w-0 rounded-md bg-muted/70 px-2.5 py-1.5">
     <dt className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">{label}</dt>
-    <dd className="line-clamp-4 text-[13px] whitespace-pre-wrap">{children}</dd>
+    <dd className={cn('text-[13px] whitespace-pre-wrap', !expanded && 'line-clamp-4')}>{children}</dd>
   </div>;
 }
 
@@ -127,6 +127,8 @@ export function TicketCard(props: {
   const timelineId = useId();
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const bodyId = useId();
   const keys = { start: `ticket:${ticket.id}:start`, chat: `ticket:${ticket.id}:chat`, dismiss: `ticket:${ticket.id}:dismiss`, close: `ticket:${ticket.id}:close` };
   const terminal = ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed';
   const error = props.errors[keys.start] || props.errors[keys.chat] || props.errors[keys.dismiss] || props.errors[keys.close];
@@ -153,24 +155,32 @@ export function TicketCard(props: {
         {ticket.maybe_ticket !== null && <span className="rounded border border-dashed px-1 text-muted-foreground">Maybe #{ticket.maybe_ticket}</span>}
         <span className="ml-auto font-mono text-muted-foreground">#{ticket.id}</span>
       </div>
-      {ticket.summary && <p className="line-clamp-3 text-[13px] whitespace-pre-wrap text-muted-foreground">{ticket.summary}</p>}
-      {ticket.lifecycle === 'proposed' && <dl className="grid gap-1.5">
-        <Field label="Ask">{ticket.ask || '(none)'}</Field>
-        <Field label="Proposal">{ticket.proposal || '(none)'}</Field>
-      </dl>}
-      {ticket.lifecycle !== 'proposed' && (ticket.report_line || ticket.session_title) && <dl className="space-y-1 text-[13px]">
-        {ticket.report_line && <div><dt className="sr-only">Report</dt><dd className="line-clamp-3 whitespace-pre-wrap">{ticket.report_line}</dd></div>}
-        {ticket.session_title && <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"><dt><MessagesSquare aria-label="Session title" className="size-3.5" /></dt><dd className="min-w-0 truncate" title={ticket.session_title}>{ticket.session_title}</dd></div>}
-      </dl>}
-      {(ticket.refs.length > 0 || ticket.kb_notes.length > 0) && <div className="flex flex-wrap gap-1 text-[11px]">
-        {ticket.refs.length > 0 && <ul aria-label="References" className="flex flex-wrap gap-1">{ticket.refs.map((ref) => <li key={ref.id}>
-          <SafeLink url={ref.url} className="inline-flex items-center rounded border border-primary/20 bg-accent px-1.5 py-px font-medium text-accent-foreground">{ref.key}</SafeLink>
-        </li>)}</ul>}
-        {ticket.kb_notes.length > 0 && <ul aria-label="KB paths" className="flex min-w-0 flex-wrap gap-1">{ticket.kb_notes.map((path, index) => <li key={`${index}:${path}`} title={path}
-          className="inline-flex max-w-full min-w-0 items-center gap-1 rounded border bg-muted px-1.5 py-px text-muted-foreground">
-          <BookOpen aria-hidden="true" className="size-3 shrink-0" /><code className="truncate font-mono">{path}</code>
-        </li>)}</ul>}
-      </div>}
+      <div id={bodyId} className="space-y-2">
+        {ticket.summary && <p className={cn('text-[13px] whitespace-pre-wrap text-muted-foreground', !expanded && 'line-clamp-3')}>{ticket.summary}</p>}
+        {ticket.lifecycle === 'proposed' && <dl className="grid gap-1.5">
+          <Field label="Ask" expanded={expanded}>{ticket.ask || '(none)'}</Field>
+          <Field label="Proposal" expanded={expanded}>{ticket.proposal || '(none)'}</Field>
+          {expanded && ticket.reason && <Field label="Why" expanded>{ticket.reason}</Field>}
+        </dl>}
+        {ticket.lifecycle !== 'proposed' && (ticket.report_line || ticket.session_title) && <dl className="space-y-1 text-[13px]">
+          {ticket.report_line && <div><dt className="sr-only">Report</dt><dd className={cn('whitespace-pre-wrap', !expanded && 'line-clamp-3')}>{ticket.report_line}</dd></div>}
+          {expanded && ticket.reason && <Field label="Why" expanded>{ticket.reason}</Field>}
+          {ticket.session_title && <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"><dt><MessagesSquare aria-label="Session title" className="size-3.5" /></dt><dd className="min-w-0 truncate" title={ticket.session_title}>{ticket.session_title}</dd></div>}
+        </dl>}
+        {(ticket.refs.length > 0 || ticket.kb_notes.length > 0) && <div className="flex flex-wrap gap-1 text-[11px]">
+          {ticket.refs.length > 0 && <ul aria-label="References" className="flex flex-wrap gap-1">{ticket.refs.map((ref) => <li key={ref.id}>
+            <SafeLink url={ref.url} className="inline-flex items-center rounded border border-primary/20 bg-accent px-1.5 py-px font-medium text-accent-foreground">{ref.key}</SafeLink>
+          </li>)}</ul>}
+          {ticket.kb_notes.length > 0 && <ul aria-label="KB paths" className="flex min-w-0 flex-wrap gap-1">{ticket.kb_notes.map((path, index) => <li key={`${index}:${path}`} title={path}
+            className="inline-flex max-w-full min-w-0 items-center gap-1 rounded border bg-muted px-1.5 py-px text-muted-foreground">
+            <BookOpen aria-hidden="true" className="size-3 shrink-0" /><code className={cn('font-mono', expanded ? 'break-all' : 'truncate')}>{path}</code>
+          </li>)}</ul>}
+        </div>}
+      </div>
+      <Button variant="ghost" size="xs" type="button" aria-expanded={expanded} aria-controls={bodyId} onClick={() => setExpanded(!expanded)}
+        className="h-7 px-1.5 text-muted-foreground hover:text-foreground">
+        {expanded ? 'Show less' : 'Show more'}<ChevronDown aria-hidden="true" className={cn('transition-transform', expanded && 'rotate-180')} />
+      </Button>
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
     </div>
     {actions && <div className="flex items-center gap-1.5 border-t px-3 py-2">

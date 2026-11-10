@@ -50,6 +50,22 @@ test('switched-off sources and accounts fold away and unused dependencies say so
   expect(health.querySelector('[data-node="openchamber"]')!.textContent).not.toContain('unknown');
 });
 
+test('a ticket expands to its full text and the triage reasoning', async () => {
+  board();
+  const first = ticket();
+  const summary = within(first).getByText('Source summary');
+  expect(summary.className).toContain('line-clamp-3');
+  expect(within(first).queryByText('Same issue as the open access request')).toBeNull();
+  const more = within(first).getByRole('button', { name: 'Show more' });
+  expect(more.getAttribute('aria-expanded')).toBe('false');
+  await userEvent.click(more);
+  expect(within(first).getByRole('button', { name: 'Show less' }).getAttribute('aria-expanded')).toBe('true');
+  expect(summary.className).not.toContain('line-clamp');
+  expect(within(first).getByText('Confirm access scope').className).not.toContain('line-clamp');
+  expect(within(first).getByText('Why').closest('div')!.textContent).toContain('Same issue as the open access request');
+  expect(within(first).getByText('01_Projects/access.md').className).not.toContain('truncate');
+});
+
 test('six board columns have counts; health, Problems and persisted feedback remain outside columns', () => {
   board();
   expect(document.querySelectorAll('[data-column]')).toHaveLength(6);

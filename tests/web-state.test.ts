@@ -89,6 +89,18 @@ test('detail orders equal-time messages, refs and timeline deterministically new
   expect(JSON.stringify(state)).not.toContain('HEALTH-SECRET');
 });
 
+test('a ticket card carries the newest triage reasoning', () => {
+  const fixture = webFixture();
+  using db = new DatabaseSync(fixture.path);
+  expect(ticketDetail(db, fixture.proposal).ticket.reason).toBeNull();
+  const event = db.prepare("INSERT INTO timeline(ticket,at,kind,actor,body,event_key) VALUES (?,?,'triage','agent',?,?)");
+  event.run(fixture.proposal, '2026-11-06T08:00:00.000000Z', 'New request', 'reason-old');
+  event.run(fixture.proposal, '2026-11-06T08:05:00.000000Z', 'Same issue, owner changed', 'reason-new');
+  db.prepare("INSERT INTO timeline(ticket,at,kind,actor,body,event_key) VALUES (?,?,'comment','you','later comment','reason-comment')").run(fixture.proposal, '2026-11-06T08:10:00.000000Z');
+  expect(ticketDetail(db, fixture.proposal).ticket.reason).toBe('Same issue, owner changed');
+  expect(readState(db, fixture.cfg).groups.needs_you.find((ticket) => ticket.id === fixture.proposal)!.reason).toBe('Same issue, owner changed');
+});
+
 test('build entry points stay dynamic and never initialize an instance on import', () => {
   expect(readFileSync('src/app/page.tsx', 'utf8')).toContain("export const dynamic = 'force-dynamic'");
   expect(readFileSync('src/server.ts', 'utf8')).not.toContain('import.meta.main');
