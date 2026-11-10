@@ -69,7 +69,9 @@ test('a ticket expands to its full text and the triage reasoning', async () => {
 test('six board columns have counts; health, Problems and persisted feedback remain outside columns', () => {
   board();
   expect(document.querySelectorAll('[data-column]')).toHaveLength(6);
-  for (const name of ['Needs you (2)', 'Working (1)', 'Waiting on them (1)', 'Failed (1)', 'Done today (1)', 'Skipped (3)']) expect(screen.getByRole('region', { name })).toBeTruthy();
+  for (const name of ['Needs you (2)', 'Working (1)', 'Waiting on them (1)', 'Failed (1)', 'Done today (1)', 'Skipped (4)']) expect(screen.getByRole('region', { name })).toBeTruthy();
+  expect(within(screen.getByRole('region', { name: 'Skipped (4)' })).getByRole('article', { name: 'Ticket #6: Dismissed work' })).toBeTruthy();
+  expect(within(screen.getByRole('region', { name: 'Done today (1)' })).queryByRole('article', { name: 'Ticket #6: Dismissed work' })).toBeNull();
   expect(screen.getByRole('region', { name: 'Health' }).textContent).toContain('Source unavailable');
   expect(screen.getByRole('region', { name: 'Health' }).textContent).toContain('OpenChamber');
   const problems = screen.getByRole('region', { name: 'Problems' });

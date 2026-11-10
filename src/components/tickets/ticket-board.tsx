@@ -116,8 +116,8 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
 
   const columns = groups.map(([group, label]) => {
     const batches = group === 'skipped' ? state.skipped.filter((batch) => matches([batch.title, batch.source, batch.account, batch.outcome, ...batch.messages.map((message) => message.text)].join(' '))) : [];
-    const cards = group === 'skipped' ? [] : state.groups[group].filter((ticket) => matches([ticket.title, ticket.client, ticket.session_title, ticket.summary, ticket.ask, ticket.proposal, ...ticket.refs.map((ref) => ref.key)].join(' ')));
-    const total = group === 'skipped' ? state.skipped.length : state.groups[group].length;
+    const cards = state.groups[group].filter((ticket) => matches([ticket.title, ticket.client, ticket.session_title, ticket.summary, ticket.ask, ticket.proposal, ...ticket.refs.map((ref) => ref.key)].join(' ')));
+    const total = (group === 'skipped' ? state.skipped.length : 0) + state.groups[group].length;
     return { group, label, batches, cards, total, shown: batches.length + cards.length };
   });
 

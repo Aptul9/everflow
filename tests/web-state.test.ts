@@ -66,11 +66,12 @@ test('terminal groups use local calendar day across the UTC boundary', () => {
     import {readState} from ${JSON.stringify(pathToFileURL(resolve('dist/web/state.js')).href)};
     using db=new DatabaseSync(${JSON.stringify(fixture.path)},{readOnly:true});
     const state=readState(db,loadConfig(${JSON.stringify(fixture.config)}),new Date('2026-11-06T09:00:00Z'));
-    console.log(JSON.stringify(state.groups.done_today.map(ticket=>({id:ticket.id,stage:ticket.stage}))));`;
+    const pick=(list)=>list.map(ticket=>({id:ticket.id,stage:ticket.stage}));
+    console.log(JSON.stringify({done:pick(state.groups.done_today),skipped:pick(state.groups.skipped)}));`;
   const result = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
     env: { ...process.env, TZ: 'America/Los_Angeles' }, encoding: 'utf8',
   });
-  expect(JSON.parse(result)).toEqual([{ id: fixture.dismissed, stage: 'Dismissed' }]);
+  expect(JSON.parse(result)).toEqual({ done: [], skipped: [{ id: fixture.dismissed, stage: 'Dismissed' }] });
 });
 
 test('detail orders equal-time messages, refs and timeline deterministically newest first', () => {

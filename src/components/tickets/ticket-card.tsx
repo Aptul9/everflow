@@ -22,7 +22,8 @@ export const tones: Record<Tone, { dot: string; badge: string; bar: string }> = 
 };
 
 function tone(ticket: CardData): Tone {
-  if (ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed') return 'done';
+  if (ticket.lifecycle === 'dismissed') return 'skipped';
+  if (ticket.lifecycle === 'done') return 'done';
   if (ticket.stage === 'Failed') return 'failed';
   if (ticket.lifecycle === 'proposed' || ticket.stage === 'Needs you') return 'needs';
   return ticket.stage === 'Waiting on them' ? 'waiting' : 'working';

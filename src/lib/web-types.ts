@@ -93,7 +93,7 @@ export interface OverviewState {
   tickets_enabled: boolean;
   chats_enabled: boolean;
   day: string;
-  groups: Record<Exclude<Group, 'skipped'>, TicketCard[]>;
+  groups: Record<Group, TicketCard[]>;
   skipped: SkippedBatch[];
   muted: MutedConversation[];
   health: Health[];

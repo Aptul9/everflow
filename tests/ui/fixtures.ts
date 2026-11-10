@@ -18,7 +18,8 @@ export function uiState(): OverviewState {
       working: [card(3, { title: 'Active work', lifecycle: 'active', stage: 'Idle', report: 'working', report_line: 'Membership checked', session_title: 'North access investigation' })],
       waiting_them: [card(4, { title: 'Vendor reply', lifecycle: 'active', stage: 'Waiting on them' })],
       failed: [card(5, { title: 'Failed work', lifecycle: 'active', stage: 'Failed' })],
-      done_today: [card(6, { title: 'Dismissed work', lifecycle: 'dismissed', stage: 'Dismissed', closed_at: AT })],
+      done_today: [card(7, { title: 'Closed work', lifecycle: 'done', stage: 'Done', closed_at: AT })],
+      skipped: [card(6, { title: 'Dismissed work', lifecycle: 'dismissed', stage: 'Dismissed', closed_at: AT })],
     },
     skipped: [
       { id: 10, title: 'Skipped source', outcome: 'not_on_us', source: 'outlook', account: 'test@example.invalid', created_at: AT, messages: [] },

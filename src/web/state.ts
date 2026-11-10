@@ -73,13 +73,13 @@ function health(db: DatabaseSync, cfg: Config): Health[] {
 
 export function readState(db: DatabaseSync, cfg: Config, at = new Date()): OverviewState {
   const day = calendarDay(at);
-  const groups: OverviewState['groups'] = { needs_you: [], working: [], waiting_them: [], failed: [], done_today: [] };
+  const groups: OverviewState['groups'] = { needs_you: [], working: [], waiting_them: [], failed: [], done_today: [], skipped: [] };
   const tickets = db.prepare('SELECT id FROM ticket ORDER BY id').all().map((row) => ticketDetail(db, Number(row.id)).ticket)
     .sort((a, b) => Number(b.lifecycle === 'proposed') - Number(a.lifecycle === 'proposed')
       || utc(b.last_activity_at ?? b.created_at).localeCompare(utc(a.last_activity_at ?? a.created_at)) || b.id - a.id);
   for (const ticket of tickets) {
     if (ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed') {
-      if (ticket.closed_at && calendarDay(ticket.closed_at) === day) groups.done_today.push(ticket);
+      if (ticket.closed_at && calendarDay(ticket.closed_at) === day) groups[ticket.lifecycle === 'dismissed' ? 'skipped' : 'done_today'].push(ticket);
     } else if (ticket.stage === 'Failed') groups.failed.push(ticket);
     else if (ticket.stage === 'Needs you') groups.needs_you.push(ticket);
     else if (ticket.stage === 'Waiting on them') groups.waiting_them.push(ticket);

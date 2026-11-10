@@ -33,7 +33,9 @@ test('serves the dynamic Next root, compiled assets, state and newest-first deta
   expect(dto.groups.working.some((ticket: { stage: string }) => ticket.stage === 'Idle')).toBe(true);
   expect(dto.groups.waiting_them.map((ticket: { id: number }) => ticket.id)).toContain(fixture.waiting);
   expect(dto.groups.failed.map((ticket: { id: number }) => ticket.id)).toContain(fixture.failed);
-  expect(dto.groups.done_today.map((ticket: { id: number }) => ticket.id)).toContain(fixture.dismissed);
+  expect(dto.groups.done_today.map((ticket: { id: number }) => ticket.id)).toContain(fixture.done);
+  expect(dto.groups.done_today.map((ticket: { id: number }) => ticket.id)).not.toContain(fixture.dismissed);
+  expect(dto.groups.skipped.map((ticket: { id: number }) => ticket.id)).toContain(fixture.dismissed);
   expect(dto.groups.done_today.some((ticket: { title: string }) => ticket.title === 'Old terminal work')).toBe(false);
   expect(dto.skipped.map((batch: { outcome: string }) => batch.outcome)).toEqual(expect.arrayContaining(['not_on_us', 'backlog', 'answered']));
   expect(dto.health.map((health: { dependency: string }) => health.dependency)).toEqual(expect.arrayContaining(['daemon', 'outlook', 'teams', 'provider:synthetic', 'opencode']));

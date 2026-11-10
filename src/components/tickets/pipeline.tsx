@@ -203,7 +203,7 @@ export function Pipeline({ state }: { state: OverviewState }) {
         <Node id="tickets" title="Tickets" icon={<Ticket />} state={state.tickets_enabled ? 'ok' : 'disabled'} status={state.tickets_enabled ? `${ticketCount} today` : 'read-only'}>
           <ul className="mt-1.5 grid gap-0.5">
             {groups.map(([group, label]) => {
-              const count = group === 'skipped' ? state.skipped.length : state.groups[group].length;
+              const count = (group === 'skipped' ? state.skipped.length : 0) + state.groups[group].length;
               return <li key={group}><a href={`#col-${group}`} className="flex items-center gap-2 rounded px-1 py-0.5 text-xs hover:bg-muted">
                 <span className="min-w-0 truncate text-muted-foreground">{label}</span>
                 <span className={cn('ml-auto font-semibold tabular-nums', count > 0 && group === 'failed' && 'text-destructive', count > 0 && group === 'needs_you' && 'text-primary')}>{count}</span>
