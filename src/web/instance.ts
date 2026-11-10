@@ -32,7 +32,8 @@ export function initialize(current: WebInstance): void {
   if (db.prepare('PRAGMA user_version').get()!.user_version !== 2
     || !db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='ticket'").get()
     || !db.prepare('PRAGMA table_info(ticket)').all().some((column) => column.name === 'session_title')
-    || !db.prepare('PRAGMA table_info(conversation)').all().some((column) => column.name === 'muted_until')) {
+    || !db.prepare('PRAGMA table_info(conversation)').all().some((column) => column.name === 'muted_until')
+    || !db.prepare('PRAGMA table_info(batch)').all().some((column) => column.name === 'cleared_at')) {
     throw new Error('Web instance requires an initialized current database');
   }
   owner[key] = current;

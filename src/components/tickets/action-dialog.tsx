@@ -23,6 +23,7 @@ export function ActionDialog(props: {
   mute?: 'optional' | 'only';
   disabled?: boolean;
   shortcut?: string;
+  action?: string;
   icon?: React.ReactNode;
   display?: React.ReactNode;
   variant?: 'default' | 'outline';
@@ -49,7 +50,7 @@ export function ActionDialog(props: {
   };
   return <Dialog open={open} onOpenChange={change}>
     <DialogTrigger asChild>
-      <Button ref={trigger} variant={props.variant ?? 'outline'} size={props.size ?? 'default'} type="button" disabled={props.disabled} data-shortcut={props.shortcut}
+      <Button ref={trigger} variant={props.variant ?? 'outline'} size={props.size ?? 'default'} type="button" disabled={props.disabled} data-shortcut={props.shortcut} data-action={props.action}
         aria-label={props.display === undefined ? undefined : props.label} title={props.shortcut ? `${props.label} (${props.shortcut})` : undefined} className={props.className}>
         {props.icon}{props.display === undefined ? props.label : props.display}
       </Button>

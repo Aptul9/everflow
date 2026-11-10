@@ -92,6 +92,46 @@ test('opening an earlier v2 database adds the mute column in place, and the page
   release(current);
 });
 
+test('opening an earlier v2 database adds the batch clear column in place, and the page refuses it before that', () => {
+  const f = instance();
+  {
+    using db = openDb(f.path);
+    ingest(db, message('me@example.invalid', 'm1'));
+    schedule(db, f.cfg, later(10));
+    db.exec('ALTER TABLE batch DROP COLUMN cleared_at');
+  }
+  const current = { config: f.cfg, configPath: f.cfg._config_path, port: 12348, token: 'd'.repeat(64) };
+  expect(() => initialize(current)).toThrow('Web instance requires an initialized current database');
+  using db = openDb(f.path);
+  expect(db.prepare('SELECT cleared_at FROM batch').all().map((row) => ({ ...row }))).toEqual([{ cleared_at: null }]);
+  initialize(current);
+  release(current);
+});
+
+test('page clear hides a skipped batch, keeps its messages and refuses other batches', async () => {
+  const fixture = webFixture();
+  const current = { config: fixture.cfg, configPath: fixture.cfg._config_path, port: 12349, token: 'e'.repeat(64) };
+  const post = (id: number, body: unknown) => actionPost(new Request(`http://127.0.0.1:12349/api/batch/${id}/clear`, {
+    method: 'POST', body: JSON.stringify(body),
+    headers: { host: '127.0.0.1:12349', origin: 'http://127.0.0.1:12349', 'x-dispatcher-token': current.token, 'content-type': 'application/json' },
+  }), 'batch', String(id), 'clear');
+  const routed = (() => { using db = new DatabaseSync(fixture.path, { readOnly: true }); return Number(db.prepare('SELECT id FROM batch WHERE ticket IS NOT NULL ORDER BY id LIMIT 1').get()!.id); })();
+  initialize(current);
+  try {
+    expect((await post(fixture.skipped, { extra: true })).status).toBe(400);
+    const cleared = await post(fixture.skipped, {});
+    expect(cleared.status).toBe(200);
+    expect(await cleared.json()).toEqual({ batch: fixture.skipped });
+    expect((await post(fixture.skipped, {})).status).toBe(200);
+    expect((await post(routed, {})).status).toBe(409);
+    expect((await post(999_999, {})).status).toBe(404);
+    using db = new DatabaseSync(fixture.path, { readOnly: true });
+    expect(readState(db, fixture.cfg).skipped.map((batch) => batch.id)).toEqual(expect.not.arrayContaining([fixture.skipped]));
+    expect(readState(db, fixture.cfg).skipped.map((batch) => batch.id)).toEqual(expect.arrayContaining([fixture.backlog, fixture.answered]));
+    expect(db.prepare("SELECT outcome,cleared_at IS NOT NULL AS cleared FROM batch WHERE id=?").get(fixture.skipped)).toMatchObject({ outcome: 'not_on_us', cleared: 1 });
+  } finally { release(current); }
+});
+
 test('a muted chat stays out of triage until the mute ends, and own-only batches stay answered', () => {
   const f = instance();
   using db = openDb(f.path);

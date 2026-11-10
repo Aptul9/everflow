@@ -8,7 +8,7 @@ const batchColumns = `
   id INTEGER PRIMARY KEY, conversation INTEGER NOT NULL REFERENCES conversation,
   work_item INTEGER, state TEXT NOT NULL, prompt_id TEXT, error TEXT,
   created_at TEXT NOT NULL, delivered_at TEXT, done_at TEXT,
-  outcome TEXT, ticket INTEGER REFERENCES ticket`;
+  outcome TEXT, ticket INTEGER REFERENCES ticket, cleared_at TEXT`;
 
 const schema = `
 CREATE TABLE IF NOT EXISTS cursor (
@@ -174,6 +174,11 @@ function refineConversation(db: DatabaseSync): void {
   transaction(db, () => db.exec('ALTER TABLE conversation ADD COLUMN muted_until TEXT'));
 }
 
+function refineBatch(db: DatabaseSync): void {
+  if (db.prepare('PRAGMA table_info(batch)').all().some((column) => column.name === 'cleared_at')) return;
+  transaction(db, () => db.exec('ALTER TABLE batch ADD COLUMN cleared_at TEXT'));
+}
+
 function scopeLegacyKeys(db: DatabaseSync): void {
   if (!db.prepare('PRAGMA table_info(message)').all().some((column) => column.name === 'native_id')) {
     db.exec('ALTER TABLE message ADD COLUMN native_id TEXT');
@@ -224,6 +229,7 @@ export function openDb(path: string): DatabaseSync {
     refineJobs(db);
     refineChat(db);
     refineConversation(db);
+    refineBatch(db);
     db.exec('PRAGMA journal_mode = WAL');
     return db;
   } catch (error) {

@@ -636,6 +636,16 @@ export function muteTicket(db: DatabaseSync, ticket: number, hours: number | nul
   });
 }
 
+// Takes a skipped batch off the page; its messages and outcome stay for triage feedback.
+export function clearBatch(db: DatabaseSync, batch: number, at?: string): number {
+  return transaction(db, () => {
+    const row = getBatch(db, batch);
+    if (!['not_on_us', 'backlog', 'answered', 'muted'].includes(row.outcome ?? '')) throw new TicketError('ticket.conflict', 'Clear requires a skipped, backlog, answered or muted batch');
+    db.prepare('UPDATE batch SET cleared_at=COALESCE(cleared_at,?) WHERE id=?').run(utc(at), batch);
+    return batch;
+  });
+}
+
 export function makeTicket(db: DatabaseSync, batch: number, at?: string, actor: 'you' | 'chat' = 'you'): number {
   return transaction(db, () => {
     const now = utc(at);

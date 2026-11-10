@@ -1,13 +1,14 @@
 'use client';
 
-import { Bell, BellOff, FilePlus, Inbox, Keyboard, MessagesSquare, RefreshCw, Search, TriangleAlert, WifiOff } from 'lucide-react';
+import { Bell, BellOff, FilePlus, Inbox, Keyboard, MessagesSquare, RefreshCw, Search, TriangleAlert, WifiOff, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { groups } from '../../lib/web-types.ts';
-import type { Group, OverviewState, SkippedBatch } from '../../lib/web-types.ts';
+import type { Group, OverviewState, SkippedBatch, TicketCard as CardData } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert.tsx';
 import { Badge } from '../ui/badge.tsx';
 import { Button } from '../ui/button.tsx';
+import { Checkbox } from '../ui/checkbox.tsx';
 import { Input } from '../ui/input.tsx';
 import { ActionDialog, Kbd } from './action-dialog.tsx';
 import { Pipeline, Problems } from './pipeline.tsx';
@@ -19,16 +20,26 @@ const columnTone: Record<Group, Tone> = { needs_you: 'needs', working: 'working'
 const outcomes: Record<SkippedBatch['outcome'], string> = { not_on_us: 'Not on us', backlog: 'Backlog', answered: 'Answered', muted: 'Muted' };
 type Post = (key: string, path: string, input?: Record<string, string | number | null>) => Promise<unknown>;
 
-function BatchCard(props: { batch: SkippedBatch; enabled: boolean; expired: boolean; pending: ReadonlySet<string>; errors: Record<string, string>; post: Post }) {
+// What dropping a card on a column does; null where a drop means nothing
+function dropAction(group: Group, ticket: CardData, chats: boolean): 'start' | 'done' | 'dismiss' | null {
+  if (ticket.lifecycle !== 'proposed' && ticket.lifecycle !== 'active') return null;
+  if (group === 'working') return ticket.lifecycle === 'proposed' && chats ? 'start' : null;
+  return group === 'done_today' ? 'done' : group === 'skipped' ? 'dismiss' : null;
+}
+
+function BatchCard(props: { batch: SkippedBatch; enabled: boolean; expired: boolean; pending: ReadonlySet<string>; errors: Record<string, string>; post: Post;
+  selected: boolean; onSelect: (checked: boolean) => void }) {
   const { batch } = props;
   const key = `batch:${batch.id}:ticket`;
   const muteKey = `batch:${batch.id}:mute`;
+  const clearKey = `batch:${batch.id}:clear`;
   const messagesId = useId();
   const [messagesOpen, setMessagesOpen] = useState(false);
-  const error = props.errors[key] || props.errors[muteKey];
-  return <div className="rounded-lg border bg-card shadow-xs">
+  const error = props.errors[key] || props.errors[muteKey] || props.errors[clearKey];
+  return <div className={cn('rounded-lg border bg-card shadow-xs', props.selected && 'border-primary/40 bg-accent/40')}>
     <div className="space-y-2 p-3">
       <div className="flex min-w-0 items-center gap-2 text-xs">
+        {props.enabled && <Checkbox checked={props.selected} onCheckedChange={(checked) => props.onSelect(checked === true)} aria-label={`Select batch #${batch.id}`} className="size-4.5" />}
         <Badge variant="secondary" className="px-1.5 text-[11px]">{outcomes[batch.outcome]}</Badge>
         <span className="ml-auto flex shrink-0 items-center gap-1.5 text-muted-foreground"><span className="font-mono">#{batch.id}</span><Time value={batch.created_at} /></span>
       </div>
@@ -42,6 +53,8 @@ function BatchCard(props: { batch: SkippedBatch; enabled: boolean; expired: bool
       {batch.outcome !== 'muted' && <ActionDialog label={`Mute chat of batch #${batch.id}`} display="Mute" title={`Mute ${batch.title ?? 'this chat'}`} confirm="Mute chat" mute="only" size="sm"
         icon={<BellOff aria-hidden="true" />} className="h-9 sm:h-8" disabled={props.expired || props.pending.has(muteKey)}
         onConfirm={(_value, hours) => props.post(muteKey, `/api/batch/${batch.id}/mute`, { hours: hours ?? null })} />}
+      <Button type="button" variant="outline" size="icon-sm" className="h-9 w-9 sm:h-8 sm:w-8" aria-label={`Clear batch #${batch.id}`} title="Clear from the board (messages are kept)"
+        disabled={props.expired || props.pending.has(clearKey)} onClick={() => { void props.post(clearKey, `/api/batch/${batch.id}/clear`).catch(() => {}); }}><X aria-hidden="true" /></Button>
     </div>}
     <div className="border-t px-2 py-1">
       <Toggle expanded={messagesOpen} controls={messagesId} onClick={() => setMessagesOpen(!messagesOpen)} icon={<MessagesSquare aria-hidden="true" />}>Messages ({batch.messages.length})</Toggle>
@@ -80,6 +93,17 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
   const tickets = Object.values(state.groups).flat();
   const available = new Set(tickets.filter((ticket) => ticket.lifecycle === 'proposed' || ticket.lifecycle === 'active').map((ticket) => ticket.id));
   const chosen = [...selected].filter((id) => available.has(id));
+  const [batchSelection, setBatchSelection] = useState<Set<number>>(new Set());
+  const chosenBatches = [...batchSelection].filter((id) => state.skipped.some((batch) => batch.id === id));
+  const [dragging, setDragging] = useState<CardData | null>(null);
+  const [over, setOver] = useState<Group | null>(null);
+  const accepts = (group: Group) => !!dragging && dropAction(group, dragging, state.chats_enabled) !== null;
+  const drop = (group: Group) => {
+    const action = dragging && dropAction(group, dragging, state.chats_enabled);
+    setOver(null);
+    setDragging(null);
+    if (dragging && action) root.current?.querySelector<HTMLButtonElement>(`article[data-ticket-id="${dragging.id}"] [data-action="${action}"]`)?.click();
+  };
   const needle = query.trim().toLocaleLowerCase();
   const matches = (text: string) => text.toLocaleLowerCase().includes(needle);
 
@@ -177,7 +201,12 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <h2 className="text-sm font-semibold">Board</h2>
           <p className="text-xs text-muted-foreground">{needle ? `${columns.reduce((sum, column) => sum + column.shown, 0)} matching "${query.trim()}"` : `${tickets.length} tickets today, ${state.skipped.length} skipped batches`}</p>
-          {state.tickets_enabled && <div className="ml-auto">
+          {state.tickets_enabled && <div className="ml-auto flex items-center gap-2">
+            {chosenBatches.length > 0 && <Button type="button" variant="outline" size="sm" className="h-9 sm:h-8" disabled={expired} onClick={() => {
+              void Promise.all(chosenBatches.map(async (id) => {
+                try { await post(`batch:${id}:clear`, `/api/batch/${id}/clear`); return id; } catch { return null; }
+              })).then((results) => setBatchSelection((previous) => new Set([...previous].filter((id) => !results.includes(id)))));
+            }}><X aria-hidden="true" />Clear selected ({chosenBatches.length})</Button>}
             <ActionDialog label={`Dismiss selected (${chosen.length})`} title={`Dismiss ${chosen.length} selected tickets`} confirm="Confirm dismiss" size="sm" className="h-9 sm:h-8" mute="optional"
               disabled={chosen.length === 0 || expired} onConfirm={async (reason, mute) => {
                 const results = await Promise.all(chosen.map(async (id) => {
@@ -194,17 +223,26 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
         </nav>
         <div className="relative -mx-4 flex snap-x snap-mandatory scroll-px-4 gap-3 overflow-x-auto px-4 pb-3 sm:-mx-6 sm:scroll-px-6 sm:px-6 xl:mx-0 xl:grid xl:grid-cols-6 xl:overflow-visible xl:px-0 xl:pb-0">
           {columns.map((column) => <section key={column.group} id={`col-${column.group}`} data-column={column.group} aria-label={`${column.label} (${column.total})`}
-            className="flex w-[84vw] max-w-[340px] shrink-0 scroll-mt-28 snap-start flex-col rounded-xl bg-muted/80 ring-1 ring-border/60 sm:w-[300px] xl:w-auto xl:max-w-none">
+            onDragOver={(event) => { if (accepts(column.group)) { event.preventDefault(); if (over !== column.group) setOver(column.group); } }}
+            onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(null); }}
+            onDrop={(event) => { event.preventDefault(); drop(column.group); }}
+            className={cn('flex w-[84vw] max-w-[340px] shrink-0 scroll-mt-28 snap-start flex-col rounded-xl bg-muted/80 ring-1 ring-border/60 transition-shadow sm:w-[300px] xl:w-auto xl:max-w-none',
+              accepts(column.group) && 'ring-2 ring-primary/30', over === column.group && 'bg-accent/70 ring-primary/70')}>
             <div className="flex items-center gap-2 px-3 pt-3 pb-2">
               <span aria-hidden="true" className={cn('size-2 rounded-full', tones[columnTone[column.group]].dot)} />
               <h3 className="text-[13px] font-semibold">{column.label}</h3>
               <span className="rounded-full bg-background px-1.5 text-[11px] font-semibold text-muted-foreground tabular-nums">{column.total}</span>
               {needle && column.shown !== column.total && <span className="ml-auto text-[11px] text-muted-foreground">{column.shown} shown</span>}
+              {state.tickets_enabled && column.batches.length > 0 && <Checkbox aria-label="Select all skipped" className={cn('size-4', !(needle && column.shown !== column.total) && 'ml-auto')}
+                checked={column.batches.every((batch) => batchSelection.has(batch.id))}
+                onCheckedChange={(checked) => setBatchSelection(checked === true ? new Set(column.batches.map((batch) => batch.id)) : new Set())} />}
             </div>
             <div className="flex flex-1 flex-col gap-2 px-2 pb-2">
-              {column.batches.map((batch) => <BatchCard key={batch.id} batch={batch} enabled={state.tickets_enabled} expired={expired} pending={pending} errors={errors} post={post} />)}
+              {column.batches.map((batch) => <BatchCard key={batch.id} batch={batch} enabled={state.tickets_enabled} expired={expired} pending={pending} errors={errors} post={post}
+                selected={batchSelection.has(batch.id)} onSelect={(checked) => setBatchSelection((previous) => { const next = new Set(previous); if (checked) next.add(batch.id); else next.delete(batch.id); return next; })} />)}
               {column.cards.map((ticket) => <TicketCard key={ticket.id} ticket={ticket} enabled={state.tickets_enabled} chats={state.chats_enabled} expired={expired} now={now}
                 selected={selected.has(ticket.id)} onSelect={(checked) => setSelected((previous) => { const next = new Set(previous); if (checked) next.add(ticket.id); else next.delete(ticket.id); return next; })}
+                onDrag={(active) => setDragging(active ? ticket : null)}
                 pending={pending} errors={errors} post={post} />)}
               {column.shown === 0 && <p className="rounded-lg border border-dashed border-foreground/10 px-3 py-6 text-center text-xs text-muted-foreground">
                 {column.total === 0 ? `No tickets in ${column.label.toLocaleLowerCase()}.` : 'No matches.'}

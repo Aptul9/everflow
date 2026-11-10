@@ -66,6 +66,48 @@ test('a ticket expands to its full text and the triage reasoning', async () => {
   expect(within(first).getByText('01_Projects/access.md').className).not.toContain('truncate');
 });
 
+test('skipped batches clear one by one or selected in bulk', async () => {
+  board();
+  await userEvent.click(screen.getByRole('button', { name: 'Clear batch #10' }));
+  expect(fetcher).toHaveBeenCalledWith('/api/batch/10/clear', expect.objectContaining({ method: 'POST', body: '{}' }));
+  expect(screen.queryByRole('button', { name: /^Clear selected/ })).toBeNull();
+  await userEvent.click(screen.getByRole('checkbox', { name: 'Select batch #11' }));
+  expect(screen.getByRole('button', { name: 'Clear selected (1)' })).toBeTruthy();
+  await userEvent.click(screen.getByRole('checkbox', { name: 'Select all skipped' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Clear selected (3)' }));
+  for (const id of [10, 11, 12]) expect(fetcher).toHaveBeenCalledWith(`/api/batch/${id}/clear`, expect.objectContaining({ method: 'POST' }));
+});
+
+test('dragging a ticket to Working starts it, to Done today or Skipped opens the matching confirmation', async () => {
+  board();
+  const column = (name: string) => screen.getByRole('region', { name });
+  const drag = (card: HTMLElement, target: HTMLElement) => {
+    const dataTransfer = { setData: vi.fn(), getData: vi.fn(() => ''), effectAllowed: 'all', dropEffect: 'none' };
+    fireEvent.dragStart(card, { dataTransfer });
+    const accepted = !fireEvent.dragOver(target, { dataTransfer });
+    fireEvent.drop(target, { dataTransfer });
+    fireEvent.dragEnd(card, { dataTransfer });
+    return accepted;
+  };
+  expect(ticket().getAttribute('draggable')).toBe('true');
+  expect(drag(ticket(), column('Working (1)'))).toBe(true);
+  await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/ticket/1/start', expect.objectContaining({ method: 'POST' })));
+
+  expect(drag(ticket(2, 'Second proposal'), column('Done today (1)'))).toBe(true);
+  expect(await screen.findByRole('dialog', { name: 'Mark ticket #2 done' })).toBeTruthy();
+  await userEvent.keyboard('{Escape}');
+
+  expect(drag(ticket(2, 'Second proposal'), column('Skipped (4)'))).toBe(true);
+  expect(await screen.findByRole('dialog', { name: 'Dismiss ticket #2' })).toBeTruthy();
+  await userEvent.keyboard('{Escape}');
+
+  const active = ticket(3, 'Active work');
+  expect(drag(active, column('Needs you (2)'))).toBe(false);
+  expect(drag(active, column('Working (1)'))).toBe(false);
+  expect(screen.getByRole('article', { name: 'Ticket #6: Dismissed work' }).getAttribute('draggable')).toBe('false');
+  expect(fetcher.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(1);
+});
+
 test('six board columns have counts; health, Problems and persisted feedback remain outside columns', () => {
   board();
   expect(document.querySelectorAll('[data-column]')).toHaveLength(6);

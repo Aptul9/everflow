@@ -86,7 +86,7 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
     else groups.working.push(ticket);
   }
   const skipped = db.prepare(`SELECT b.id,c.title,c.source,c.account,b.outcome,b.created_at FROM batch b JOIN conversation c ON c.id=b.conversation
-    WHERE b.outcome IN ('not_on_us','backlog','answered','muted') ORDER BY b.created_at DESC,b.id DESC`).all().map((row) => ({
+    WHERE b.outcome IN ('not_on_us','backlog','answered','muted') AND b.cleared_at IS NULL ORDER BY b.created_at DESC,b.id DESC`).all().map((row) => ({
     id: Number(row.id), title: row.title as string | null, source: String(row.source), account: String(row.account),
     outcome: row.outcome as SkippedBatch['outcome'], created_at: String(row.created_at),
     messages: batchMessages(db, Number(row.id)).reverse().map(message),

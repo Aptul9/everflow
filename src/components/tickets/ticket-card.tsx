@@ -121,6 +121,7 @@ export function TicketCard(props: {
   errors: Record<string, string>;
   post: (key: string, path: string, input?: Record<string, string | number | null>) => Promise<unknown>;
   now: number;
+  onDrag?: (dragging: boolean) => void;
 }) {
   const { ticket, post } = props;
   const heading = useId();
@@ -139,8 +140,9 @@ export function TicketCard(props: {
   const style = tones[tone(ticket)];
   const actions = props.enabled && !terminal;
   const starting = props.pending.has(keys.start);
-  return <article tabIndex={-1} aria-labelledby={heading} data-ticket-id={ticket.id}
-    className={cn('group/card scroll-mt-28 rounded-lg border bg-card shadow-xs transition-[box-shadow,border-color] hover:border-foreground/15 hover:shadow-sm',
+  return <article tabIndex={-1} aria-labelledby={heading} data-ticket-id={ticket.id} draggable={actions}
+    onDragStart={(event) => { event.dataTransfer?.setData('text/plain', `#${ticket.id}`); props.onDrag?.(true); }} onDragEnd={() => props.onDrag?.(false)}
+    className={cn('group/card scroll-mt-28 rounded-lg border bg-card shadow-xs transition-[box-shadow,border-color] hover:border-foreground/15 hover:shadow-sm', actions && 'cursor-grab active:cursor-grabbing',
       'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring', props.selected && 'border-primary/40 bg-accent/40')}>
     <div className="space-y-2 p-3">
       <div className="flex min-w-0 items-center gap-2 text-xs">
@@ -186,7 +188,7 @@ export function TicketCard(props: {
     </div>
     {actions && <div className="flex items-center gap-1.5 border-t px-3 py-2">
       {ticket.lifecycle === 'proposed' && props.chats && <>
-        <Button type="button" size="sm" data-shortcut="s" title="Start (s)" className="h-9 flex-1 sm:h-8" disabled={props.expired || starting}
+        <Button type="button" size="sm" data-shortcut="s" data-action="start" title="Start (s)" className="h-9 flex-1 sm:h-8" disabled={props.expired || starting}
           onClick={() => { void post(keys.start, `/api/ticket/${ticket.id}/start`).catch(() => {}); }}>
           {starting ? <RotateCw aria-hidden="true" className="animate-spin" /> : <Play aria-hidden="true" />}{starting ? 'Saving Start' : 'Start'}
         </Button>
@@ -194,11 +196,11 @@ export function TicketCard(props: {
           icon={<MessageSquarePlus aria-hidden="true" />} className="h-9 flex-1 sm:h-8" disabled={props.expired || props.pending.has(keys.chat)}
           onConfirm={(note) => post(keys.chat, `/api/ticket/${ticket.id}/chat`, { note })} />
       </>}
-      <ActionDialog label="Mark done" display={compact ? null : 'Done'} title={`Mark ticket #${ticket.id} done`} confirm="Confirm done" safe
+      <ActionDialog label="Mark done" display={compact ? null : 'Done'} title={`Mark ticket #${ticket.id} done`} confirm="Confirm done" safe action="done"
         placeholder="What was done by hand (optional)" size={compact ? 'icon-sm' : 'sm'} icon={<Check aria-hidden="true" />}
         className={cn('h-9 sm:h-8', compact ? 'w-9 sm:w-8' : 'flex-1')} disabled={props.expired || props.pending.has(keys.close)}
         onConfirm={(reason) => post(keys.close, `/api/ticket/${ticket.id}/close`, { reason })} />
-      <ActionDialog label="Dismiss" display={ticket.lifecycle === 'proposed' && props.chats ? null : 'Dismiss'} title={`Dismiss ticket #${ticket.id}`} confirm="Confirm dismiss" shortcut="d" mute="optional"
+      <ActionDialog label="Dismiss" display={ticket.lifecycle === 'proposed' && props.chats ? null : 'Dismiss'} title={`Dismiss ticket #${ticket.id}`} confirm="Confirm dismiss" shortcut="d" action="dismiss" mute="optional"
         size={ticket.lifecycle === 'proposed' && props.chats ? 'icon-sm' : 'sm'} icon={<X aria-hidden="true" />}
         className={cn('h-9 sm:h-8', ticket.lifecycle === 'proposed' && props.chats ? 'w-9 sm:w-8' : 'flex-1')} disabled={props.expired || props.pending.has(keys.dismiss)}
         onConfirm={(reason, mute) => post(keys.dismiss, `/api/ticket/${ticket.id}/dismiss`, mute === undefined ? { reason } : { reason, mute_hours: mute })} />

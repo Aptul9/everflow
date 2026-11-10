@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { approve } from '../dispatcher/approval.ts';
 import { transaction } from '../dispatcher/db.ts';
 import { retry } from '../dispatcher/jobs.ts';
-import { close, dismiss, makeTicket, mute, muteBatch, muteTicket, TicketError } from '../dispatcher/tickets.ts';
+import { clearBatch, close, dismiss, makeTicket, mute, muteBatch, muteTicket, TicketError } from '../dispatcher/tickets.ts';
 import { HttpError, instance, withDatabase } from './instance.ts';
 import type { WebInstance } from './instance.ts';
 import { readState, representation, ticketDetail } from './state.ts';
@@ -114,6 +114,7 @@ export async function actionPost(request: Request, scope: 'ticket' | 'batch' | '
       if (scope === 'ticket' && action === 'close') return { ticket: close(db, value, input.reason ?? '') };
       if (scope === 'batch' && action === 'ticket') return { ticket: makeTicket(db, value) };
       if (scope === 'batch' && action === 'mute') return { conversation: muteBatch(db, value, input.hours!) };
+      if (scope === 'batch' && action === 'clear') return { batch: clearBatch(db, value) };
       if (scope === 'conversation' && action === 'unmute') return { conversation: mute(db, value, 0) };
       if (scope === 'job' && action === 'retry') {
         const job = db.prepare('SELECT state FROM job WHERE id=?').get(value);
