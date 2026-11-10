@@ -95,10 +95,20 @@ test('board columns keep equal widths, empty or not, and long titles never widen
   expect(empty.className).not.toContain('xl:w-40');
 });
 
+test('the board card shows only the title and a two-line description; ask, proposal and notes live in the popup', () => {
+  board();
+  const first = ticket();
+  expect(within(first).getByText('Source summary').className).toContain('line-clamp-2');
+  for (const hidden of ['Confirm access scope', 'Check membership first', '01_Projects/access.md', 'OPS-123']) expect(within(first).queryByText(hidden)).toBeNull();
+  const active = screen.getByRole('article', { name: 'Ticket #3: Active work' });
+  expect(within(active).getByText('Membership checked').className).toContain('line-clamp-2');
+  expect(within(active).queryByText('North access investigation')).toBeNull();
+});
+
 test('Expand opens a popup with the full ticket, its reasoning, messages and timeline', async () => {
   board();
   const first = ticket();
-  expect(within(first).getByText('Source summary').className).toContain('line-clamp-3');
+  expect(within(first).getByText('Source summary').className).toContain('line-clamp-2');
   expect(within(first).queryByText('Same issue as the open access request')).toBeNull();
   expect(within(first).queryByRole('button', { name: 'Show more' })).toBeNull();
   await userEvent.click(within(first).getByRole('button', { name: 'Expand ticket #1' }));
@@ -249,7 +259,6 @@ test('six board columns have counts; health, Problems and persisted feedback rem
   expect(problems.closest('[data-column]')).toBeNull();
   const working = screen.getByRole('region', { name: 'Working (1)' });
   expect(within(working).getByText('Membership checked')).toBeTruthy();
-  expect(within(working).getByText('North access investigation')).toBeTruthy();
   expect(within(working).getByText('Idle')).toBeTruthy();
 });
 
@@ -257,14 +266,19 @@ test('proposed fields, safe refs, expandable literal messages and newest-first d
   const state = uiState();
   state.groups.needs_you[0]!.messages[0]!.text = '<script>globalThis.injected=true</script><img src=x onerror=bad()>';
   state.groups.needs_you[0]!.refs.push({ id: 3, kind: 'jira', key: '<img onerror=bad()>', url: 'javascript:bad()', seen_in: 'message' });
-  fetcher.mockResolvedValue(Response.json(uiDetail()));
+  fetcher.mockImplementation(async () => Response.json(uiDetail()));
   board(state);
   const first = ticket();
-  for (const value of ['North', 'Confirm access scope', 'Check membership first', '88%', 'Maybe #42', '01_Projects/access.md']) expect(first.textContent).toContain(value);
+  for (const value of ['North', '88%', 'Maybe #42']) expect(first.textContent).toContain(value);
   expect(within(first).getByText(/Age:/)).toBeTruthy();
-  const link = within(first).getByRole('link', { name: 'OPS-123' });
+  await userEvent.click(within(first).getByRole('button', { name: 'Expand ticket #1' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Reset access' });
+  for (const value of ['Confirm access scope', 'Check membership first', '01_Projects/access.md']) expect(dialog.textContent).toContain(value);
+  const link = within(dialog).getByRole('link', { name: 'OPS-123' });
   expect(link.getAttribute('rel')).toBe('noopener noreferrer');
-  expect(within(first).queryByRole('link', { name: '<img onerror=bad()>' })).toBeNull();
+  expect(within(dialog).queryByRole('link', { name: '<img onerror=bad()>' })).toBeNull();
+  await userEvent.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   await userEvent.click(within(first).getByRole('button', { name: 'Messages (2)' }));
   expect(within(first).getByText('<script>globalThis.injected=true</script><img src=x onerror=bad()>')).toBeTruthy();
   expect(first.querySelector('script,img')).toBeNull();
@@ -533,11 +547,11 @@ test('refresh preserves selection, expanded messages/timeline and focused card',
   const original = ticket();
   original.focus();
   const changed = uiState();
-  changed.groups.needs_you[0]!.proposal = 'Refreshed proposal';
+  changed.groups.needs_you[0]!.summary = 'Refreshed summary';
   fetcher.mockImplementation(async (input: string) => Response.json(input.includes('/api/ticket/') ? uiDetail() : changed, { headers: { etag: '"new"' } }));
   const tick = interval.mock.calls.find(([, delay]) => delay === 10_000)![0] as () => void;
   await act(async () => tick());
-  expect(within(original).getByText('Refreshed proposal')).toBeTruthy();
+  expect(within(original).getByText('Refreshed summary')).toBeTruthy();
   expect(screen.getByRole('checkbox', { name: 'Select ticket #1' }).getAttribute('aria-checked')).toBe('true');
   expect(within(original).getByText('Newest source message')).toBeTruthy();
   expect(within(original).getByText('Newest timeline event')).toBeTruthy();

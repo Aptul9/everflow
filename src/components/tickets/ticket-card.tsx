@@ -141,7 +141,7 @@ export function Expand({ label, title, meta, children }: { label: string; title:
   </Dialog>;
 }
 
-function Notes({ ticket, full }: { ticket: CardData; full: boolean }) {
+function Notes({ ticket }: { ticket: CardData }) {
   if (ticket.refs.length === 0 && ticket.kb_notes.length === 0) return null;
   return <div className="flex flex-wrap gap-1 text-[11px]">
     {ticket.refs.length > 0 && <ul aria-label="References" className="flex flex-wrap gap-1">{ticket.refs.map((ref) => <li key={ref.id}>
@@ -149,7 +149,7 @@ function Notes({ ticket, full }: { ticket: CardData; full: boolean }) {
     </li>)}</ul>}
     {ticket.kb_notes.length > 0 && <ul aria-label="KB paths" className="flex min-w-0 flex-wrap gap-1">{ticket.kb_notes.map((path, index) => <li key={`${index}:${path}`} title={path}
       className="inline-flex max-w-full min-w-0 items-center gap-1 rounded border bg-muted px-1.5 py-px text-muted-foreground">
-      <BookOpen aria-hidden="true" className="size-3 shrink-0" /><code className={cn('font-mono', full ? 'break-all' : 'truncate')}>{path}</code>
+      <BookOpen aria-hidden="true" className="size-3 shrink-0" /><code className="font-mono break-all">{path}</code>
     </li>)}</ul>}
   </div>;
 }
@@ -175,7 +175,7 @@ function TicketDetails({ ticket, now, badge }: { ticket: CardData; now: number; 
       {ticket.reason && <Field label="Why" expanded>{ticket.reason}</Field>}
       {ticket.session_title && <Field label="Session" expanded>{ticket.session_title}</Field>}
     </dl>
-    <Notes ticket={ticket} full />
+    <Notes ticket={ticket} />
     <Section title={`Messages (${ticket.messages.length})`}><MessageList id={messagesId} messages={ticket.messages} /></Section>
     <Section title="Timeline"><Timeline id={timelineId} ticket={ticket.id} revision={ticket.timeline_revision} /></Section>
   </Expand>;
@@ -233,18 +233,10 @@ export function TicketCard(props: {
         {ticket.maybe_ticket !== null && <span className="rounded border border-dashed px-1 text-muted-foreground">Maybe #{ticket.maybe_ticket}</span>}
         <span className="ml-auto font-mono text-muted-foreground">#{ticket.id}</span>
       </div>
-      <div className="space-y-2">
-        {ticket.summary && <p className="line-clamp-3 text-[13px] whitespace-pre-wrap">{ticket.summary}</p>}
-        {ticket.lifecycle === 'proposed' && <dl className="grid gap-1.5">
-          <Field label="Ask" expanded={false}>{ticket.ask || '(none)'}</Field>
-          <Field label="Proposal" expanded={false}>{ticket.proposal || '(none)'}</Field>
-        </dl>}
-        {ticket.lifecycle !== 'proposed' && (ticket.report_line || ticket.session_title) && <dl className="space-y-1 text-[13px]">
-          {ticket.report_line && <div><dt className="sr-only">Report</dt><dd className="line-clamp-3 whitespace-pre-wrap">{ticket.report_line}</dd></div>}
-          {ticket.session_title && <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"><dt><MessagesSquare aria-label="Session title" className="size-3.5" /></dt><dd className="min-w-0 truncate" title={ticket.session_title}>{ticket.session_title}</dd></div>}
-        </dl>}
-        <Notes ticket={ticket} full={false} />
-      </div>
+      {/* The card is a glance: the AI sum-up, or the chat's latest status once it runs; the rest is in Expand */}
+      {(ticket.lifecycle !== 'proposed' && ticket.report_line || ticket.summary) && <p className="line-clamp-2 text-[13px] whitespace-pre-wrap">
+        {ticket.lifecycle !== 'proposed' && ticket.report_line || ticket.summary}
+      </p>}
       <TicketDetails ticket={ticket} now={props.now} badge={style.badge} />
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
     </div>
