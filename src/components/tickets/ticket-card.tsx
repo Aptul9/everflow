@@ -240,11 +240,12 @@ export function TicketCard(props: {
       <TicketDetails ticket={ticket} now={props.now} badge={style.badge} />
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
     </div>
-    {actions && <div className="flex flex-wrap items-center gap-1.5 border-t px-3 py-2">
+    {/* Below the label width the main button keeps only its icon, so the icon buttons never wrap alone */}
+    {actions && <div className="@container flex flex-wrap items-center gap-1.5 border-t px-3 py-2">
       {ticket.lifecycle === 'proposed' && props.chats && <>
-        <Button type="button" size="sm" data-shortcut="s" data-action="start" title="Start (s)" className="h-9 min-w-fit flex-1 sm:h-8" disabled={props.expired || starting}
+        <Button type="button" size="sm" data-shortcut="s" data-action="start" title="Start (s)" aria-label={starting ? 'Saving Start' : 'Start'} className="h-9 min-w-0 flex-1 sm:h-8" disabled={props.expired || starting}
           onClick={() => { void post(keys.start, `/api/ticket/${ticket.id}/start`).catch(() => {}); }}>
-          {starting ? <RotateCw aria-hidden="true" className="animate-spin" /> : <Play aria-hidden="true" />}{starting ? 'Saving Start' : 'Start'}
+          {starting ? <RotateCw aria-hidden="true" className="animate-spin" /> : <Play aria-hidden="true" />}<span className="hidden truncate @[12rem]:inline">{starting ? 'Saving Start' : 'Start'}</span>
         </Button>
         <ActionDialog label="Open chat with note" display={null} title={`Open chat for ticket #${ticket.id}`} confirm="Approve with note" note shortcut="c" size="icon-sm"
           icon={<MessageSquarePlus aria-hidden="true" />} className="h-9 w-9 sm:h-8 sm:w-8" disabled={props.expired || props.pending.has(keys.chat)}

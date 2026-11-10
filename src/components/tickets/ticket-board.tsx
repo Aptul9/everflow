@@ -64,9 +64,9 @@ function BatchCard(props: { batch: SkippedBatch; enabled: boolean; expired: bool
       </Expand>
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
     </div>
-    {props.enabled && <div className="flex flex-wrap items-center gap-1.5 border-t px-3 py-2">
-      <Button type="button" variant="outline" size="sm" data-action="make" className="h-9 min-w-fit flex-1 sm:h-8" aria-label={`Make ticket from batch #${batch.id}`} disabled={props.expired || props.pending.has(key)}
-        onClick={() => { void props.post(key, `/api/batch/${batch.id}/ticket`).catch(() => {}); }}><FilePlus aria-hidden="true" />Make ticket</Button>
+    {props.enabled && <div className="@container flex items-center gap-1.5 border-t px-3 py-2">
+      <Button type="button" variant="outline" size="sm" data-action="make" className="h-9 min-w-0 flex-1 sm:h-8" aria-label={`Make ticket from batch #${batch.id}`} title="Make ticket" disabled={props.expired || props.pending.has(key)}
+        onClick={() => { void props.post(key, `/api/batch/${batch.id}/ticket`).catch(() => {}); }}><FilePlus aria-hidden="true" /><span className="hidden truncate @[13rem]:inline">Make ticket</span></Button>
       {batch.outcome !== 'muted' && <ActionDialog label={`Mute chat of batch #${batch.id}`} display={null} title={`Mute ${batch.title ?? 'this chat'}`} confirm="Mute chat" mute="only" size="icon-sm"
         icon={<BellOff aria-hidden="true" />} className="h-9 w-9 sm:h-8 sm:w-8" disabled={props.expired || props.pending.has(muteKey)}
         onConfirm={(_value, hours) => props.post(muteKey, `/api/batch/${batch.id}/mute`, { hours: hours ?? null })} />}

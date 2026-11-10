@@ -67,9 +67,14 @@ test('a proposed ticket keeps all four actions inside the card, with Chat as an 
   board();
   const chat = within(ticket()).getByRole('button', { name: 'Open chat with note' });
   expect(chat.textContent).not.toContain('Chat');
-  const start = within(ticket()).getByRole('button', { name: /^Start/ });
-  expect(start.className).toContain('min-w-fit');
-  expect(start.parentElement!.className).toContain('flex-wrap');
+  // A row too narrow for the label keeps the icon and the accessible name, so the icons never wrap alone
+  const start = within(ticket()).getByRole('button', { name: 'Start' });
+  expect(start.className).toContain('min-w-0');
+  expect(start.parentElement!.className).toContain('@container');
+  expect(within(start).getByText('Start').className).toMatch(/\bhidden\b.*@\[12rem\]:inline/);
+  const make = screen.getByRole('button', { name: 'Make ticket from batch #10' });
+  expect(make.parentElement!.className).toContain('@container');
+  expect(within(make).getByText('Make ticket').className).toMatch(/\bhidden\b.*@\[13rem\]:inline/);
   expect(within(ticket()).getByRole('button', { name: 'Timeline' }).parentElement!.className).toContain('flex-wrap');
 });
 
