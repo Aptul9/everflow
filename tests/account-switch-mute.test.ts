@@ -5,7 +5,7 @@ import { loadConfig } from '../src/dispatcher/config.ts';
 import { openDb } from '../src/dispatcher/db.ts';
 import { ingest, schedule, sourceStart } from '../src/dispatcher/ingest.ts';
 import { createSourceReader, validateRuntimeConfig } from '../src/dispatcher/runtime.ts';
-import { dismiss, makeTicket, mute, MUTE_FOREVER, muteTicket, TicketError } from '../src/dispatcher/tickets.ts';
+import { dismiss, makeTicket, mute, MUTE_FOREVER, muteTicket, pauseClient, TicketError } from '../src/dispatcher/tickets.ts';
 import { actionPost } from '../src/web/api.ts';
 import { initialize, release } from '../src/web/instance.ts';
 import { readState } from '../src/web/state.ts';
@@ -198,6 +198,23 @@ test('a chat muted at the source skips triage unless a message mentions the owne
   expect(() => ingest(db, { source: 'teams', account: 'me@example.invalid', muted: [''] })).toThrow();
 });
 
+test('a switched-off client holds its new input before triage and releases it when switched back on', () => {
+  const f = instance('[clients.acme]\naccounts = ["me@example.invalid"]\n[clients.other]\ndomains = ["other.invalid"]\n');
+  using db = openDb(f.path);
+  expect(() => pauseClient(db, f.cfg, 'unknown', true)).toThrow(TicketError);
+  pauseClient(db, f.cfg, 'acme', true, AT);
+  pauseClient(db, f.cfg, 'acme', true, later(1));
+  ingest(db, message('me@example.invalid', 'held-1'));
+  expect(schedule(db, f.cfg, later(10))).toEqual([]);
+  expect(db.prepare('SELECT state,outcome FROM batch').get()).toMatchObject({ state: 'pending', outcome: 'pending' });
+  const held = readState(db, f.cfg, new Date(later(11)));
+  expect(held.triaging).toMatchObject([{ clients: ['acme'], held: true, job: null }]);
+  expect(held.clients).toEqual([{ name: 'acme', paused: true, waiting: 1 }, { name: 'other', paused: false, waiting: 0 }]);
+  pauseClient(db, f.cfg, 'acme', false);
+  expect(schedule(db, f.cfg, later(12))).toHaveLength(1);
+  expect(readState(db, f.cfg, new Date(later(13))).triaging).toMatchObject([{ held: false, job: 'queued' }]);
+});
+
 test('a muted chat that feeds a running ticket chat still forwards every follow-up to that chat', () => {
   const f = instance('[chats]\nenabled = true\n');
   using db = openDb(f.path);
@@ -238,6 +255,9 @@ test('a muted chat stays out of triage until the mute ends, and own-only batches
   ingest(db, message('me@example.invalid', 'own', { sender: 'oid-me', sender_is_me: true, sent_at: later(30) }));
   schedule(db, f.cfg, later(40));
   expect(db.prepare('SELECT outcome FROM batch ORDER BY id DESC').get()!.outcome).toBe('answered');
+  // Skipped batches leave the board a day after they finished
+  expect(readState(db, f.cfg, new Date(later(24 * 60 + 30))).skipped.map((batch) => batch.outcome)).toEqual(['answered']);
+  expect(readState(db, f.cfg, new Date(later(25 * 60))).skipped).toEqual([]);
   ingest(db, message('me@example.invalid', 'm2', { sent_at: later(25 * 60) }));
   expect(schedule(db, f.cfg, later(25 * 60 + 10))).toHaveLength(1);
   expect(db.prepare('SELECT outcome FROM batch ORDER BY id DESC').get()!.outcome).toBe('triage');

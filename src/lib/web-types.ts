@@ -3,7 +3,7 @@ import type { Stage, TicketRef } from '../dispatcher/tickets.ts';
 
 export const groups = [
   ['needs_you', 'Needs you'], ['working', 'Working'], ['waiting_them', 'Waiting on them'],
-  ['failed', 'Failed'], ['done_today', 'Done today'], ['skipped', 'Skipped'],
+  ['failed', 'Failed'], ['done_today', 'Done'], ['skipped', 'Skipped'],
 ] as const;
 export type Group = (typeof groups)[number][0];
 
@@ -91,7 +91,25 @@ export interface TriageBatch {
   account: string;
   created_at: string;
   job: 'queued' | 'running' | 'parked' | null;
+  // Configured clients the batch belongs to; held while all of them are switched off
+  clients: string[];
+  held: boolean;
   messages: SourceMessage[];
+}
+
+export interface ClientSwitch {
+  name: string;
+  paused: boolean;
+  // Batches waiting for this client to be switched back on
+  waiting: number;
+}
+
+// An agent running right now: a triage call or a ticket chat turn
+export interface Agent {
+  kind: 'triage' | 'chat';
+  clients: string[];
+  title: string | null;
+  ticket: number | null;
 }
 
 export interface MutedConversation {
@@ -110,6 +128,8 @@ export interface OverviewState {
   groups: Record<Group, TicketCard[]>;
   skipped: SkippedBatch[];
   triaging: TriageBatch[];
+  clients: ClientSwitch[];
+  agents: Agent[];
   // Folder name of the OpenChamber project that holds ticket chats
   chat_project: string;
   muted: MutedConversation[];

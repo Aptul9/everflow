@@ -3,15 +3,12 @@ import { basename } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../dispatcher/config.ts';
 import { sourceAccounts, sourceEnabled } from '../dispatcher/policy.ts';
-import { batchMessages, detail, feedback, MUTE_FOREVER } from '../dispatcher/tickets.ts';
+import { batchClients, batchMessages, batchPaused, detail, feedback, MUTE_FOREVER, pausedClients } from '../dispatcher/tickets.ts';
 import type { Message } from '../dispatcher/tickets.ts';
-import { utc } from '../dispatcher/time.ts';
+import { calendarDay, utc } from '../dispatcher/time.ts';
 import type { Health, OverviewState, Reference, SkippedBatch, SourceMessage, TicketCard, TicketDetail, TriageBatch } from '../lib/web-types.ts';
 
-export function calendarDay(at: string | Date): string {
-  const date = new Date(at);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
+export { calendarDay };
 
 function message(row: Message): SourceMessage {
   let deleted = false;
@@ -79,9 +76,11 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
     .sort((a, b) => Number(b.lifecycle === 'proposed') - Number(a.lifecycle === 'proposed')
       || utc(b.last_activity_at ?? b.created_at).localeCompare(utc(a.last_activity_at ?? a.created_at)) || b.id - a.id);
   const cleared = new Set(db.prepare('SELECT id FROM ticket WHERE cleared_at IS NOT NULL').all().map((row) => Number(row.id)));
+  // Finished cards and skipped batches leave the board one day after they finished
+  const shownSince = utc(new Date(at.getTime() - 86_400_000).toISOString());
   for (const ticket of tickets) {
     if (ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed') {
-      if (ticket.closed_at && calendarDay(ticket.closed_at) === day && !cleared.has(ticket.id)) groups[ticket.lifecycle === 'dismissed' ? 'skipped' : 'done_today'].push(ticket);
+      if (ticket.closed_at && utc(ticket.closed_at) >= shownSince && !cleared.has(ticket.id)) groups[ticket.lifecycle === 'dismissed' ? 'skipped' : 'done_today'].push(ticket);
     } else if (ticket.stage === 'Failed') groups.failed.push(ticket);
     else if (ticket.stage === 'Needs you') groups.needs_you.push(ticket);
     else if (ticket.stage === 'Waiting on them') groups.waiting_them.push(ticket);
@@ -89,18 +88,29 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
   }
   const skipped = db.prepare(`SELECT b.id,c.title,c.source,c.account,b.outcome,b.created_at,
     (SELECT t.reason FROM triage_log t WHERE t.batch=b.id ORDER BY t.id DESC LIMIT 1) AS reason FROM batch b JOIN conversation c ON c.id=b.conversation
-    WHERE b.outcome IN ('not_on_us','backlog','answered','muted') AND b.cleared_at IS NULL ORDER BY b.created_at DESC,b.id DESC`).all().map((row) => ({
+    WHERE b.outcome IN ('not_on_us','backlog','answered','muted') AND b.cleared_at IS NULL AND COALESCE(b.done_at,b.created_at)>=?
+    ORDER BY b.created_at DESC,b.id DESC`).all(shownSince).map((row) => ({
     id: Number(row.id), title: row.title as string | null, source: String(row.source), account: String(row.account),
     outcome: row.outcome as SkippedBatch['outcome'], created_at: String(row.created_at), reason: row.reason as string | null,
     messages: batchMessages(db, Number(row.id)).reverse().map(message),
   }));
+  const paused = pausedClients(db);
   const triaging = db.prepare(`SELECT b.id,c.title,c.source,c.account,b.created_at,
     (SELECT j.state FROM job j WHERE j.kind='triage' AND json_extract(j.payload,'$.batch')=b.id AND j.state IN ('queued','running','parked') ORDER BY j.id DESC LIMIT 1) AS job
     FROM batch b JOIN conversation c ON c.id=b.conversation
     WHERE b.state='pending' AND b.ticket IS NULL AND b.outcome IN ('pending','triage') ORDER BY b.created_at DESC,b.id DESC`).all().map((row) => ({
     id: Number(row.id), title: row.title as string | null, source: String(row.source), account: String(row.account), created_at: String(row.created_at),
-    job: row.job as TriageBatch['job'], messages: batchMessages(db, Number(row.id)).reverse().map(message),
+    job: row.job as TriageBatch['job'], clients: batchClients(db, cfg, Number(row.id)), held: !row.job && batchPaused(db, cfg, Number(row.id), paused),
+    messages: batchMessages(db, Number(row.id)).reverse().map(message),
   }));
+  const waiting = db.prepare("SELECT id FROM batch WHERE state='pending' AND outcome IN ('pending','triage','routed')").all().map((row) => Number(row.id))
+    .filter((id) => batchPaused(db, cfg, id, paused)).flatMap((id) => batchClients(db, cfg, id));
+  const clients = Object.keys(cfg.clients).sort().map((name) => ({ name, paused: paused.has(name), waiting: waiting.filter((client) => client === name).length }));
+  const agents: OverviewState['agents'] = [
+    ...triaging.filter((batch) => batch.job === 'running').map((batch) => ({ kind: 'triage' as const, clients: batch.clients, title: batch.title, ticket: null })),
+    ...tickets.filter((ticket) => ticket.chat_running && ticket.lifecycle === 'active').map((ticket) => ({ kind: 'chat' as const,
+      clients: ticket.client ? [ticket.client] : [], title: ticket.title, ticket: ticket.id })),
+  ];
   const muted = db.prepare('SELECT id,title,source,account,muted_until FROM conversation WHERE muted_until > ? ORDER BY muted_until,id').all(utc(at.toISOString()))
     .map((row) => ({ id: Number(row.id), title: row.title as string | null, source: String(row.source), account: String(row.account),
       until: String(row.muted_until), forever: row.muted_until === MUTE_FOREVER }));
@@ -116,7 +126,7 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
     AND NOT EXISTS (SELECT 1 FROM triage_log v WHERE v.batch=t.batch AND v.id>t.id AND v.action IN ('new','update','skip')) ORDER BY at DESC,id DESC`).all()
     .map((row) => ({ id: Number(row.id), batch: row.batch === null ? null : Number(row.batch), at: String(row.at),
       raw: row.raw as string | null, parse_error: row.reason as string | null }));
-  return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped, triaging, chat_project: basename(cfg.opencode.directory || ''), muted,
+  return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped, triaging, clients, agents, chat_project: basename(cfg.opencode.directory || ''), muted,
     health: health(db, cfg), problems: { jobs, quarantine, triage }, feedback: feedback(db) };
 }
 

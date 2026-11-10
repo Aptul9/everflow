@@ -363,6 +363,56 @@ test('late assessment cannot reopen a manual close newer than its source input',
   expect(db.prepare('SELECT outcome FROM batch').get()?.outcome).toBe('closed');
 });
 
+function chatTicket(db: DatabaseSync, input: number) {
+  const owner = ticket(db, { lifecycle: 'active', approved_at: AT, session_id: `session-${input}` });
+  link(db, owner, conversation(db, input));
+  return owner;
+}
+
+test('a same-day close keeps input its chat never saw: the ticket reopens and forwards it', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const seen = batch(db, { conversation_id: 'chat' });
+  const owner = chatTicket(db, seen);
+  api.route(db, seen, AT);
+  db.prepare("UPDATE batch SET state='done',outcome='forwarded' WHERE id=?").run(seen);
+  vi.setSystemTime(new Date('2026-11-06T09:01:00Z'));
+  inputTurn(db, owner, 'done', { created_at: '2026-11-06T09:01:00.000000Z' });
+  vi.setSystemTime(new Date('2026-11-06T09:03:00Z'));
+  const missed = batch(db, { conversation_id: 'chat', message_id: 'during-turn' });
+  expect(api.route(db, missed, '2026-11-06T09:03:00Z')).toMatchObject({ ticket: owner, mode: 'forward' });
+  api.close(db, owner, 'Chat closed it', '2026-11-06T09:05:00Z');
+  expect(db.prepare('SELECT state,outcome FROM batch WHERE id=?').get(missed)).toEqual({ state: 'pending', outcome: 'routed' });
+  const scheduled = ingestApi.schedule(db, cfg, '2026-11-06T09:06:00Z');
+  expect(scheduled).toHaveLength(1);
+  expect(db.prepare('SELECT lifecycle FROM ticket WHERE id=?').get(owner)!.lifecycle).toBe('active');
+  expect(JSON.parse(String(db.prepare('SELECT payload FROM job WHERE id=?').get(scheduled[0]!)!.payload)).batch_ids).toEqual([missed]);
+});
+
+test('a close keeps dropping unseen input of an earlier day, of a dismissed ticket and input a chat input already carried', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  vi.setSystemTime(new Date('2026-11-06T09:00:00Z'));
+  const old = batch(db, { conversation_id: 'old-chat' });
+  const owner = chatTicket(db, old);
+  api.route(db, old, '2026-11-06T09:00:00Z');
+  api.close(db, owner, '', '2026-11-07T09:00:00Z');
+  expect(db.prepare('SELECT outcome FROM batch WHERE id=?').get(old)!.outcome).toBe('closed');
+  vi.setSystemTime(new Date('2026-11-07T10:00:00Z'));
+  const dropped = batch(db, { conversation_id: 'dismissed-chat' });
+  const other = chatTicket(db, dropped);
+  api.route(db, dropped, '2026-11-07T10:00:00Z');
+  api.dismiss(db, other, '', '2026-11-07T10:05:00Z');
+  expect(db.prepare('SELECT outcome FROM batch WHERE id=?').get(dropped)!.outcome).toBe('closed');
+  expect(ingestApi.schedule(db, cfg, '2026-11-07T10:10:00Z')).toEqual([]);
+  vi.setSystemTime(new Date('2026-11-07T11:00:00Z'));
+  const carried = batch(db, { conversation_id: 'carried-chat' });
+  const third = chatTicket(db, carried);
+  inputTurn(db, third, 'done', { created_at: '2026-11-07T11:01:00.000000Z' });
+  db.prepare("UPDATE ticket SET lifecycle='done',closed_at='2026-11-07T11:05:00.000000Z' WHERE id=?").run(third);
+  expect(api.route(db, carried, '2026-11-07T11:06:00Z')).toMatchObject({ ticket: third, mode: 'closed' });
+});
+
 test('late assessment follows a corrected current route rather than its old proposal target', () => {
   const { path, cfg } = fixture();
   using db = openDb(path);
@@ -928,7 +978,8 @@ function correctionSetup(db: DatabaseSync, cfg: ReturnType<typeof loadConfig>, t
   const target = ticket(db, { lifecycle: proposedTarget ? 'proposed' : 'active', approved_at: proposedTarget ? null : OLD,
     approval_note: proposedTarget ? null : 'Existing approval', session_id: proposedTarget ? null : 'reopened-target-session',
     closed_at: CORRECTION_CLOSED, report_at: CORRECTION_CLOSED, report: 'waiting_them', report_line: 'Retained target report', report_message_id: 'retained-report-id' });
-  const reportTurn = inputTurn(db, target, 'done');
+  // The target chat's last input postdates the target's own pre-close input, so its chat saw that input
+  const reportTurn = inputTurn(db, target, 'done', { created_at: '2026-11-06T01:30:00.000000Z' });
   db.prepare('UPDATE ticket SET report_turn=? WHERE id=?').run(reportTurn, target);
   link(db, target, conversation(db, oldTarget));
   link(db, from, conversation(db, first));
@@ -1053,11 +1104,12 @@ test.each(['relink', 'merge'] as const)('I1 %s intent cannot bypass a later targ
   using db = openDb(path);
   const state = correctionSetup(db, cfg);
   correct(db, kind, state);
-  db.prepare("UPDATE ticket SET closed_at='2026-11-06T04:00:00Z',report_at='2026-11-06T04:00:00Z' WHERE id=?").run(state.target);
-  expect(ingestApi.schedule(db, cfg, '2026-11-06T05:00:00Z')).toEqual([]);
+  // A close on a later day than the corrected input: same-day unseen input would reopen the chat instead
+  db.prepare("UPDATE ticket SET closed_at='2026-11-07T04:00:00Z',report_at='2026-11-07T04:00:00Z' WHERE id=?").run(state.target);
+  expect(ingestApi.schedule(db, cfg, '2026-11-07T05:00:00Z')).toEqual([]);
   for (const id of state.inputs) expect(db.prepare('SELECT state,outcome FROM batch WHERE id=?').get(id)).toEqual({ state: 'done', outcome: 'closed' });
   expect(db.prepare('SELECT closed_at,report_at FROM ticket WHERE id=?').get(state.target))
-    .toEqual({ closed_at: '2026-11-06T04:00:00Z', report_at: '2026-11-06T04:00:00Z' });
+    .toEqual({ closed_at: '2026-11-07T04:00:00Z', report_at: '2026-11-07T04:00:00Z' });
 });
 
 function rejectedTitleScope(db: DatabaseSync, job: jobs.Job, input: number, owner: number, response: unknown) {

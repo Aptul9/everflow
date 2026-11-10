@@ -56,11 +56,11 @@ test('a missing initialized DB fails closed without creating an empty replacemen
   } finally { release(current); }
 });
 
-test('terminal groups use local calendar day across the UTC boundary', () => {
+test('finished tickets stay on the board for one day after closing, whatever the local calendar day', () => {
   const fixture = webFixture();
   using db = new DatabaseSync(fixture.path);
-  db.prepare("UPDATE ticket SET closed_at='2026-11-06T07:30:00Z' WHERE id=?").run(fixture.done);
-  db.prepare("UPDATE ticket SET closed_at='2026-11-06T08:30:00Z' WHERE id=?").run(fixture.dismissed);
+  db.prepare("UPDATE ticket SET closed_at='2026-11-05T08:30:00Z' WHERE id=?").run(fixture.done);
+  db.prepare("UPDATE ticket SET closed_at='2026-11-05T09:30:00Z' WHERE id=?").run(fixture.dismissed);
   const script = `import {DatabaseSync} from 'node:sqlite';
     import {loadConfig} from ${JSON.stringify(pathToFileURL(resolve('dist/dispatcher/config.js')).href)};
     import {readState} from ${JSON.stringify(pathToFileURL(resolve('dist/web/state.js')).href)};

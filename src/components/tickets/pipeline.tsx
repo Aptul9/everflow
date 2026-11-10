@@ -1,15 +1,16 @@
 'use client';
 
-import { Bot, ChevronDown, CircleCheck, Cpu, Inbox, RotateCw, Ticket, TriangleAlert, Workflow } from 'lucide-react';
+import { Bot, ChevronDown, CircleCheck, CirclePause, Cpu, Inbox, LoaderCircle, Power, RotateCw, Ticket, TriangleAlert, Users, Workflow } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { groups } from '../../lib/web-types.ts';
-import type { Health, OverviewState } from '../../lib/web-types.ts';
+import type { Agent, Health, OverviewState } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Button } from '../ui/button.tsx';
 import { Time } from './ticket-card.tsx';
 
 type State = Health['state'];
 type Post = (key: string, path: string) => Promise<unknown>;
+type ClientPost = (key: string, path: string, input: { paused: boolean }) => Promise<unknown>;
 
 const rank: Record<State, number> = { failing: 5, stopped: 4, retrying: 3, unknown: 2, disabled: 1, ok: 0 };
 const dot: Record<State, string> = {
@@ -69,7 +70,51 @@ function Stage({ label, children, className }: { label: string; children: React.
   </div>;
 }
 
-export function Pipeline({ state }: { state: OverviewState }) {
+function Agents({ agents, kind }: { agents: Agent[]; kind: Agent['kind'] }) {
+  const list = agents.filter((agent) => agent.kind === kind);
+  if (!list.length) return null;
+  return <ul className="mt-1.5 grid gap-0.5">
+    {list.map((agent, index) => <li key={`${kind}-${agent.ticket ?? index}`} className="flex min-w-0 items-center gap-1.5 text-[11px] text-primary" title={agent.title ?? undefined}>
+      <LoaderCircle aria-hidden="true" className="size-3 shrink-0 animate-spin" />
+      <span className="shrink-0 font-medium">{agent.clients.length ? agent.clients.join(', ') : 'no client'}</span>
+      <span className="min-w-0 truncate text-muted-foreground">{agent.ticket === null ? '' : `#${agent.ticket} `}{agent.title ?? ''}</span>
+    </li>)}
+  </ul>;
+}
+
+// Switching a client off holds its new input before triage and chat forwards until it is back on
+function Clients(props: { state: OverviewState; expired: boolean; pending: ReadonlySet<string>; errors: Record<string, string>; post: ClientPost }) {
+  const { clients } = props.state;
+  if (!clients.length) return null;
+  const failed = clients.map((client) => props.errors[`client:${client.name}`]).find(Boolean);
+  return <div className="mt-4 border-t pt-3">
+    <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+      <Users aria-hidden="true" className="size-3.5 text-muted-foreground" />
+      <h3 className="text-xs font-semibold">Clients</h3>
+      <p className="text-[11px] text-muted-foreground">Switch a noisy client off: its new messages wait, untriaged, until it is back on.</p>
+    </div>
+    <ul className="flex flex-wrap gap-1.5">
+      {clients.map((client) => {
+        const key = `client:${client.name}`;
+        return <li key={client.name}>
+          <button type="button" aria-pressed={!client.paused} disabled={props.expired || props.pending.has(key) || !props.state.tickets_enabled}
+            title={client.paused ? `Off since switched; ${client.waiting} waiting. Click to switch on.` : 'On. Click to switch off.'}
+            onClick={() => { void props.post(key, `/api/client/${encodeURIComponent(client.name)}`, { paused: !client.paused }).catch(() => {}); }}
+            className={cn('inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors disabled:opacity-50',
+              client.paused ? 'border-dashed bg-muted text-muted-foreground line-through decoration-muted-foreground/60' : 'bg-card hover:bg-muted')}>
+            <Power aria-hidden="true" className={cn('size-3', client.paused ? 'text-muted-foreground' : 'text-success')} />
+            {client.name}
+            {client.waiting > 0 && <span className="rounded-full bg-warning px-1.5 text-[10px] font-semibold text-white no-underline tabular-nums">{client.waiting}</span>}
+          </button>
+        </li>;
+      })}
+    </ul>
+    {failed && <p role="alert" className="mt-1.5 text-xs text-destructive">{failed}</p>}
+  </div>;
+}
+
+export function Pipeline({ state, expired = false, pending = new Set(), errors = {}, post = async () => ({}) }: { state: OverviewState; expired?: boolean;
+  pending?: ReadonlySet<string>; errors?: Record<string, string>; post?: ClientPost }) {
   const box = useRef<HTMLDivElement>(null);
   // null until toggled: the diagram then follows health, folded while everything works
   const [open, setOpen] = useState<boolean | null>(null);
@@ -111,6 +156,7 @@ export function Pipeline({ state }: { state: OverviewState }) {
   const problems = jobs.length + quarantine.length + triage.length;
   const healthy = problems === 0 && summary.every(([, value]) => rank[value] < rank.retrying);
   const shown = open ?? !healthy;
+  const off = state.clients.filter((client) => client.paused);
 
   useEffect(() => {
     const root = box.current;
@@ -152,7 +198,12 @@ export function Pipeline({ state }: { state: OverviewState }) {
           <li className={cn('inline-flex items-center gap-1.5', problems > 0 && 'font-medium text-warning')}>
             {problems > 0 ? <TriangleAlert aria-hidden="true" className="size-3.5" /> : <CircleCheck aria-hidden="true" className="size-3.5 text-success" />}
             {problems > 0 ? `${problems} problem${problems === 1 ? '' : 's'}` : 'No problems'}
-          </li></ul>}
+          </li>
+          {state.agents.map((agent, index) => <li key={`agent-${index}`} className="inline-flex items-center gap-1.5 font-medium text-primary" title={agent.title ?? undefined}>
+            <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" />{agent.kind === 'triage' ? 'Triage' : `Chat #${agent.ticket}`} for {agent.clients.length ? agent.clients.join(', ') : 'no client'}
+          </li>)}
+          {off.length > 0 && <li className="inline-flex items-center gap-1.5"><CirclePause aria-hidden="true" className="size-3.5" />Clients off: {off.map((client) => client.name).join(', ')}</li>}
+        </ul>}
       <Button type="button" variant="ghost" size="sm" className="ml-auto h-8 text-muted-foreground" aria-expanded={shown} aria-controls={shown ? 'pipeline-diagram' : undefined} onClick={() => setOpen(!shown)}>
         {shown ? 'Hide' : 'Show'}<ChevronDown aria-hidden="true" className={cn('transition-transform', shown && 'rotate-180')} />
       </Button>
@@ -206,6 +257,7 @@ export function Pipeline({ state }: { state: OverviewState }) {
             {providers.map((item) => <Row key={item.dependency} name={item.dependency.replace(/^provider:/, '')} item={item} />)}
             {providers.length === 0 && <li className="py-1 text-xs text-muted-foreground">No providers configured.</li>}
           </ul>
+          <Agents agents={state.agents} kind="triage" />
         </Node>
       </Stage>
 
@@ -229,9 +281,11 @@ export function Pipeline({ state }: { state: OverviewState }) {
           <ul className="mt-1.5 divide-y divide-border/60">
             {openchamber.map((item) => <Row key={item.dependency} name={item.dependency === 'opencode' ? 'Server' : item.dependency.replace(/^opencode:/, '')} item={item} />)}
           </ul>
+          <Agents agents={state.agents} kind="chat" />
         </Node>
       </Stage>
     </div>}
+    {shown && <Clients state={state} expired={expired} pending={pending} errors={errors} post={post} />}
   </section>;
 }
 

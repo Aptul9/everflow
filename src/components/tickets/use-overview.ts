@@ -72,7 +72,7 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
     return () => { mounted.current = false; clearInterval(timer); for (const controller of active) controller.abort(); active.clear(); };
   }, [refresh]);
 
-  const post = useCallback(async (key: string, path: string, input: Record<string, string | number | null> = {}) => {
+  const post = useCallback(async (key: string, path: string, input: Record<string, string | number | boolean | null> = {}) => {
     if (stale.current) throw new Error('Reload page before submitting again.');
     if (submitting.current.has(key)) throw new Error('Action already submitting');
     const controller = new AbortController();
@@ -88,9 +88,9 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
         const failure = await response.json().catch(() => null) as { error?: { message?: unknown } } | null;
         throw new Error(typeof failure?.error?.message === 'string' ? failure.error.message : `Action failed (${response.status})`);
       }
-      const result = await response.json() as { ticket?: number; job?: number; conversation?: number };
+      const result = await response.json() as { ticket?: number; job?: number; conversation?: number; client?: string };
       const committed = result.ticket ?? result.job ?? result.conversation;
-      if (!Number.isSafeInteger(committed) || (committed ?? 0) <= 0) throw new Error('Invalid committed action response');
+      if (typeof result.client !== 'string' && (!Number.isSafeInteger(committed) || (committed ?? 0) <= 0)) throw new Error('Invalid committed action response');
       if (mounted.current) { setNotice('Local action saved.'); void refresh(); }
       return result;
     } catch (error) {

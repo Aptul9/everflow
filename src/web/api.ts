@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { approve } from '../dispatcher/approval.ts';
 import { transaction } from '../dispatcher/db.ts';
 import { retry } from '../dispatcher/jobs.ts';
-import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, muteBatch, muteTicket, TicketError } from '../dispatcher/tickets.ts';
+import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, muteBatch, muteTicket, pauseClient, TicketError } from '../dispatcher/tickets.ts';
 import { HttpError, instance, withDatabase } from './instance.ts';
 import type { WebInstance } from './instance.ts';
 import { readState, representation, ticketDetail } from './state.ts';
@@ -92,6 +92,21 @@ export function ticketGet(request: Request, id: string): Response {
     const current = instance();
     if (!allowedHost(request.headers.get('host'), current.port)) throw new HttpError(403, 'host.forbidden', 'Local Host required');
     return json(request, withDatabase(false, (db) => ticketDetail(db, validId(id))));
+  } catch (error) { return errorResponse(error); }
+}
+
+const pauseBody = z.strictObject({ paused: z.boolean() });
+
+// Switches a configured client off (its new input waits) or back on
+export async function clientPost(request: Request, name: string): Promise<Response> {
+  try {
+    const current = instance();
+    guardPost(request.headers, current);
+    const input = await body(request, pauseBody) as { paused: boolean };
+    const client = decodeURIComponent(name);
+    if (!Object.hasOwn(current.config.clients, client)) throw new HttpError(404, 'client.not-found', `Client ${client} is not configured`);
+    const result = withDatabase(true, (db) => ({ client: pauseClient(db, current.config, client, input.paused), paused: input.paused }));
+    return Response.json(result, { headers: { 'cache-control': 'no-store' } });
   } catch (error) { return errorResponse(error); }
 }
 

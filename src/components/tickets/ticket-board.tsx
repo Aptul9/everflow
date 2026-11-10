@@ -1,6 +1,6 @@
 'use client';
 
-import { Bell, BellOff, Clock, FilePlus, Inbox, Keyboard, LoaderCircle, MessagesSquare, RefreshCw, Search, TriangleAlert, WifiOff, X } from 'lucide-react';
+import { Bell, BellOff, Clock, FilePlus, Inbox, Keyboard, LoaderCircle, MessagesSquare, CirclePause, RefreshCw, Search, TriangleAlert, WifiOff, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { groups } from '../../lib/web-types.ts';
 import type { Group, OverviewState, SkippedBatch, TicketCard as CardData, TriageBatch } from '../../lib/web-types.ts';
@@ -91,9 +91,11 @@ function TriageCard(props: { batch: TriageBatch; now: number }) {
   return <div data-triage-batch={batch.id} className="rounded-lg border border-dashed border-primary/35 bg-card/70 shadow-xs">
     <div className="space-y-1.5 p-3">
       <div className="flex min-w-0 items-center gap-2 text-xs">
-        <span role="status" className={cn('inline-flex min-w-0 items-center gap-1 font-medium', parked ? 'text-destructive' : 'text-primary')}>
-          {parked ? <TriangleAlert aria-hidden="true" className="size-3.5 shrink-0" /> : <LoaderCircle aria-hidden="true" className={cn('size-3.5 shrink-0', batch.job === 'running' && 'animate-spin')} />}
-          {batch.job === 'running' ? 'Triage running' : parked ? 'Triage failed, see Problems' : 'Waiting for triage'}
+        <span role="status" className={cn('inline-flex min-w-0 items-center gap-1 font-medium', parked ? 'text-destructive' : batch.held ? 'text-muted-foreground' : 'text-primary')}>
+          {parked ? <TriangleAlert aria-hidden="true" className="size-3.5 shrink-0" /> : batch.held ? <CirclePause aria-hidden="true" className="size-3.5 shrink-0" />
+            : <LoaderCircle aria-hidden="true" className={cn('size-3.5 shrink-0', batch.job === 'running' && 'animate-spin')} />}
+          {batch.job === 'running' ? `Triage running${batch.clients.length ? ` for ${batch.clients.join(', ')}` : ''}` : parked ? 'Triage failed, see Problems'
+            : batch.held ? `Held: ${batch.clients.join(', ')} off` : 'Waiting for triage'}
         </span>
         <span className="ml-auto inline-flex shrink-0 items-center gap-0.5 text-muted-foreground"><Clock aria-hidden="true" className="size-3" />
           <time dateTime={batch.created_at} title={formatTime(batch.created_at)} className="tabular-nums">{age(props.now, batch.created_at)}</time></span>
@@ -247,7 +249,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
         <AlertDescription>Read-only state and health. Work controls are unavailable.</AlertDescription>
       </Alert>}
 
-      <Pipeline state={state} />
+      <Pipeline state={state} expired={expired} pending={pending} errors={errors} post={post} />
       <Problems state={state} expired={expired} pending={pending} errors={errors} post={post} />
       <MutedChats state={state} expired={expired} pending={pending} errors={errors} post={post} />
 

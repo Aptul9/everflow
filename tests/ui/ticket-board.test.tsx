@@ -246,15 +246,36 @@ test('a ticket whose chat is running says so on the card', () => {
   expect(within(card).queryByText(/Chat open in OpenChamber/)).toBeNull();
 });
 
+test('the diagram switches a client off and on, shows what waits for it and which agents run for whom', async () => {
+  const state = uiState();
+  state.clients = [{ name: 'bip', paused: false, waiting: 0 }, { name: 'npo', paused: true, waiting: 2 }];
+  state.agents = [{ kind: 'triage', clients: ['bip'], title: 'Fresh request', ticket: null }, { kind: 'chat', clients: ['npo'], title: 'AKS check', ticket: 6 }];
+  state.triaging = [{ id: 21, title: 'Noisy chat', source: 'teamsrelay', account: 'me@example.invalid', created_at: '2026-11-06T05:58:00.000000Z', job: null,
+    clients: ['npo'], held: true, messages: [] }];
+  board(state);
+  const health = screen.getByRole('region', { name: 'Health' });
+  expect(health.querySelector('[data-node="triage"]')!.textContent).toContain('bipFresh request');
+  expect(health.querySelector('[data-node="openchamber"]')!.textContent).toContain('npo#6 AKS check');
+  const npo = within(health).getByRole('button', { name: /npo/ });
+  expect(npo.getAttribute('aria-pressed')).toBe('false');
+  expect(npo.textContent).toContain('2');
+  await userEvent.click(within(health).getByRole('button', { name: /bip/ }));
+  const [path, init] = fetcher.mock.calls.find(([, init]) => init?.method === 'POST')!;
+  expect(path).toBe('/api/client/bip');
+  expect(JSON.parse(String(init!.body))).toEqual({ paused: true });
+  const card = screen.getByRole('heading', { name: 'Batch #21: Noisy chat' }).closest<HTMLElement>('[data-triage-batch]')!;
+  expect(within(card).getByRole('status').textContent).toBe('Held: npo off');
+});
+
 test('a batch in triage shows at the top of Needs you before its ticket exists', async () => {
   const state = uiState();
   state.triaging = [{ id: 20, title: 'Fresh request', source: 'teamsrelay', account: 'me@example.invalid', created_at: '2026-11-06T05:58:00.000000Z', job: 'running',
-    messages: [{ id: 30, source: 'teamsrelay', sender: 'Colleague', sent_at: '2026-11-06T05:58:00.000000Z', text: 'Can you check the VPN?' }] }];
+    clients: ['bip'], held: false, messages: [{ id: 30, source: 'teamsrelay', sender: 'Colleague', sent_at: '2026-11-06T05:58:00.000000Z', text: 'Can you check the VPN?' }] }];
   board(state);
   const column = screen.getByRole('region', { name: 'Needs you (3)' });
   const card = within(column).getByRole('heading', { name: 'Batch #20: Fresh request' }).closest<HTMLElement>('[data-triage-batch]')!;
   expect(column.querySelector('[data-triage-batch], article')).toBe(card);
-  expect(within(card).getByRole('status').textContent).toBe('Triage running');
+  expect(within(card).getByRole('status').textContent).toBe('Triage running for bip');
   await userEvent.click(within(card).getByRole('button', { name: 'Messages (1)' }));
   expect(within(card).getByText('Can you check the VPN?')).toBeTruthy();
   expect(card.getAttribute('draggable')).toBeNull();
@@ -275,7 +296,7 @@ test('dragging a ticket to Working starts it, to Done today or Skipped opens the
   expect(drag(ticket(), column('Working (1)'))).toBe(true);
   await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/ticket/1/start', expect.objectContaining({ method: 'POST' })));
 
-  expect(drag(ticket(2, 'Second proposal'), column('Done today (1)'))).toBe(true);
+  expect(drag(ticket(2, 'Second proposal'), column('Done (1)'))).toBe(true);
   expect(await screen.findByRole('dialog', { name: 'Mark ticket #2 done' })).toBeTruthy();
   await userEvent.keyboard('{Escape}');
 
@@ -316,9 +337,9 @@ test('a skipped batch shows why triage skipped it and drags onto Needs you to ma
 test('six board columns have counts; health, Problems and persisted feedback remain outside columns', () => {
   board();
   expect(document.querySelectorAll('[data-column]')).toHaveLength(6);
-  for (const name of ['Needs you (2)', 'Working (1)', 'Waiting on them (1)', 'Failed (1)', 'Done today (1)', 'Skipped (4)']) expect(screen.getByRole('region', { name })).toBeTruthy();
+  for (const name of ['Needs you (2)', 'Working (1)', 'Waiting on them (1)', 'Failed (1)', 'Done (1)', 'Skipped (4)']) expect(screen.getByRole('region', { name })).toBeTruthy();
   expect(within(screen.getByRole('region', { name: 'Skipped (4)' })).getByRole('article', { name: 'Ticket #6: Dismissed work' })).toBeTruthy();
-  expect(within(screen.getByRole('region', { name: 'Done today (1)' })).queryByRole('article', { name: 'Ticket #6: Dismissed work' })).toBeNull();
+  expect(within(screen.getByRole('region', { name: 'Done (1)' })).queryByRole('article', { name: 'Ticket #6: Dismissed work' })).toBeNull();
   expect(screen.getByRole('region', { name: 'Health' }).textContent).toContain('Source unavailable');
   expect(screen.getByRole('region', { name: 'Health' }).textContent).toContain('OpenChamber');
   const problems = screen.getByRole('region', { name: 'Problems' });

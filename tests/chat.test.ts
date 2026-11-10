@@ -170,6 +170,21 @@ test('a brief quotes the newest 50 messages as a transcript and says how many ea
   expect(text).not.toContain('"message_id"');
 });
 
+test('the first input after a reopen says when the ticket was closed and that some messages predate the close', async () => {
+  const f = await admittedFixture();
+  await using peer = f.peer;
+  using db = f.db;
+  peer.finish(String(f.turn.session_id), String(f.turn.prompt_id), 'STATUS: waiting_them | Waiting', 'succeeded', undefined, PEER_AT + 1000);
+  await chat.collect(f.cfg, db, claimed(db, f.cfg));
+  db.prepare("UPDATE ticket SET closed_at='2026-11-06T00:30:00.000000Z' WHERE id=?").run(f.ticket);
+  vi.setSystemTime(new Date('2026-11-06T01:45:00Z'));
+  const first = addBatch(db, f.ticket, { text: 'Arrived during the closing turn' });
+  jobs.enqueue(db, 'forward', 'after-reopen', { batch_ids: [first] }, f.ticket);
+  const text = chat.prepareTurn(f.cfg, db, claimed(db, f.cfg), 'forward')!.text;
+  expect(text).toContain('This ticket was closed at 00:30Z, 1 h 15 min ago, and this input reopened it.');
+  expect(text).toContain('never shown to you');
+});
+
 test('a forward input repeats only the STATUS contract, the data boundary and the close command', async () => {
   const f = await admittedFixture();
   await using peer = f.peer;

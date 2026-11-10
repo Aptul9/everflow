@@ -15,6 +15,9 @@ const sourceMuteTable = `CREATE TABLE IF NOT EXISTS source_mute (
   source TEXT NOT NULL, account TEXT NOT NULL, native_id TEXT NOT NULL,
   PRIMARY KEY (source, account, native_id));`;
 
+// Clients switched off on the page: their new input waits, untriaged and unforwarded, until switched back on
+const clientPauseTable = `CREATE TABLE IF NOT EXISTS client_pause (client TEXT PRIMARY KEY, paused_at TEXT NOT NULL);`;
+
 const schema = `
 CREATE TABLE IF NOT EXISTS cursor (
   source TEXT NOT NULL, account TEXT NOT NULL, since TEXT NOT NULL,
@@ -190,6 +193,7 @@ function refineBatch(db: DatabaseSync): void {
     }
   }
   if (!hasTable(db, 'source_mute')) db.exec(sourceMuteTable);
+  if (!hasTable(db, 'client_pause')) db.exec(clientPauseTable);
 }
 
 function scopeLegacyKeys(db: DatabaseSync): void {

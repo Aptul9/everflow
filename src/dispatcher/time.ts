@@ -1,3 +1,9 @@
+// Local calendar day of this machine, the day the owner works in
+export function calendarDay(at: string | Date): string {
+  const date = new Date(at);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 export function utc(stamp: string = new Date().toISOString()): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})$/.exec(stamp);
   if (!match) throw new RangeError(`Invalid aware timestamp: ${stamp}`);

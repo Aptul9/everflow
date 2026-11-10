@@ -5,7 +5,7 @@ import { clientsFor, isNotePath } from './policy.ts';
 import type { Config } from './config.ts';
 import { transaction } from './db.ts';
 import type { Job } from './jobs.ts';
-import { utc } from './time.ts';
+import { calendarDay, utc } from './time.ts';
 import type { Lifecycle, Report } from './types.ts';
 
 export type Stage = 'Failed' | 'Needs you' | 'Working' | 'Waiting on them' | 'Idle' | 'Done' | 'Dismissed';
@@ -69,6 +69,7 @@ interface Batch {
   state: string;
   outcome: string | null;
   ticket: number | null;
+  prompt_id: string | null;
   created_at: string;
   source: string;
   account: string;
@@ -135,6 +136,15 @@ function inputAt(db: DatabaseSync, batch: Batch, target: number): string {
   return stamps.sort().at(-1) ?? utc(batch.created_at);
 }
 
+// Input of the closing day that no chat input ever carried was not handled by the close: it reopens the ticket chat.
+// Earlier days, dismissed tickets and tickets without a chat keep the close as final.
+function unseenAtClose(db: DatabaseSync, batch: Batch, owner: Ticket, closedAt: string): boolean {
+  if (!owner.approved_at || !owner.session_id || owner.merged_into || batch.prompt_id) return false;
+  const at = inputAt(db, batch, owner.id);
+  if (calendarDay(at) !== calendarDay(closedAt)) return false;
+  return !db.prepare("SELECT 1 FROM turn WHERE ticket=? AND state<>'cancelled' AND created_at>=?").get(owner.id, at);
+}
+
 function messageVersion(message: Message): string {
   return createHash('sha256').update(JSON.stringify([message.id, message.sender, message.sender_name, message.sender_is_me,
     message.sent_at, message.text, message.attachments, message.ref, message.stored_at])).digest('hex');
@@ -172,6 +182,26 @@ export function batchClients(db: DatabaseSync, cfg: Pick<Config, 'clients'>, bat
   const text = [row.title ?? '', ...messages.flatMap((message) => [message.sender ?? '', message.text ?? ''])].join('\n');
   const addresses = [...text.matchAll(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g)].map((value) => value[0]);
   return clientsFor(cfg, row.account, addresses);
+}
+
+export function pausedClients(db: DatabaseSync): Set<string> {
+  return new Set(db.prepare('SELECT client FROM client_pause').all().map((row) => String(row.client)));
+}
+
+// A batch waits only when every client it belongs to is switched off; a batch of no known client never waits.
+export function batchPaused(db: DatabaseSync, cfg: Pick<Config, 'clients'>, batch: number, paused = pausedClients(db)): boolean {
+  if (!paused.size) return false;
+  const clients = batchClients(db, cfg, batch);
+  return clients.length > 0 && clients.every((client) => paused.has(client));
+}
+
+export function pauseClient(db: DatabaseSync, cfg: Pick<Config, 'clients'>, client: string, paused: boolean, at?: string): string {
+  if (!Object.hasOwn(cfg.clients, client)) throw new TicketError('ticket.invalid-input', `Unknown configured client ${client}`);
+  transaction(db, () => {
+    if (paused) db.prepare('INSERT INTO client_pause(client,paused_at) VALUES (?,?) ON CONFLICT(client) DO NOTHING').run(client, utc(at));
+    else db.prepare('DELETE FROM client_pause WHERE client=?').run(client);
+  });
+  return client;
 }
 
 function refMatches(db: DatabaseSync, refs: readonly TicketRef[]): number[] {
@@ -245,7 +275,8 @@ export function route(db: DatabaseSync, batch: number, at?: string, reopenDays =
     const row = getBatch(db, batch);
     const linked = db.prepare("SELECT ticket FROM ticket_conversation WHERE conversation=? AND kind IN ('primary','linked')").get(row.conversation);
     let owner = linked ? getTicket(db, Number(linked.ticket)) : null;
-    if (owner?.closed_at && inputAt(db, row, owner.id) <= utc(owner.closed_at) && !owner.merged_into) {
+    if (owner?.closed_at && inputAt(db, row, owner.id) <= utc(owner.closed_at) && !owner.merged_into
+      && !(owner.lifecycle === 'done' && unseenAtClose(db, row, owner, owner.closed_at))) {
       db.prepare("UPDATE batch SET ticket=?,state='done',outcome='closed',done_at=? WHERE id=?").run(owner.id, now, batch);
       const context = db.prepare("SELECT ticket FROM ticket_conversation WHERE conversation=? AND kind='context' ORDER BY ticket").all(row.conversation).map((link) => Number(link.ticket));
       return { ticket: owner.id, mode: 'closed', candidates: [], context };
@@ -565,7 +596,7 @@ export function merge(db: DatabaseSync, source: number, target: number, at?: str
   });
 }
 
-function closeFuture(db: DatabaseSync, ticket: number, at: string): void {
+function closeFuture(db: DatabaseSync, ticket: number, at: string, keepUnseen = false): void {
   const jobs = correctionJobs(db);
   const triage = new Set(db.prepare(`SELECT j.id FROM job j JOIN batch b ON b.id=json_extract(j.payload,'$.batch')
     WHERE j.kind='triage' AND b.ticket=?`).all(ticket).map((job) => Number(job.id)));
@@ -585,8 +616,13 @@ function closeFuture(db: DatabaseSync, ticket: number, at: string): void {
     if (retained) for (const id of jobBatches(job, false)) protectedBatches.add(id);
     else cancelJob(db, job.id, at);
   }
+  const owner = getTicket(db, ticket);
   for (const batch of db.prepare("SELECT id FROM batch WHERE ticket=? AND state='pending'").all(ticket)) {
-    if (!protectedBatches.has(Number(batch.id))) db.prepare("UPDATE batch SET state='done',outcome='closed',done_at=? WHERE id=?").run(at, batch.id!);
+    const id = Number(batch.id);
+    if (protectedBatches.has(id)) continue;
+    // Its cancelled forward is replaced on the next schedule, which reopens the ticket for it
+    if (keepUnseen && unseenAtClose(db, getBatch(db, id), owner, at)) db.prepare("UPDATE batch SET outcome='routed' WHERE id=?").run(id);
+    else db.prepare("UPDATE batch SET state='done',outcome='closed',done_at=? WHERE id=?").run(at, id);
   }
 }
 
@@ -597,7 +633,7 @@ function finishTicket(db: DatabaseSync, ticket: number, lifecycle: 'done' | 'dis
     const row = getTicket(db, ticket);
     if (row.lifecycle === lifecycle) return ticket;
     if (row.lifecycle === 'done' || row.lifecycle === 'dismissed') throw new TicketError('ticket.conflict', 'Ticket already has a terminal lifecycle');
-    closeFuture(db, ticket, now);
+    closeFuture(db, ticket, now, lifecycle === 'done');
     const reportAt = row.report_at && utc(row.report_at) > now ? row.report_at : now;
     db.prepare("UPDATE ticket SET lifecycle=?,closed_at=?,report='done',report_line=?,report_at=?,last_activity_at=? WHERE id=?")
       .run(lifecycle, now, reason || (lifecycle === 'done' ? 'Closed manually' : 'Dismissed'), reportAt, now, ticket);

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { Config } from './config.ts';
 import { transaction } from './db.ts';
 import { enqueue, healthOk } from './jobs.ts';
-import { assessmentPayload, attachBatch, route } from './tickets.ts';
+import { assessmentPayload, attachBatch, batchPaused, pausedClients, route } from './tickets.ts';
 import { utc } from './time.ts';
 
 export class IngestError extends TypeError {
@@ -245,9 +245,12 @@ export function schedule(db: DatabaseSync, cfg: Config, at?: string): number[] {
         if (linked) attachBatch(db, id, Number(linked.ticket), now);
       }
     }
+    const paused = pausedClients(db);
     for (const batch of db.prepare("SELECT id FROM batch WHERE state='pending' AND outcome IN ('pending','triage','routed') ORDER BY id").all()) {
       const id = Number(batch.id);
       if (db.prepare("SELECT 1 FROM job WHERE kind='triage' AND json_extract(payload,'$.batch')=? AND state IN ('queued','running','parked')").get(id)) continue;
+      // A switched-off client's input stays pending, untouched, and is routed once the client is back on
+      if (batchPaused(db, cfg, id, paused)) continue;
       const routed = route(db, id, now, cfg.jobs.reopen_days);
       if (routed.mode === 'closed' || routed.mode === 'forward') continue;
       scheduled.add(enqueue(db, 'triage', `triage:batch:${id}`, assessmentPayload(db, cfg, id, routed, now), routed.ticket ?? undefined));
@@ -257,6 +260,7 @@ export function schedule(db: DatabaseSync, cfg: Config, at?: string): number[] {
       const waiting = new Map<number, number[]>();
       for (const batch of db.prepare(`SELECT b.id,b.ticket FROM batch b JOIN ticket t ON t.id=b.ticket
         WHERE b.state='pending' AND b.outcome='routed' AND t.lifecycle='active' ORDER BY b.id`).all()) {
+        if (batchPaused(db, cfg, Number(batch.id), paused)) continue;
         const ticket = Number(batch.ticket);
         const ids = waiting.get(ticket) ?? [];
         ids.push(Number(batch.id));
