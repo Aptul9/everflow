@@ -523,6 +523,16 @@ export async function collect(cfg: Config, db: DatabaseSync, job: Job, options: 
   } catch (error) { failed(cfg, db, job, error, options); }
 }
 
+// Records whether the bound session is running a turn, so a turn the owner started in OpenChamber shows as Working
+async function markRunning(db: DatabaseSync, job: Job, ticket: number, session: string, peer: Peer, options: ChatOptions): Promise<boolean> {
+  const now = clock(options);
+  const running = await peer.running(session, options.signal);
+  return fenced(db, job, () => {
+    db.prepare('UPDATE ticket SET chat_running_at=? WHERE id=?').run(running ? ticketRow(db, ticket).chat_running_at ?? now() : null, ticket);
+    return true;
+  }, now) ?? false;
+}
+
 function sessionTickets(db: DatabaseSync, job: Job): Ticket[] {
   return db.prepare(`SELECT * FROM ticket WHERE approved_at IS NOT NULL AND session_id IS NOT NULL AND lifecycle<>'dismissed'
     ${job.ticket === null ? '' : 'AND id=?'} ORDER BY id`).all(...(job.ticket === null ? [] : [job.ticket])) as unknown as Ticket[];
@@ -582,6 +592,7 @@ async function globalSync(cfg: Config, db: DatabaseSync, job: Job, peer: Peer, o
       const owner = ticketRow(db, ticket);
       const pending = (currentJob(db, job).payload.pending_reports as Record<string, PendingReport> | undefined)?.[String(ticket)];
       if (!owner.approved_at || !owner.session_id || pending && pending.session_id !== owner.session_id) throw jobError('Sync has no approved matching session target');
+      if (!await markRunning(db, job, ticket, owner.session_id, peer, options)) return;
       if (pending) {
         if (!await finishReport(cfg, db, job, pending, { ...options, peer }, false)) return;
       } else {
@@ -626,6 +637,7 @@ export async function sync(cfg: Config, db: DatabaseSync, job: Job, options: Cha
       if (pending && !await finishReport(cfg, db, job, pending, { ...options, peer }, false)) return;
       for (const owner of owners) {
         if (!owns(db, job, now())) return;
+        if (!await markRunning(db, job, owner.id, owner.session_id!, peer, options)) return;
         const snapshot = ticketRow(db, owner.id);
         const baseline = { report_message_id: snapshot.report_message_id, report_at: snapshot.report_at };
         const result = await peer.latestReport(owner.session_id!, options.signal);

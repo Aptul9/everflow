@@ -184,8 +184,10 @@ function refineBatch(db: DatabaseSync): void {
   if (!db.prepare('PRAGMA table_info(batch)').all().some((column) => column.name === 'cleared_at')) {
     transaction(db, () => db.exec('ALTER TABLE batch ADD COLUMN cleared_at TEXT'));
   }
-  if (!db.prepare('PRAGMA table_info(ticket)').all().some((column) => column.name === 'cleared_at')) {
-    transaction(db, () => db.exec('ALTER TABLE ticket ADD COLUMN cleared_at TEXT'));
+  for (const column of ['cleared_at', 'chat_running_at']) {
+    if (!db.prepare('PRAGMA table_info(ticket)').all().some((row) => row.name === column)) {
+      transaction(db, () => db.exec(`ALTER TABLE ticket ADD COLUMN ${column} TEXT`));
+    }
   }
   if (!hasTable(db, 'source_mute')) db.exec(sourceMuteTable);
 }

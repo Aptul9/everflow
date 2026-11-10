@@ -1,6 +1,6 @@
 'use client';
 
-import { BookOpen, Check, Clock, GitCommitVertical, Maximize2, MessageSquarePlus, MessagesSquare, Play, RotateCw, X } from 'lucide-react';
+import { BookOpen, Check, Clock, GitCommitVertical, LoaderCircle, Maximize2, MessageSquarePlus, MessagesSquare, Play, RotateCw, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { SourceMessage, TicketCard as CardData, TicketDetail } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
@@ -223,7 +223,8 @@ export function TicketCard(props: {
       </div>
       <h4 id={heading} className="text-sm leading-snug font-semibold"><span className="sr-only">{`Ticket #${ticket.id}:`}</span>{' '}{ticket.title}</h4>
       {ticket.session_id && !terminal && <p title={`Session ${ticket.session_id}`} className="flex min-w-0 items-center gap-1.5 rounded-md bg-info-soft px-2 py-1 text-xs font-medium text-info">
-        <MessagesSquare aria-hidden="true" className="size-3.5 shrink-0" /><span className="min-w-0">{`Chat open in OpenChamber${props.chatProject ? `, project ${props.chatProject}` : ''}`}</span>
+        {ticket.chat_running ? <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin" /> : <MessagesSquare aria-hidden="true" className="size-3.5 shrink-0" />}
+        <span className="min-w-0">{`${ticket.chat_running ? 'Chat working now' : 'Chat open in OpenChamber'}${props.chatProject ? `, project ${props.chatProject}` : ''}`}</span>
       </p>}
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
         <Badge className={cn('border-transparent px-1.5 text-[11px]', style.badge)}>{ticket.lifecycle === 'proposed' ? 'Proposed' : ticket.stage}</Badge>

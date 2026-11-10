@@ -261,6 +261,32 @@ test('sync imports direct completed STATUS every 300s without refreshing unchang
   expect(row(db, 'ticket', ticket)).toEqual({ ...closed, session_title: expect.stringContaining('[Done]') });
 });
 
+test('sync shows a ticket as Working while its chat runs a turn the owner started, then applies the new STATUS', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  using db = openDb(path);
+  const ticket = proposed(db, { lifecycle: 'active', approved_at: AT, session_id: 'ses_direct' });
+  peer.sessions.set('ses_direct', remoteSession('ses_direct', cfg.opencode.directory));
+  const api = connect(cfg);
+  await api.prompt('ses_direct', 'msg_brief', 'Brief');
+  peer.finish('ses_direct', 'msg_brief', 'STATUS: needs_you | Approval needed', 'succeeded', undefined, PEER_AT + 1000);
+  jobs.enqueue(db, 'sync', 'sync', {});
+  await chat.sync(cfg, db, claimed(db, cfg));
+  expect(stage(db, ticket)).toBe('Needs you');
+  expect(row(db, 'ticket', ticket).chat_running_at).toBeNull();
+  vi.setSystemTime(new Date('2026-11-06T00:05:00Z'));
+  await api.prompt('ses_direct', 'msg_owner', 'approved');
+  peer.deliver('ses_direct', 'msg_owner');
+  await chat.sync(cfg, db, claimed(db, cfg));
+  expect(row(db, 'ticket', ticket)).toMatchObject({ report: 'needs_you', chat_running_at: '2026-11-06T00:05:00.000000Z' });
+  expect(stage(db, ticket)).toBe('Working');
+  peer.finish('ses_direct', 'msg_owner', 'Rebalanced.\nSTATUS: waiting_them | Reply sent', 'succeeded', undefined, PEER_AT + 400_000);
+  vi.setSystemTime(new Date('2026-11-06T00:10:00Z'));
+  await chat.sync(cfg, db, claimed(db, cfg));
+  expect(row(db, 'ticket', ticket)).toMatchObject({ report: 'waiting_them', report_line: 'Reply sent', chat_running_at: null });
+  expect(stage(db, ticket)).toBe('Waiting on them');
+});
+
 test('STATUS done closes, then within 14 days new linked input reopens and unarchives same approved session', async () => {
   const f = await admittedFixture();
   await using peer = f.peer;

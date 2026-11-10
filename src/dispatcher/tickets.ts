@@ -41,6 +41,8 @@ export interface Ticket {
   session_title: string | null;
   maybe_ticket: number | null;
   merged_into: number | null;
+  // Set by sync while the bound session runs a turn, null once it is idle
+  chat_running_at?: string | null;
 }
 
 export interface Message {
@@ -142,6 +144,7 @@ export function stage(db: DatabaseSync, ticket: number, projection: { exclude_jo
   const row = { ...getTicket(db, ticket), ...(projection.report !== undefined ? { report: projection.report } : {}),
     ...(projection.lifecycle ? { lifecycle: projection.lifecycle } : {}) };
   if (db.prepare("SELECT 1 FROM job WHERE ticket=? AND state='parked' AND id<>?").get(ticket, projection.exclude_job ?? -1)) return 'Failed';
+  if (row.lifecycle === 'active' && row.chat_running_at && projection.report === undefined) return 'Working';
   if (row.lifecycle === 'proposed' || row.report === 'needs_you' || row.report === 'blocked') return 'Needs you';
   if (projection.pending || db.prepare("SELECT 1 FROM job WHERE ticket=? AND state IN ('queued','running') AND id<>? AND kind NOT IN ('sync','archive','purge')").get(ticket, projection.exclude_job ?? -1)
     || db.prepare("SELECT 1 FROM turn WHERE ticket=? AND state IN ('prepared','admitted','running') AND id<>?").get(ticket, projection.exclude_turn ?? -1)) return 'Working';

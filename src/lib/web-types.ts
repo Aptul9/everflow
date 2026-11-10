@@ -35,6 +35,7 @@ export interface TicketCard {
   report: string | null;
   report_line: string | null;
   session_id: string | null;
+  chat_running: boolean;
   session_title: string | null;
   reason: string | null;
   timeline_revision: string;

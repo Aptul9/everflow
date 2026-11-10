@@ -32,7 +32,7 @@ export function ticketDetail(db: DatabaseSync, id: number): TicketDetail {
     summary: row.summary, ask: row.ask, proposal: row.proposal, confidence: row.confidence, maybe_ticket: row.maybe_ticket,
     kb_notes: (JSON.parse(row.kb_notes) as unknown[]).filter((value): value is string => typeof value === 'string'),
     created_at: row.created_at, last_activity_at: row.last_activity_at, closed_at: row.closed_at, report: row.report,
-    report_line: row.report_line, session_id: row.session_id, session_title: row.session_title, reason: timeline.find((event) => event.kind === 'triage')?.body ?? null,
+    report_line: row.report_line, session_id: row.session_id, chat_running: !!row.chat_running_at, session_title: row.session_title, reason: timeline.find((event) => event.kind === 'triage')?.body ?? null,
     timeline_revision: representation(timeline).etag, messages, refs };
   return { ticket, messages, refs, timeline };
 }

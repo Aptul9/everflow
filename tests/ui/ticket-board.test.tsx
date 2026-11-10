@@ -149,6 +149,15 @@ test('a ticket with a chat says where the chat is, from the moment it opens', ()
   expect(within(ticket()).queryByText(/Chat open in OpenChamber/)).toBeNull();
 });
 
+test('a ticket whose chat is running says so on the card', () => {
+  const state = uiState();
+  Object.assign(state.groups.working[0]!, { session_id: 'ses_synthetic123', chat_running: true });
+  board(state);
+  const card = screen.getByRole('article', { name: 'Ticket #3: Active work' });
+  expect(within(card).getByText('Chat working now, project Vault')).toBeTruthy();
+  expect(within(card).queryByText(/Chat open in OpenChamber/)).toBeNull();
+});
+
 test('a batch in triage shows at the top of Needs you before its ticket exists', async () => {
   const state = uiState();
   state.triaging = [{ id: 20, title: 'Fresh request', source: 'teamsrelay', account: 'me@example.invalid', created_at: '2026-11-06T05:58:00.000000Z', job: 'running',
