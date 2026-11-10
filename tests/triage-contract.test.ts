@@ -151,8 +151,9 @@ test.each(['active', 'closed'])('current %s rule route skips the model and prese
   using db = openDb(cfg.db.path);
   const owner = ticket(db, { proposal: 'Kept proposal' });
   const job = batchJob(db, cfg, owner);
+  // Closed the next day: same-day input no chat turn carried would reopen the chat instead
   db.prepare('UPDATE ticket SET lifecycle=?,approved_at=?,session_id=?,closed_at=? WHERE id=?')
-    .run(state === 'active' ? 'active' : 'done', AT, 'existing-session', state === 'closed' ? '2026-11-06T00:00:01Z' : null, owner);
+    .run(state === 'active' ? 'active' : 'done', AT, 'existing-session', state === 'closed' ? '2026-11-07T00:00:01Z' : null, owner);
   await using peer = await scriptedPeer(() => ({ body: text() }));
   await handle(cfg, db, job, { providers: { first: provider(peer.baseURL) } });
   expect(peer.requests).toHaveLength(0);
@@ -431,7 +432,7 @@ test.each(['active', 'closed', 'moved-active'])('invalid repair superseded by %s
         db.prepare("UPDATE ticket_conversation SET kind='context' WHERE ticket=?").run(owner);
         db.prepare('INSERT INTO ticket_conversation(ticket,conversation,kind,"by",created_at) VALUES (?,1,\'linked\',\'you\',?)').run(target, AT);
       } else db.prepare('UPDATE ticket SET lifecycle=?,approved_at=?,session_id=?,closed_at=? WHERE id=?')
-        .run(state === 'closed' ? 'done' : 'active', AT, 'synthetic-approved-session', state === 'closed' ? '2026-11-06T00:00:01.000000Z' : null, owner);
+        .run(state === 'closed' ? 'done' : 'active', AT, 'synthetic-approved-session', state === 'closed' ? '2026-11-07T00:00:01.000000Z' : null, owner);
     }
     return { body: text(index ? 'invalid repaired decision' : 'invalid initial decision') };
   });
