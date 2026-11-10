@@ -75,6 +75,7 @@ test('a proposed ticket keeps all four actions inside the card, with Chat as an 
   const make = screen.getByRole('button', { name: 'Make ticket from batch #10' });
   expect(make.parentElement!.className).toContain('@container');
   expect(within(make).getByText('Make ticket').className).toMatch(/\bhidden\b.*@\[13rem\]:inline/);
+  expect(within(make).getByText('Ticket').className).toMatch(/\bhidden\b.*@\[10\.5rem\]:inline.*@\[13rem\]:hidden/);
   expect(within(ticket()).getByRole('button', { name: 'Timeline' }).parentElement!.className).toContain('flex-wrap');
 });
 
