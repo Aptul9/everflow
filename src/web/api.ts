@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { approve } from '../dispatcher/approval.ts';
 import { transaction } from '../dispatcher/db.ts';
 import { retry } from '../dispatcher/jobs.ts';
-import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, muteBatch, muteTicket, pauseClient, TicketError } from '../dispatcher/tickets.ts';
+import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, muteBatch, muteTicket, pauseInput, TicketError } from '../dispatcher/tickets.ts';
 import { HttpError, instance, withDatabase } from './instance.ts';
 import type { WebInstance } from './instance.ts';
 import { readState, representation, ticketDetail } from './state.ts';
@@ -95,17 +95,15 @@ export function ticketGet(request: Request, id: string): Response {
   } catch (error) { return errorResponse(error); }
 }
 
-const pauseBody = z.strictObject({ paused: z.boolean() });
+const pauseBody = z.strictObject({ source: z.string().min(1).max(64), account: z.string().min(1).max(320), paused: z.boolean() });
 
-// Switches a configured client off (its new input waits) or back on
-export async function clientPost(request: Request, name: string): Promise<Response> {
+// Pauses a source account (its new input waits before triage and chat forwards) or switches it back on
+export async function inputPost(request: Request): Promise<Response> {
   try {
     const current = instance();
     guardPost(request.headers, current);
-    const input = await body(request, pauseBody) as { paused: boolean };
-    const client = decodeURIComponent(name);
-    if (!Object.hasOwn(current.config.clients, client)) throw new HttpError(404, 'client.not-found', `Client ${client} is not configured`);
-    const result = withDatabase(true, (db) => ({ client: pauseClient(db, current.config, client, input.paused), paused: input.paused }));
+    const input = await body(request, pauseBody) as { source: string; account: string; paused: boolean };
+    const result = withDatabase(true, (db) => ({ input: pauseInput(db, input.source, input.account, input.paused), paused: input.paused }));
     return Response.json(result, { headers: { 'cache-control': 'no-store' } });
   } catch (error) { return errorResponse(error); }
 }

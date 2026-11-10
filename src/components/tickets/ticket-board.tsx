@@ -95,7 +95,7 @@ function TriageCard(props: { batch: TriageBatch; now: number }) {
           {parked ? <TriangleAlert aria-hidden="true" className="size-3.5 shrink-0" /> : batch.held ? <CirclePause aria-hidden="true" className="size-3.5 shrink-0" />
             : <LoaderCircle aria-hidden="true" className={cn('size-3.5 shrink-0', batch.job === 'running' && 'animate-spin')} />}
           {batch.job === 'running' ? `Triage running${batch.clients.length ? ` for ${batch.clients.join(', ')}` : ''}` : parked ? 'Triage failed, see Problems'
-            : batch.held ? `Held: ${batch.clients.join(', ')} off` : 'Waiting for triage'}
+            : batch.held ? `Held: ${batch.account} paused` : 'Waiting for triage'}
         </span>
         <span className="ml-auto inline-flex shrink-0 items-center gap-0.5 text-muted-foreground"><Clock aria-hidden="true" className="size-3" />
           <time dateTime={batch.created_at} title={formatTime(batch.created_at)} className="tabular-nums">{age(props.now, batch.created_at)}</time></span>

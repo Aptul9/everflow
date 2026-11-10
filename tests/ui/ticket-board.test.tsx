@@ -246,25 +246,33 @@ test('a ticket whose chat is running says so on the card', () => {
   expect(within(card).queryByText(/Chat open in OpenChamber/)).toBeNull();
 });
 
-test('the diagram switches a client off and on, shows what waits for it and which agents run for whom', async () => {
+test('each live source account row has a pause switch; paused rows say what waits; agents show their client', async () => {
   const state = uiState();
-  state.clients = [{ name: 'bip', paused: false, waiting: 0 }, { name: 'npo', paused: true, waiting: 2 }];
+  const at = '2026-11-06T06:00:00.000000Z';
+  state.health.push(
+    { dependency: 'teamsrelay', scope: 'source', state: 'ok', since: at, last_ok: at, last_error: null },
+    { dependency: 'teamsrelay:me@bip.invalid', scope: 'account', state: 'ok', since: at, last_ok: at, last_error: null, paused: false, waiting: 0, clients: ['bip'] },
+    { dependency: 'teamsrelay:me@npo.invalid', scope: 'account', state: 'ok', since: at, last_ok: at, last_error: null, paused: true, waiting: 2, clients: ['npo'] },
+    { dependency: 'teamsrelay:off@npo.invalid', scope: 'account', state: 'disabled', since: null, last_ok: null, last_error: null, paused: false, waiting: 0, clients: [] },
+  );
   state.agents = [{ kind: 'triage', clients: ['bip'], title: 'Fresh request', ticket: null }, { kind: 'chat', clients: ['npo'], title: 'AKS check', ticket: 6 }];
-  state.triaging = [{ id: 21, title: 'Noisy chat', source: 'teamsrelay', account: 'me@example.invalid', created_at: '2026-11-06T05:58:00.000000Z', job: null,
+  state.triaging = [{ id: 21, title: 'Noisy chat', source: 'teamsrelay', account: 'me@npo.invalid', created_at: '2026-11-06T05:58:00.000000Z', job: null,
     clients: ['npo'], held: true, messages: [] }];
   board(state);
   const health = screen.getByRole('region', { name: 'Health' });
   expect(health.querySelector('[data-node="triage"]')!.textContent).toContain('bipFresh request');
   expect(health.querySelector('[data-node="openchamber"]')!.textContent).toContain('npo#6 AKS check');
-  const npo = within(health).getByRole('button', { name: /npo/ });
-  expect(npo.getAttribute('aria-pressed')).toBe('false');
-  expect(npo.textContent).toContain('2');
-  await userEvent.click(within(health).getByRole('button', { name: /bip/ }));
+  const switches = within(health).getAllByRole('switch');
+  expect(switches.map((item) => item.getAttribute('aria-label'))).toEqual(['Triage me@bip.invalid', 'Triage me@npo.invalid']);
+  expect(switches.map((item) => item.getAttribute('aria-checked'))).toEqual(['true', 'false']);
+  expect(health.textContent).toContain('paused, 2 waiting');
+  expect(screen.queryByText('Clients')).toBeNull();
+  await userEvent.click(switches[0]!);
   const [path, init] = fetcher.mock.calls.find(([, init]) => init?.method === 'POST')!;
-  expect(path).toBe('/api/client/bip');
-  expect(JSON.parse(String(init!.body))).toEqual({ paused: true });
+  expect(path).toBe('/api/input');
+  expect(JSON.parse(String(init!.body))).toEqual({ source: 'teamsrelay', account: 'me@bip.invalid', paused: true });
   const card = screen.getByRole('heading', { name: 'Batch #21: Noisy chat' }).closest<HTMLElement>('[data-triage-batch]')!;
-  expect(within(card).getByRole('status').textContent).toBe('Held: npo off');
+  expect(within(card).getByRole('status').textContent).toBe('Held: me@npo.invalid paused');
 });
 
 test('a batch in triage shows at the top of Needs you before its ticket exists', async () => {

@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../dispatcher/config.ts';
-import { sourceAccounts, sourceEnabled } from '../dispatcher/policy.ts';
-import { batchClients, batchMessages, batchPaused, detail, feedback, MUTE_FOREVER, pausedClients } from '../dispatcher/tickets.ts';
+import { clientsFor, sourceAccounts, sourceEnabled } from '../dispatcher/policy.ts';
+import { batchClients, batchMessages, batchPaused, detail, feedback, MUTE_FOREVER, pausedInputs } from '../dispatcher/tickets.ts';
 import type { Message } from '../dispatcher/tickets.ts';
 import { calendarDay, utc } from '../dispatcher/time.ts';
 import type { Health, OverviewState, Reference, SkippedBatch, SourceMessage, TicketCard, TicketDetail, TriageBatch } from '../lib/web-types.ts';
@@ -53,8 +53,12 @@ function health(db: DatabaseSync, cfg: Config): Health[] {
   for (const source of sources) {
     if (!sourceEnabled(cfg, source)) result.set(source, { ...result.get(source)!, state: 'disabled' });
   }
+  const paused = pausedInputs(db);
+  const waiting = new Map(db.prepare(`SELECT c.source||':'||lower(c.account) AS input,COUNT(*) AS n FROM batch b JOIN conversation c ON c.id=b.conversation
+    WHERE b.state='pending' AND b.outcome IN ('pending','triage','routed') GROUP BY input`).all().map((row) => [String(row.input), Number(row.n)]));
   for (const account of db.prepare(`SELECT source,account FROM conversation UNION SELECT source,account FROM cursor WHERE account<>'*' ORDER BY source,account`).all()) {
     const dependency = `${account.source}:${account.account}`;
+    const key = `${account.source}:${String(account.account).toLowerCase()}`;
     const checkpoint = db.prepare('SELECT since FROM cursor WHERE source=? AND account=?').get(account.source!, account.account!);
     const row = result.get(dependency);
     const source = result.get(String(account.source));
@@ -63,7 +67,8 @@ function health(db: DatabaseSync, cfg: Config): Health[] {
     result.set(dependency, { ...(row ?? { dependency, scope: 'account', state: 'unknown', since: null, last_ok: null, last_error: null }),
       ...(off ? { state: 'disabled' as const } : {}),
       ...(source?.coverage ? { coverage: source.coverage } : {}),
-      checkpoint: checkpoint ? String(checkpoint.since) : null });
+      checkpoint: checkpoint ? String(checkpoint.since) : null,
+      paused: paused.has(key), waiting: paused.has(key) ? waiting.get(key) ?? 0 : 0, clients: clientsFor(cfg, String(account.account), []) });
   }
   if (!cfg.tickets.enabled) result.set('tickets', { dependency: 'tickets', scope: 'jobs', state: 'disabled', since: null, last_ok: null, last_error: null });
   return [...result.values()].sort((a, b) => a.dependency.localeCompare(b.dependency));
@@ -94,18 +99,15 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
     outcome: row.outcome as SkippedBatch['outcome'], created_at: String(row.created_at), reason: row.reason as string | null,
     messages: batchMessages(db, Number(row.id)).reverse().map(message),
   }));
-  const paused = pausedClients(db);
+  const paused = pausedInputs(db);
   const triaging = db.prepare(`SELECT b.id,c.title,c.source,c.account,b.created_at,
     (SELECT j.state FROM job j WHERE j.kind='triage' AND json_extract(j.payload,'$.batch')=b.id AND j.state IN ('queued','running','parked') ORDER BY j.id DESC LIMIT 1) AS job
     FROM batch b JOIN conversation c ON c.id=b.conversation
     WHERE b.state='pending' AND b.ticket IS NULL AND b.outcome IN ('pending','triage') ORDER BY b.created_at DESC,b.id DESC`).all().map((row) => ({
     id: Number(row.id), title: row.title as string | null, source: String(row.source), account: String(row.account), created_at: String(row.created_at),
-    job: row.job as TriageBatch['job'], clients: batchClients(db, cfg, Number(row.id)), held: !row.job && batchPaused(db, cfg, Number(row.id), paused),
+    job: row.job as TriageBatch['job'], clients: batchClients(db, cfg, Number(row.id)), held: !row.job && batchPaused(db, Number(row.id), paused),
     messages: batchMessages(db, Number(row.id)).reverse().map(message),
   }));
-  const waiting = db.prepare("SELECT id FROM batch WHERE state='pending' AND outcome IN ('pending','triage','routed')").all().map((row) => Number(row.id))
-    .filter((id) => batchPaused(db, cfg, id, paused)).flatMap((id) => batchClients(db, cfg, id));
-  const clients = Object.keys(cfg.clients).sort().map((name) => ({ name, paused: paused.has(name), waiting: waiting.filter((client) => client === name).length }));
   const agents: OverviewState['agents'] = [
     ...triaging.filter((batch) => batch.job === 'running').map((batch) => ({ kind: 'triage' as const, clients: batch.clients, title: batch.title, ticket: null })),
     ...tickets.filter((ticket) => ticket.chat_running && ticket.lifecycle === 'active').map((ticket) => ({ kind: 'chat' as const,
@@ -126,7 +128,7 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
     AND NOT EXISTS (SELECT 1 FROM triage_log v WHERE v.batch=t.batch AND v.id>t.id AND v.action IN ('new','update','skip')) ORDER BY at DESC,id DESC`).all()
     .map((row) => ({ id: Number(row.id), batch: row.batch === null ? null : Number(row.batch), at: String(row.at),
       raw: row.raw as string | null, parse_error: row.reason as string | null }));
-  return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped, triaging, clients, agents, chat_project: basename(cfg.opencode.directory || ''), muted,
+  return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped, triaging, agents, chat_project: basename(cfg.opencode.directory || ''), muted,
     health: health(db, cfg), problems: { jobs, quarantine, triage }, feedback: feedback(db) };
 }
 

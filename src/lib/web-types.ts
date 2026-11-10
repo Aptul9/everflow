@@ -60,6 +60,10 @@ export interface Health {
   checkpoint?: string | null;
   coverage?: 'recent-topics' | 'saved-history-replay';
   observed_at?: string;
+  // Account rows: paused on the page, batches held while paused, configured clients the account belongs to
+  paused?: boolean;
+  waiting?: number;
+  clients?: string[];
 }
 
 export interface ParkedJob {
@@ -91,17 +95,10 @@ export interface TriageBatch {
   account: string;
   created_at: string;
   job: 'queued' | 'running' | 'parked' | null;
-  // Configured clients the batch belongs to; held while all of them are switched off
+  // Configured clients the batch belongs to; held while its account is paused
   clients: string[];
   held: boolean;
   messages: SourceMessage[];
-}
-
-export interface ClientSwitch {
-  name: string;
-  paused: boolean;
-  // Batches waiting for this client to be switched back on
-  waiting: number;
 }
 
 // An agent running right now: a triage call or a ticket chat turn
@@ -128,7 +125,6 @@ export interface OverviewState {
   groups: Record<Group, TicketCard[]>;
   skipped: SkippedBatch[];
   triaging: TriageBatch[];
-  clients: ClientSwitch[];
   agents: Agent[];
   // Folder name of the OpenChamber project that holds ticket chats
   chat_project: string;

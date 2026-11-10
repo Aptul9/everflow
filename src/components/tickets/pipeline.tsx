@@ -1,6 +1,6 @@
 'use client';
 
-import { Bot, ChevronDown, CircleCheck, CirclePause, Cpu, Inbox, LoaderCircle, Power, RotateCw, Ticket, TriangleAlert, Users, Workflow } from 'lucide-react';
+import { Bot, ChevronDown, CircleCheck, CirclePause, Cpu, Inbox, LoaderCircle, RotateCw, Ticket, TriangleAlert, Workflow } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { groups } from '../../lib/web-types.ts';
 import type { Agent, Health, OverviewState } from '../../lib/web-types.ts';
@@ -10,7 +10,7 @@ import { Time } from './ticket-card.tsx';
 
 type State = Health['state'];
 type Post = (key: string, path: string) => Promise<unknown>;
-type ClientPost = (key: string, path: string, input: { paused: boolean }) => Promise<unknown>;
+type PausePost = (key: string, path: string, input: { source: string; account: string; paused: boolean }) => Promise<unknown>;
 
 const rank: Record<State, number> = { failing: 5, stopped: 4, retrying: 3, unknown: 2, disabled: 1, ok: 0 };
 const dot: Record<State, string> = {
@@ -31,16 +31,34 @@ function Dot({ state, className }: { state: State; className?: string }) {
   return <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', dot[state], state === 'retrying' && 'animate-pulse', className)} />;
 }
 
-function Row({ name, item }: { name: string; item: Health }) {
+// Pausing an account holds its new messages before triage and chat forwards until it is switched back on
+function Switch(props: { on: boolean; label: string; disabled: boolean; onChange: () => void }) {
+  return <button type="button" role="switch" aria-checked={props.on} aria-label={props.label} disabled={props.disabled} onClick={props.onChange}
+    title={props.on ? 'On: new messages go to triage. Click to pause.' : 'Paused: new messages wait here. Click to resume.'}
+    className="-my-1 shrink-0 rounded-full p-1 outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">
+    <span aria-hidden="true" className={cn('flex h-4 w-7 items-center rounded-full p-0.5 transition-colors', props.on ? 'bg-success' : 'bg-input')}>
+      <span className={cn('size-3 rounded-full bg-white shadow-xs transition-transform', props.on && 'translate-x-3')} />
+    </span>
+  </button>;
+}
+
+function Row({ name, item, toggle }: { name: string; item: Health; toggle?: { disabled: boolean; onChange: () => void; error?: string | undefined } }) {
   const hint = [item.since && item.state !== 'ok' ? `Since ${item.since}` : '', item.last_ok ? `Last ok ${item.last_ok}` : '', item.checkpoint ? `Checkpoint ${item.checkpoint}` : ''].filter(Boolean).join('\n');
+  const paused = item.paused === true;
   return <li className="min-w-0 py-1" title={hint || undefined}>
     <div className="flex min-w-0 items-center gap-2 text-xs">
-      <Dot state={item.state} />
-      <span className="min-w-0 truncate">{name}</span>
-      <span className="ml-auto shrink-0 text-muted-foreground">{label(item.state)}</span>
+      <Dot state={paused ? 'disabled' : item.state} />
+      <span className={cn('min-w-0 truncate', paused && 'text-muted-foreground')}>{name}</span>
+      <span className={cn('ml-auto shrink-0', paused ? 'font-medium text-warning' : 'text-muted-foreground')}>
+        {paused ? `paused${item.waiting ? `, ${item.waiting} waiting` : ''}` : label(item.state)}</span>
+      {toggle && <Switch on={!paused} label={`Triage ${name}`} disabled={toggle.disabled} onChange={toggle.onChange} />}
     </div>
     {item.last_error && <p className="mt-0.5 line-clamp-2 pl-4 text-[11px] leading-snug text-destructive">{item.last_error}</p>}
-    {item.checkpoint && <p className="pl-4 text-[11px] text-muted-foreground">{item.coverage === 'recent-topics' ? 'Latest stored' : 'Checkpoint'} <Time value={item.checkpoint} /></p>}
+    {(item.checkpoint || item.clients?.length) && <p className="pl-4 text-[11px] text-muted-foreground">
+      {item.clients?.length ? <span className="font-medium text-foreground/70">{item.clients.join(', ')}</span> : null}
+      {item.clients?.length && item.checkpoint ? ' · ' : null}
+      {item.checkpoint && <>{item.coverage === 'recent-topics' ? 'Latest stored' : 'Checkpoint'} <Time value={item.checkpoint} /></>}</p>}
+    {toggle?.error && <p role="alert" className="pl-4 text-[11px] text-destructive">{toggle.error}</p>}
   </li>;
 }
 
@@ -82,39 +100,8 @@ function Agents({ agents, kind }: { agents: Agent[]; kind: Agent['kind'] }) {
   </ul>;
 }
 
-// Switching a client off holds its new input before triage and chat forwards until it is back on
-function Clients(props: { state: OverviewState; expired: boolean; pending: ReadonlySet<string>; errors: Record<string, string>; post: ClientPost }) {
-  const { clients } = props.state;
-  if (!clients.length) return null;
-  const failed = clients.map((client) => props.errors[`client:${client.name}`]).find(Boolean);
-  return <div className="mt-4 border-t pt-3">
-    <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
-      <Users aria-hidden="true" className="size-3.5 text-muted-foreground" />
-      <h3 className="text-xs font-semibold">Clients</h3>
-      <p className="text-[11px] text-muted-foreground">Switch a noisy client off: its new messages wait, untriaged, until it is back on.</p>
-    </div>
-    <ul className="flex flex-wrap gap-1.5">
-      {clients.map((client) => {
-        const key = `client:${client.name}`;
-        return <li key={client.name}>
-          <button type="button" aria-pressed={!client.paused} disabled={props.expired || props.pending.has(key) || !props.state.tickets_enabled}
-            title={client.paused ? `Off since switched; ${client.waiting} waiting. Click to switch on.` : 'On. Click to switch off.'}
-            onClick={() => { void props.post(key, `/api/client/${encodeURIComponent(client.name)}`, { paused: !client.paused }).catch(() => {}); }}
-            className={cn('inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs font-medium transition-colors disabled:opacity-50',
-              client.paused ? 'border-dashed bg-muted text-muted-foreground line-through decoration-muted-foreground/60' : 'bg-card hover:bg-muted')}>
-            <Power aria-hidden="true" className={cn('size-3', client.paused ? 'text-muted-foreground' : 'text-success')} />
-            {client.name}
-            {client.waiting > 0 && <span className="rounded-full bg-warning px-1.5 text-[10px] font-semibold text-white no-underline tabular-nums">{client.waiting}</span>}
-          </button>
-        </li>;
-      })}
-    </ul>
-    {failed && <p role="alert" className="mt-1.5 text-xs text-destructive">{failed}</p>}
-  </div>;
-}
-
 export function Pipeline({ state, expired = false, pending = new Set(), errors = {}, post = async () => ({}) }: { state: OverviewState; expired?: boolean;
-  pending?: ReadonlySet<string>; errors?: Record<string, string>; post?: ClientPost }) {
+  pending?: ReadonlySet<string>; errors?: Record<string, string>; post?: PausePost }) {
   const box = useRef<HTMLDivElement>(null);
   // null until toggled: the diagram then follows health, folded while everything works
   const [open, setOpen] = useState<boolean | null>(null);
@@ -156,7 +143,13 @@ export function Pipeline({ state, expired = false, pending = new Set(), errors =
   const problems = jobs.length + quarantine.length + triage.length;
   const healthy = problems === 0 && summary.every(([, value]) => rank[value] < rank.retrying);
   const shown = open ?? !healthy;
-  const off = state.clients.filter((client) => client.paused);
+  const paused = accounts.filter((item) => item.paused);
+  const toggle = (source: string, item: Health) => {
+    const account = item.dependency.slice(source.length + 1);
+    const key = `input:${item.dependency}`;
+    return { disabled: expired || pending.has(key) || !state.tickets_enabled, error: errors[key],
+      onChange: () => { void post(key, '/api/input', { source, account, paused: !item.paused }).catch(() => {}); } };
+  };
 
   useEffect(() => {
     const root = box.current;
@@ -202,7 +195,8 @@ export function Pipeline({ state, expired = false, pending = new Set(), errors =
           {state.agents.map((agent, index) => <li key={`agent-${index}`} className="inline-flex items-center gap-1.5 font-medium text-primary" title={agent.title ?? undefined}>
             <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" />{agent.kind === 'triage' ? 'Triage' : `Chat #${agent.ticket}`} for {agent.clients.length ? agent.clients.join(', ') : 'no client'}
           </li>)}
-          {off.length > 0 && <li className="inline-flex items-center gap-1.5"><CirclePause aria-hidden="true" className="size-3.5" />Clients off: {off.map((client) => client.name).join(', ')}</li>}
+          {paused.length > 0 && <li className="inline-flex items-center gap-1.5 font-medium text-warning"><CirclePause aria-hidden="true" className="size-3.5" />
+            Paused: {paused.map((item) => `${item.clients?.length ? item.clients.join(', ') : item.dependency.split(':').slice(1).join(':')}${item.waiting ? ` (${item.waiting} waiting)` : ''}`).join(', ')}</li>}
         </ul>}
       <Button type="button" variant="ghost" size="sm" className="ml-auto h-8 text-muted-foreground" aria-expanded={shown} aria-controls={shown ? 'pipeline-diagram' : undefined} onClick={() => setOpen(!shown)}>
         {shown ? 'Hide' : 'Show'}<ChevronDown aria-hidden="true" className={cn('transition-transform', shown && 'rotate-180')} />
@@ -225,7 +219,7 @@ export function Pipeline({ state, expired = false, pending = new Set(), errors =
             {input.source?.coverage === 'recent-topics' && <p className="mt-1.5 text-[11px] text-warning">Recent topics only{input.source.observed_at && <>. Observed <Time value={input.source.observed_at} /></>}</p>}
             {(input.source?.last_error || input.accounts.length > 0) && <ul className="mt-1.5 divide-y divide-border/60">
               {input.source?.last_error && <li className="py-1"><p className="line-clamp-2 text-[11px] leading-snug text-destructive">{input.source.last_error}</p></li>}
-              {input.live.map((item) => <Row key={item.dependency} name={item.dependency.slice(input.name.length + 1)} item={item} />)}
+              {input.live.map((item) => <Row key={item.dependency} name={item.dependency.slice(input.name.length + 1)} item={item} toggle={toggle(input.name, item)} />)}
               {input.off.length > 0 && <li className="py-1"><details className="group">
                 <summary className="inline-flex cursor-pointer items-center gap-1 rounded text-xs text-muted-foreground hover:text-foreground">{input.off.length} account{input.off.length === 1 ? '' : 's'} off<ChevronDown aria-hidden="true" className="size-3.5 transition-transform group-open:rotate-180" /></summary>
                 <ul className="mt-1 divide-y divide-border/60">{input.off.map((item) => <Row key={item.dependency} name={item.dependency.slice(input.name.length + 1)} item={item} />)}</ul>
@@ -285,7 +279,6 @@ export function Pipeline({ state, expired = false, pending = new Set(), errors =
         </Node>
       </Stage>
     </div>}
-    {shown && <Clients state={state} expired={expired} pending={pending} errors={errors} post={post} />}
   </section>;
 }
 

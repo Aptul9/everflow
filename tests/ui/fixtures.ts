@@ -27,7 +27,6 @@ export function uiState(): OverviewState {
       { id: 12, title: 'Answered source', outcome: 'answered', source: 'teams', account: 'test@example.invalid', created_at: AT, reason: null, messages: [] },
     ],
     triaging: [],
-    clients: [],
     agents: [],
     chat_project: 'Vault',
     muted: [],

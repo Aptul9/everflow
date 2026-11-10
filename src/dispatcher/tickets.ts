@@ -184,24 +184,27 @@ export function batchClients(db: DatabaseSync, cfg: Pick<Config, 'clients'>, bat
   return clientsFor(cfg, row.account, addresses);
 }
 
-export function pausedClients(db: DatabaseSync): Set<string> {
-  return new Set(db.prepare('SELECT client FROM client_pause').all().map((row) => String(row.client)));
+// Keys `source:account`, account lower-case
+export function pausedInputs(db: DatabaseSync): Set<string> {
+  return new Set(db.prepare('SELECT source,account FROM input_pause').all().map((row) => `${row.source}:${row.account}`));
 }
 
-// A batch waits only when every client it belongs to is switched off; a batch of no known client never waits.
-export function batchPaused(db: DatabaseSync, cfg: Pick<Config, 'clients'>, batch: number, paused = pausedClients(db)): boolean {
+export function batchPaused(db: DatabaseSync, batch: number, paused = pausedInputs(db)): boolean {
   if (!paused.size) return false;
-  const clients = batchClients(db, cfg, batch);
-  return clients.length > 0 && clients.every((client) => paused.has(client));
+  const row = getBatch(db, batch);
+  return paused.has(`${row.source}:${row.account.toLowerCase()}`);
 }
 
-export function pauseClient(db: DatabaseSync, cfg: Pick<Config, 'clients'>, client: string, paused: boolean, at?: string): string {
-  if (!Object.hasOwn(cfg.clients, client)) throw new TicketError('ticket.invalid-input', `Unknown configured client ${client}`);
+export function pauseInput(db: DatabaseSync, source: string, account: string, paused: boolean, at?: string): string {
+  const key = account.trim().toLowerCase();
+  const known = db.prepare(`SELECT 1 FROM conversation WHERE source=? AND lower(account)=? UNION SELECT 1 FROM cursor WHERE source=? AND lower(account)=?`)
+    .get(source, key, source, key);
+  if (!known) throw new TicketError('ticket.invalid-input', `Unknown account ${account} of source ${source}`);
   transaction(db, () => {
-    if (paused) db.prepare('INSERT INTO client_pause(client,paused_at) VALUES (?,?) ON CONFLICT(client) DO NOTHING').run(client, utc(at));
-    else db.prepare('DELETE FROM client_pause WHERE client=?').run(client);
+    if (paused) db.prepare('INSERT INTO input_pause(source,account,paused_at) VALUES (?,?,?) ON CONFLICT(source,account) DO NOTHING').run(source, key, utc(at));
+    else db.prepare('DELETE FROM input_pause WHERE source=? AND account=?').run(source, key);
   });
-  return client;
+  return `${source}:${key}`;
 }
 
 function refMatches(db: DatabaseSync, refs: readonly TicketRef[]): number[] {

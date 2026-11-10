@@ -5,7 +5,7 @@ import { loadConfig } from '../src/dispatcher/config.ts';
 import { openDb } from '../src/dispatcher/db.ts';
 import { ingest, schedule, sourceStart } from '../src/dispatcher/ingest.ts';
 import { createSourceReader, validateRuntimeConfig } from '../src/dispatcher/runtime.ts';
-import { dismiss, makeTicket, mute, MUTE_FOREVER, muteTicket, pauseClient, TicketError } from '../src/dispatcher/tickets.ts';
+import { dismiss, makeTicket, mute, MUTE_FOREVER, muteTicket, pauseInput, TicketError } from '../src/dispatcher/tickets.ts';
 import { actionPost } from '../src/web/api.ts';
 import { initialize, release } from '../src/web/instance.ts';
 import { readState } from '../src/web/state.ts';
@@ -198,21 +198,26 @@ test('a chat muted at the source skips triage unless a message mentions the owne
   expect(() => ingest(db, { source: 'teams', account: 'me@example.invalid', muted: [''] })).toThrow();
 });
 
-test('a switched-off client holds its new input before triage and releases it when switched back on', () => {
-  const f = instance('[clients.acme]\naccounts = ["me@example.invalid"]\n[clients.other]\ndomains = ["other.invalid"]\n');
+test('a paused source account holds its new input before triage and releases it when switched back on', () => {
+  const f = instance('[sources.teams]\nenabled = true\n[clients.acme]\naccounts = ["me@example.invalid"]\n');
   using db = openDb(f.path);
-  expect(() => pauseClient(db, f.cfg, 'unknown', true)).toThrow(TicketError);
-  pauseClient(db, f.cfg, 'acme', true, AT);
-  pauseClient(db, f.cfg, 'acme', true, later(1));
-  ingest(db, message('me@example.invalid', 'held-1'));
-  expect(schedule(db, f.cfg, later(10))).toEqual([]);
-  expect(db.prepare('SELECT state,outcome FROM batch').get()).toMatchObject({ state: 'pending', outcome: 'pending' });
-  const held = readState(db, f.cfg, new Date(later(11)));
+  ingest(db, message('me@example.invalid', 'seen'));
+  schedule(db, f.cfg, later(10));
+  db.prepare("UPDATE batch SET state='done',outcome='not_on_us'").run();
+  db.prepare("UPDATE job SET state='done' WHERE kind='triage'").run();
+  expect(() => pauseInput(db, 'teams', 'stranger@example.invalid', true)).toThrow(TicketError);
+  expect(pauseInput(db, 'teams', ' Me@Example.invalid ', true, AT)).toBe('teams:me@example.invalid');
+  pauseInput(db, 'teams', 'me@example.invalid', true, later(1));
+  ingest(db, message('me@example.invalid', 'held-1', { sent_at: later(20) }));
+  expect(schedule(db, f.cfg, later(30))).toEqual([]);
+  expect(db.prepare('SELECT state,outcome FROM batch ORDER BY id DESC').get()).toMatchObject({ state: 'pending', outcome: 'pending' });
+  const held = readState(db, f.cfg, new Date(later(31)));
   expect(held.triaging).toMatchObject([{ clients: ['acme'], held: true, job: null }]);
-  expect(held.clients).toEqual([{ name: 'acme', paused: true, waiting: 1 }, { name: 'other', paused: false, waiting: 0 }]);
-  pauseClient(db, f.cfg, 'acme', false);
-  expect(schedule(db, f.cfg, later(12))).toHaveLength(1);
-  expect(readState(db, f.cfg, new Date(later(13))).triaging).toMatchObject([{ held: false, job: 'queued' }]);
+  expect(held.health.find((item) => item.dependency === 'teams:me@example.invalid')).toMatchObject({ paused: true, waiting: 1, clients: ['acme'] });
+  pauseInput(db, 'teams', 'me@example.invalid', false);
+  expect(schedule(db, f.cfg, later(32))).toHaveLength(1);
+  expect(readState(db, f.cfg, new Date(later(33))).triaging).toMatchObject([{ held: false, job: 'queued' }]);
+  expect(readState(db, f.cfg, new Date(later(33))).health.find((item) => item.dependency === 'teams:me@example.invalid')).toMatchObject({ paused: false, waiting: 0 });
 });
 
 test('a muted chat that feeds a running ticket chat still forwards every follow-up to that chat', () => {
