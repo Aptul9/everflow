@@ -231,11 +231,14 @@ export function schedule(db: DatabaseSync, cfg: Config, at?: string): number[] {
       // Muted in the source app: only an @mention of the owner reaches triage
       const sourceMuted = db.prepare(`SELECT 1 FROM source_mute s JOIN conversation c ON s.source=c.source AND s.account=lower(c.account) AND s.native_id=c.native_id
         WHERE c.id=?`).get(conversation.id!) !== undefined && !pending.some((message) => message.mention === 1);
-      const muted = !own && (typeof until === 'string' && utc(until) > now || sourceMuted);
+      // A follow-up in a chat that feeds a running ticket chat always reaches that chat, muted or not
+      const working = db.prepare(`SELECT 1 FROM ticket_conversation l JOIN ticket t ON t.id=l.ticket WHERE l.conversation=? AND l.kind IN ('primary','linked')
+        AND t.lifecycle='active' AND t.approved_at IS NOT NULL AND t.merged_into IS NULL`).get(conversation.id!) !== undefined;
+      const muted = !own && !working && (typeof until === 'string' && utc(until) > now || sourceMuted);
       // A chat muted in the source app stays off the board too; its messages remain as context for a later mention
       const id = Number(db.prepare('INSERT INTO batch(conversation,state,created_at,done_at,outcome,cleared_at) VALUES (?,?,?,?,?,?)')
         .run(conversation.id!, own || muted ? 'done' : 'pending', now, own || muted ? now : null, own ? 'answered' : muted ? 'muted' : 'pending',
-          !own && sourceMuted ? now : null).lastInsertRowid);
+          muted && sourceMuted ? now : null).lastInsertRowid);
       db.prepare('UPDATE message SET batch=? WHERE conversation=? AND batch IS NULL').run(id, conversation.id!);
       if (own) {
         const linked = db.prepare("SELECT ticket FROM ticket_conversation WHERE conversation=? AND kind IN ('primary','linked')").get(conversation.id!);

@@ -198,6 +198,30 @@ test('a chat muted at the source skips triage unless a message mentions the owne
   expect(() => ingest(db, { source: 'teams', account: 'me@example.invalid', muted: [''] })).toThrow();
 });
 
+test('a muted chat that feeds a running ticket chat still forwards every follow-up to that chat', () => {
+  const f = instance('[chats]\nenabled = true\n');
+  using db = openDb(f.path);
+  const chat = 'chat-me@example.invalid';
+  ingest(db, { source: 'teams', account: 'me@example.invalid', muted: [chat] });
+  ingest(db, message('me@example.invalid', 'first'));
+  schedule(db, f.cfg, later(10));
+  const conversation = Number(db.prepare('SELECT id FROM conversation').get()!.id);
+  const ticket = Number(db.prepare(`INSERT INTO ticket(title,summary,ask,proposal,kb_notes,created_at,last_activity_at,lifecycle,approved_at,session_id)
+    VALUES ('Running','s','a','p','[]',?,?,'active',?,'ses_running')`).run(AT, AT, AT).lastInsertRowid);
+  db.prepare("INSERT INTO ticket_conversation(ticket,conversation,kind,\"by\",created_at) VALUES (?,?,'primary','agent',?)").run(ticket, conversation, AT);
+  ingest(db, message('me@example.invalid', 'follow-up', { sent_at: later(20) }));
+  expect(schedule(db, f.cfg, later(30))).toHaveLength(1);
+  const batch = db.prepare('SELECT id,ticket,outcome,cleared_at FROM batch ORDER BY id DESC').get()!;
+  expect({ ...batch }).toMatchObject({ ticket, outcome: 'forward', cleared_at: null });
+  const job = db.prepare("SELECT ticket,payload FROM job WHERE kind='forward'").get()!;
+  expect(job.ticket).toBe(ticket);
+  expect(JSON.parse(String(job.payload)).batch_ids).toEqual([batch.id]);
+  db.prepare("UPDATE ticket SET lifecycle='done',closed_at=? WHERE id=?").run(later(40), ticket);
+  ingest(db, message('me@example.invalid', 'after-done', { sent_at: later(50) }));
+  schedule(db, f.cfg, later(60));
+  expect(db.prepare('SELECT outcome FROM batch ORDER BY id DESC').get()!.outcome).toBe('muted');
+});
+
 test('a muted chat stays out of triage until the mute ends, and own-only batches stay answered', () => {
   const f = instance();
   using db = openDb(f.path);
