@@ -102,6 +102,18 @@ test('a ticket card carries the newest triage reasoning', () => {
   expect(readState(db, fixture.cfg).groups.needs_you.find((ticket) => ticket.id === fixture.proposal)!.reason).toBe('Same issue, owner changed');
 });
 
+test('a skipped batch carries the newest triage reason', () => {
+  const fixture = webFixture();
+  using db = new DatabaseSync(fixture.path);
+  const reason = (id: number) => readState(db, fixture.cfg).skipped.find((batch) => batch.id === id)!.reason;
+  expect(reason(fixture.skipped)).toBeNull();
+  const log = db.prepare("INSERT INTO triage_log(batch,conversation,at,action,reason,raw) SELECT id,conversation,?,'skip',?,NULL FROM batch WHERE id=?");
+  log.run('2026-11-06T08:00:00.000000Z', 'First look', fixture.skipped);
+  log.run('2026-11-06T08:05:00.000000Z', 'Greeting only', fixture.skipped);
+  expect(reason(fixture.skipped)).toBe('Greeting only');
+  expect(reason(fixture.backlog)).toBeNull();
+});
+
 test('build entry points stay dynamic and never initialize an instance on import', () => {
   expect(readFileSync('src/app/page.tsx', 'utf8')).toContain("export const dynamic = 'force-dynamic'");
   expect(readFileSync('src/server.ts', 'utf8')).not.toContain('import.meta.main');

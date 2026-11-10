@@ -103,7 +103,12 @@ function Timeline({ id, ticket, revision }: { id: string; ticket: number; revisi
   </div>;
 }
 
-function Field({ label, expanded, children }: { label: string; expanded: boolean; children: React.ReactNode }) {
+export function age(now: number, at: string): string {
+  const minutes = Math.max(0, Math.floor((now - Date.parse(at)) / 60_000));
+  return minutes < 60 ? `${minutes}m` : minutes < 1_440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1_440)}d`;
+}
+
+export function Field({ label, expanded, children }: { label: string; expanded: boolean; children: React.ReactNode }) {
   return <div className="min-w-0 rounded-md bg-muted/70 px-2.5 py-1.5">
     <dt className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">{label}</dt>
     <dd className={cn('text-[13px] whitespace-pre-wrap', !expanded && 'line-clamp-4')}>{children}</dd>
@@ -135,8 +140,6 @@ export function TicketCard(props: {
   const terminal = ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed';
   const error = props.errors[keys.start] || props.errors[keys.chat] || props.errors[keys.dismiss] || props.errors[keys.close];
   const compact = ticket.lifecycle === 'proposed' && props.chats;
-  const minutes = Math.max(0, Math.floor((props.now - Date.parse(ticket.created_at)) / 60_000));
-  const age = minutes < 60 ? `${minutes}m` : minutes < 1_440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1_440)}d`;
   const style = tones[tone(ticket)];
   const actions = props.enabled && !terminal;
   const starting = props.pending.has(keys.start);
@@ -148,7 +151,7 @@ export function TicketCard(props: {
       <div className="flex min-w-0 items-center gap-2 text-xs">
         {actions && <Checkbox checked={props.selected} onCheckedChange={(checked) => props.onSelect(checked === true)} aria-label={`Select ticket #${ticket.id}`} className="size-4.5" />}
         <span className="min-w-0 truncate font-semibold" title={ticket.client ?? undefined}>{ticket.client ?? 'Unassigned'}</span>
-        <span className="ml-auto inline-flex shrink-0 items-center gap-0.5 text-muted-foreground"><Clock aria-hidden="true" className="size-3" /><time dateTime={ticket.created_at} title={ticket.created_at} className="tabular-nums">Age: {age}</time></span>
+        <span className="ml-auto inline-flex shrink-0 items-center gap-0.5 text-muted-foreground"><Clock aria-hidden="true" className="size-3" /><time dateTime={ticket.created_at} title={ticket.created_at} className="tabular-nums">Age: {age(props.now, ticket.created_at)}</time></span>
       </div>
       <h4 id={heading} className="text-sm leading-snug font-semibold"><span className="sr-only">{`Ticket #${ticket.id}:`}</span>{' '}{ticket.title}</h4>
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">

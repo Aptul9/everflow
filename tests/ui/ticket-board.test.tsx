@@ -108,6 +108,26 @@ test('dragging a ticket to Working starts it, to Done today or Skipped opens the
   expect(fetcher.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toHaveLength(1);
 });
 
+test('a skipped batch shows why triage skipped it and drags onto Needs you to make a ticket', async () => {
+  board();
+  const batch = screen.getByRole('heading', { name: 'Batch #10: Skipped source' }).closest<HTMLElement>('[data-batch-id]')!;
+  const why = within(batch).getByText('Greeting only, nothing to do');
+  expect(why.className).toContain('line-clamp');
+  await userEvent.click(within(batch).getByRole('button', { name: 'Show more' }));
+  expect(why.className).not.toContain('line-clamp');
+  expect(within(batch).queryByText(/2026-11-06/)).toBeNull();
+  expect(within(batch).getByRole('button', { name: 'Mute chat of batch #10' }).textContent).not.toContain('Mute');
+  expect(batch.getAttribute('draggable')).toBe('true');
+  const dataTransfer = { setData: vi.fn(), getData: vi.fn(() => ''), effectAllowed: 'all', dropEffect: 'none' };
+  fireEvent.dragStart(batch, { dataTransfer });
+  expect(fireEvent.dragOver(screen.getByRole('region', { name: 'Working (1)' }), { dataTransfer })).toBe(true);
+  const needs = screen.getByRole('region', { name: 'Needs you (2)' });
+  expect(fireEvent.dragOver(needs, { dataTransfer })).toBe(false);
+  fireEvent.drop(needs, { dataTransfer });
+  fireEvent.dragEnd(batch, { dataTransfer });
+  await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/batch/10/ticket', expect.objectContaining({ method: 'POST', body: '{}' })));
+});
+
 test('six board columns have counts; health, Problems and persisted feedback remain outside columns', () => {
   board();
   expect(document.querySelectorAll('[data-column]')).toHaveLength(6);
@@ -246,7 +266,7 @@ test('Retry parked job and Make ticket for all skipped outcomes use guarded loca
 
 test('skipped chat Mute, dismiss with mute, muted list Unmute and switched-off accounts use guarded local actions', async () => {
   const state = uiState();
-  state.skipped.push({ id: 13, title: 'Muted source', outcome: 'muted', source: 'teams', account: 'test@example.invalid', created_at: '2026-11-06T06:00:00.000000Z', messages: [] });
+  state.skipped.push({ id: 13, title: 'Muted source', outcome: 'muted', source: 'teams', account: 'test@example.invalid', created_at: '2026-11-06T06:00:00.000000Z', reason: null, messages: [] });
   state.muted = [{ id: 5, title: 'Noisy group', source: 'teams', account: 'test@example.invalid', until: '9999-12-31T23:59:59.000000Z', forever: true }];
   state.health.push({ dependency: 'teams:off@example.invalid', scope: 'account', state: 'disabled', since: null, last_ok: null, last_error: null });
   board(state);

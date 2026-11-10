@@ -22,9 +22,9 @@ export function uiState(): OverviewState {
       skipped: [card(6, { title: 'Dismissed work', lifecycle: 'dismissed', stage: 'Dismissed', closed_at: AT })],
     },
     skipped: [
-      { id: 10, title: 'Skipped source', outcome: 'not_on_us', source: 'outlook', account: 'test@example.invalid', created_at: AT, messages: [] },
-      { id: 11, title: 'Backlog source', outcome: 'backlog', source: 'teams', account: 'test@example.invalid', created_at: AT, messages: [] },
-      { id: 12, title: 'Answered source', outcome: 'answered', source: 'teams', account: 'test@example.invalid', created_at: AT, messages: [] },
+      { id: 10, title: 'Skipped source', outcome: 'not_on_us', source: 'outlook', account: 'test@example.invalid', created_at: AT, reason: 'Greeting only, nothing to do', messages: [] },
+      { id: 11, title: 'Backlog source', outcome: 'backlog', source: 'teams', account: 'test@example.invalid', created_at: AT, reason: null, messages: [] },
+      { id: 12, title: 'Answered source', outcome: 'answered', source: 'teams', account: 'test@example.invalid', created_at: AT, reason: null, messages: [] },
     ],
     muted: [],
     health: [

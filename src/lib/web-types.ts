@@ -77,6 +77,7 @@ export interface SkippedBatch {
   account: string;
   outcome: 'not_on_us' | 'backlog' | 'answered' | 'muted';
   created_at: string;
+  reason: string | null;
   messages: SourceMessage[];
 }
 
