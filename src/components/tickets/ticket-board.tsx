@@ -51,7 +51,7 @@ function BatchCard(props: { batch: SkippedBatch; enabled: boolean; expired: bool
         <span className="ml-auto inline-flex shrink-0 items-center gap-0.5 text-muted-foreground"><Clock aria-hidden="true" className="size-3" />
           <time dateTime={batch.created_at} title={formatTime(batch.created_at)} className="tabular-nums">{age(props.now, batch.created_at)}</time></span>
       </div>
-      <h4 className="text-sm leading-snug font-semibold"><span className="sr-only">{`Batch #${batch.id}:`}</span>{' '}{batch.title ?? '(no title)'}</h4>
+      <h4 title={batch.title ?? undefined} className="line-clamp-3 text-sm leading-snug font-semibold"><span className="sr-only">{`Batch #${batch.id}:`}</span>{' '}{batch.title ?? '(no title)'}</h4>
       <p className="truncate text-xs text-muted-foreground" title={`${batch.source} · ${batch.account}`}>{batch.source} · {batch.account}</p>
       {batch.reason && <dl><Field label="Why" expanded={false}>{batch.reason}</Field></dl>}
       <Expand label={`Expand batch #${batch.id}`} title={batch.title ?? '(no title)'} meta={<>
@@ -96,7 +96,7 @@ function TriageCard(props: { batch: TriageBatch; now: number }) {
         <span className="ml-auto inline-flex shrink-0 items-center gap-0.5 text-muted-foreground"><Clock aria-hidden="true" className="size-3" />
           <time dateTime={batch.created_at} title={formatTime(batch.created_at)} className="tabular-nums">{age(props.now, batch.created_at)}</time></span>
       </div>
-      <h4 className="text-sm leading-snug font-semibold"><span className="sr-only">{`Batch #${batch.id}:`}</span>{' '}{batch.title ?? '(no title)'}</h4>
+      <h4 title={batch.title ?? undefined} className="line-clamp-3 text-sm leading-snug font-semibold"><span className="sr-only">{`Batch #${batch.id}:`}</span>{' '}{batch.title ?? '(no title)'}</h4>
       <p className="truncate text-xs text-muted-foreground" title={`${batch.source} · ${batch.account}`}>{batch.source} · {batch.account}</p>
     </div>
     <div className="border-t px-2 py-1">
@@ -280,7 +280,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
             onDragOver={(event) => { if (accepts(column.group)) { event.preventDefault(); if (over !== column.group) setOver(column.group); } }}
             onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(null); }}
             onDrop={(event) => { event.preventDefault(); drop(column.group); }}
-            className={cn('flex w-[84vw] max-w-[340px] shrink-0 scroll-mt-28 snap-start flex-col rounded-xl bg-muted/80 ring-1 ring-border/60 transition-shadow sm:w-[300px] xl:w-auto xl:max-w-none',
+            className={cn('flex w-[84vw] max-w-[340px] shrink-0 scroll-mt-28 snap-start flex-col rounded-xl bg-muted/80 ring-1 ring-border/60 transition-shadow sm:w-[300px] xl:w-auto xl:max-w-none xl:min-w-0',
               accepts(column.group) && 'ring-2 ring-primary/30', over === column.group && 'bg-accent/70 ring-primary/70')}>
             <div className="flex items-center gap-2 px-3 pt-3 pb-2">
               <span aria-hidden="true" className={cn('size-2 rounded-full', tones[columnTone[column.group]].dot)} />

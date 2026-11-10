@@ -79,11 +79,17 @@ test('a proposed ticket keeps all four actions inside the card, with Chat as an 
   expect(within(ticket()).getByRole('button', { name: 'Timeline' }).parentElement!.className).toContain('flex-wrap');
 });
 
-test('board columns keep equal widths, empty or not', () => {
+test('board columns keep equal widths, empty or not, and long titles never widen them', () => {
   const state = uiState();
   state.groups.failed = [];
+  const long = 'davide-antonio.mancini@ivecogroup.com, Lusine, paolo.cappellino@ivecogroup.com, massimo.mongiardino@external.ivecogroup.com, +7';
+  state.skipped[0]!.title = long;
   board(state);
   const full = screen.getByRole('region', { name: /^Needs you/ }), empty = screen.getByRole('region', { name: /^Failed/ });
+  expect(full.className).toContain('xl:min-w-0');
+  const title = screen.getByRole('heading', { name: `Batch #10: ${long}` });
+  expect(title.className).toContain('line-clamp-3');
+  expect(title.getAttribute('title')).toBe(long);
   expect(full.parentElement!.className).toContain('xl:grid-cols-6');
   expect(full.className).not.toContain('xl:flex-1');
   expect(empty.className).not.toContain('xl:w-40');
