@@ -103,7 +103,8 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
   });
   const quarantine = db.prepare('SELECT id,source,line,error,at,truncated FROM quarantine WHERE replayed_at IS NULL ORDER BY at DESC,id DESC').all()
     .map((row) => ({ id: Number(row.id), source: String(row.source), line: String(row.line), error: String(row.error), at: String(row.at), truncated: row.truncated === 1 }));
-  const triage = db.prepare("SELECT id,batch,at,reason,raw FROM triage_log WHERE action='invalid' ORDER BY at DESC,id DESC").all()
+  const triage = db.prepare(`SELECT id,batch,at,reason,raw FROM triage_log t WHERE action='invalid'
+    AND NOT EXISTS (SELECT 1 FROM triage_log v WHERE v.batch=t.batch AND v.id>t.id AND v.action IN ('new','update','skip')) ORDER BY at DESC,id DESC`).all()
     .map((row) => ({ id: Number(row.id), batch: row.batch === null ? null : Number(row.batch), at: String(row.at),
       raw: row.raw as string | null, parse_error: row.reason as string | null }));
   return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped, muted,

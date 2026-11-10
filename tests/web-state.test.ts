@@ -114,6 +114,16 @@ test('a skipped batch carries the newest triage reason', () => {
   expect(reason(fixture.backlog)).toBeNull();
 });
 
+test('an invalid triage leaves Problems once a later assessment of the same batch succeeds', () => {
+  const fixture = webFixture();
+  using db = new DatabaseSync(fixture.path);
+  const invalid = () => readState(db, fixture.cfg).problems.triage.map((item) => item.batch);
+  const batch = invalid()[0]!;
+  expect(batch).not.toBeNull();
+  db.prepare("INSERT INTO triage_log(batch,conversation,at,action,reason,raw) SELECT id,conversation,?,'skip','Chatter only',NULL FROM batch WHERE id=?").run(new Date().toISOString(), batch);
+  expect(invalid()).not.toContain(batch);
+});
+
 test('build entry points stay dynamic and never initialize an instance on import', () => {
   expect(readFileSync('src/app/page.tsx', 'utf8')).toContain("export const dynamic = 'force-dynamic'");
   expect(readFileSync('src/server.ts', 'utf8')).not.toContain('import.meta.main');

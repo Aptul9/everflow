@@ -142,6 +142,8 @@ test('a chat muted at the source skips triage unless a message mentions the owne
   schedule(db, f.cfg, later(10));
   expect(outcome()).toBe('muted');
   expect(db.prepare("SELECT COUNT(*) AS n FROM job WHERE kind='triage'").get()!.n).toBe(0);
+  expect(db.prepare('SELECT cleared_at FROM batch ORDER BY id DESC').get()!.cleared_at).not.toBeNull();
+  expect(readState(db, f.cfg, new Date(later(11))).skipped).toEqual([]);
   ingest(db, message('me@example.invalid', 'tagged-1', { sent_at: later(20), ref: { mentions_me: true } }));
   expect(schedule(db, f.cfg, later(30))).toHaveLength(1);
   expect(outcome()).toBe('triage');
