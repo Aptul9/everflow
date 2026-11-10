@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { posix } from 'node:path';
 import { accountNames, emitChanged, isEntrypoint, publishAccounts, requiredOption, runSource, sourceStamp, sourceText, SourceError, trackSourceChild, watcherArguments, writeDiagnostic, writeRecord } from './source.ts';
-import type { Emit, SourceMessage } from './source.ts';
+import type { Emit, Source, SourceMessage } from './source.ts';
 
 export interface RelayOptions { host: string; root: string; owner: string; maxRows?: number; maxAccounts?: number; timeoutMs?: number; maxBytes?: number }
 export type RelayQuery = (path: string, sql: string, signal?: AbortSignal) => Promise<Record<string, any>[]>;
@@ -23,10 +23,21 @@ export function relayCommand(path: string, sql: string): string {
 }
 
 export async function sshQuery(options: RelayOptions, path: string, sql: string, signal?: AbortSignal, spawnProcess: SshSpawn = spawn): Promise<Record<string, any>[]> {
-  if (!options.host || options.host.startsWith('-') || !/^[a-z0-9_.@:[\]-]+$/i.test(options.host)) throw new SourceError('teamsrelay', 'relay.invalid-host');
-  const command = relayCommand(path, sql), timeout = options.timeoutMs ?? 60000, maxBytes = options.maxBytes ?? 8 * 1024 * 1024;
-  if (!Number.isSafeInteger(timeout) || timeout < 1 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 64 * 1024 * 1024) throw new SourceError('teamsrelay', 'relay.invalid-limit');
-  if (signal?.aborted) throw new SourceError('teamsrelay', 'relay.aborted');
+  const output = await sshRun('teamsrelay', 'relay', options, relayCommand(path, sql), signal, spawnProcess);
+  try {
+    const value: unknown = JSON.parse(output.toString('utf8'));
+    if (!Array.isArray(value) || value.some((row) => !row || typeof row !== 'object' || Array.isArray(row))) throw new Error('shape');
+    return value;
+  } catch { throw new SourceError('teamsrelay', 'relay.response-json'); }
+}
+
+// One owned, bounded SSH command; error codes carry the caller's prefix (relay.timeout, oemail.timeout, ...).
+export async function sshRun(source: Source, prefix: string, options: { host: string; timeoutMs?: number; maxBytes?: number }, command: string,
+  signal?: AbortSignal, spawnProcess: SshSpawn = spawn): Promise<Buffer> {
+  if (!options.host || options.host.startsWith('-') || !/^[a-z0-9_.@:[\]-]+$/i.test(options.host)) throw new SourceError(source, `${prefix}.invalid-host`);
+  const timeout = options.timeoutMs ?? 60000, maxBytes = options.maxBytes ?? 8 * 1024 * 1024;
+  if (!Number.isSafeInteger(timeout) || timeout < 1 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 64 * 1024 * 1024) throw new SourceError(source, `${prefix}.invalid-limit`);
+  if (signal?.aborted) throw new SourceError(source, `${prefix}.aborted`);
   const child = spawnProcess('ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', options.host, command], { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const chunks: Buffer[] = [];
   let size = 0, failure: unknown, closed = false, escalation: ReturnType<typeof setTimeout> | undefined;
@@ -36,32 +47,28 @@ export async function sshQuery(options: RelayOptions, path: string, sql: string,
     escalation ??= setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }, 2000);
     child.kill();
   };
-  const aborted = () => stop(new SourceError('teamsrelay', 'relay.aborted'));
+  const aborted = () => stop(new SourceError(source, `${prefix}.aborted`));
   const stdout = (bytes: Buffer) => {
     size += bytes.length;
-    if (size > maxBytes) stop(new SourceError('teamsrelay', 'relay.result-limit'));
+    if (size > maxBytes) stop(new SourceError(source, `${prefix}.result-limit`));
     else if (!failure) chunks.push(Buffer.from(bytes));
   };
   // stderr is drained but never copied into diagnostics or records.
   const stderr = () => {};
-  const failed = () => { failure ??= new SourceError('teamsrelay', 'relay.ssh-start'); };
+  const failed = () => { failure ??= new SourceError(source, `${prefix}.ssh-start`); };
   const exit = new Promise<number | null>((resolve) => {
     child.once('close', (code) => { closed = true; resolve(code); });
   });
   child.stdout?.on('data', stdout); child.stderr?.on('data', stderr); child.once('error', failed);
-  const timer = setTimeout(() => stop(new SourceError('teamsrelay', 'relay.timeout')), timeout);
+  const timer = setTimeout(() => stop(new SourceError(source, `${prefix}.timeout`)), timeout);
   signal?.addEventListener('abort', aborted, { once: true });
   if (signal?.aborted) aborted();
   try {
     try { if (!closed) await trackSourceChild(child); } catch (error) { stop(error); }
     const code = await exit;
     if (failure !== undefined) throw failure;
-    if (code !== 0) throw new SourceError('teamsrelay', 'relay.ssh-failed', undefined, code ?? undefined);
-    try {
-      const value: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      if (!Array.isArray(value) || value.some((row) => !row || typeof row !== 'object' || Array.isArray(row))) throw new Error('shape');
-      return value;
-    } catch { throw new SourceError('teamsrelay', 'relay.response-json'); }
+    if (code !== 0) throw new SourceError(source, `${prefix}.ssh-failed`, undefined, code ?? undefined);
+    return Buffer.concat(chunks);
   } finally {
     clearTimeout(timer); if (escalation) clearTimeout(escalation);
     signal?.removeEventListener('abort', aborted);

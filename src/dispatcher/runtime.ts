@@ -26,8 +26,8 @@ import type { Source } from '../watchers/source.ts';
 import { inside, plainParents, readBuildReceipt } from '../web/build-artifact.ts';
 import { failureFields } from '../cli.ts';
 
-const sources = ['outlook', 'teams', 'teamsrelay', 'gchat', 'gmail'] as const;
-const entrypoints = { outlook: 'outlook', teams: 'teams', teamsrelay: 'relay', gchat: 'gchat', gmail: 'gmail' };
+const sources = ['outlook', 'teams', 'teamsrelay', 'gchat', 'gmail', 'oemail'] as const;
+const entrypoints = { outlook: 'outlook', teams: 'teams', teamsrelay: 'relay', gchat: 'gchat', gmail: 'gmail', oemail: 'oemail' };
 const sourceSchema = z.looseObject({
   enabled: z.preprocess((value) => value === true, z.boolean()).default(false),
   entrypoint: z.string().min(1).optional(), poll_seconds: z.number().int().positive().max(86400).optional(),
@@ -37,7 +37,7 @@ const sourceSchema = z.looseObject({
   browser_refresh: z.preprocess((value) => value === true, z.boolean()).optional(),
   accounts: z.array(z.string().trim().min(1).refine((value) => value !== '*' && !/[\r\n\0]/.test(value))).optional(),
 });
-const sourceSettings = z.looseObject({ outlook: sourceSchema.optional(), teams: sourceSchema.optional(), teamsrelay: sourceSchema.optional(), gchat: sourceSchema.optional(), gmail: sourceSchema.optional() });
+const sourceSettings = z.looseObject({ outlook: sourceSchema.optional(), teams: sourceSchema.optional(), teamsrelay: sourceSchema.optional(), gchat: sourceSchema.optional(), gmail: sourceSchema.optional(), oemail: sourceSchema.optional() });
 type Event = { at?: string; source: string; code: string; [key: string]: unknown };
 export type Log = (event: Event) => void;
 const silent: Log = () => {};
@@ -52,6 +52,7 @@ export function validateRuntimeConfig(cfg: Config, buildReceipt: string) {
     if (!value?.enabled) continue;
     if (source === 'teams' && !value.profile) throw new DaemonError('source.profile-required');
     if (source === 'teamsrelay' && (!value.host || !value.data_dir || !value.owner)) throw new DaemonError('source.relay-options-required');
+    if (source === 'oemail' && (!value.host || !value.accounts?.length)) throw new DaemonError('source.oemail-options-required');
     if ((source === 'gchat' || source === 'gmail') && !value.account) throw new DaemonError('source.google-account-required');
     if (source === 'gchat' && !value.self_id) throw new DaemonError('source.google-self-required');
     const entry = resolve(artifact.root, value.entrypoint ?? `dist/watchers/${entrypoints[source]}.js`);
@@ -81,6 +82,7 @@ export function sourceCommand(cfg: Config, db: DatabaseSync, source: Source, bui
     if (value.bootstrap_cache) args.push('--bootstrap-cache', local(value.bootstrap_cache));
   }
   if (source === 'teamsrelay') args.push('--host', value.host!, '--data-dir', value.data_dir!, '--owner', value.owner!);
+  if (source === 'oemail') args.push('--host', value.host!, ...value.accounts!.flatMap((account) => ['--account', account]));
   if (source === 'gchat' || source === 'gmail') {
     args.push('--account', value.account!);
     if (value.executable) args.push('--executable', /[\\/]/.test(value.executable) ? local(value.executable) : value.executable);
@@ -139,6 +141,7 @@ const diagnosticCodes = new Set(`source.unexpected source.invalid-message source
 cli.invalid-options cli.aborted cli.start cli.timeout cli.result-limit cli.failed cli.response-json
 gchat.invalid-options gchat.account-mismatch gchat.response-shape gchat.message-limit
 gmail.account-mismatch gmail.response-shape gmail.mime-shape gmail.mime-encoding gmail.body-unavailable gmail.message-time gmail.pagination-limit gmail.message-limit
+oemail.invalid-argument oemail.invalid-host oemail.invalid-limit oemail.aborted oemail.timeout oemail.result-limit oemail.ssh-start oemail.ssh-failed oemail.response-json oemail.response-shape oemail.http oemail.pagination oemail.message-shape oemail.message-time oemail.message-limit oemail.account-required oemail.account-unavailable
 teams.scan-incomplete teams.accounts-missing teams.accounts-incomplete teams.region teams.origin teams.read-endpoint teams.refresh-account teams.http teams.response-json teams.response-limit teams.aborted teams.timeout teams.request-failed teams.response-shape teams.message-time teams.pagination-limit teams.page-shape teams.message-id
 outlook.invalid-wall-clock outlook.collection-limit outlook.reference-cleanup outlook.accounts-unavailable outlook.accounts-incomplete outlook.account-mismatch outlook.read-failed outlook.not-running outlook.duplicate-account outlook.event-read-failed outlook.event-overflow outlook.newmail
 relay.invalid-argument relay.absolute-path relay.invalid-host relay.invalid-limit relay.aborted relay.timeout relay.result-limit relay.ssh-start relay.ssh-failed relay.response-json relay.saved-json relay.saved-shape relay.invalid-slot relay.message-time relay.message-shape relay.app-unavailable relay.no-active-accounts relay.account-limit relay.scan-state relay.scan-incomplete relay.store-unavailable

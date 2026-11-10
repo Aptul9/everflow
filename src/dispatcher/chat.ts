@@ -110,7 +110,7 @@ function failed(cfg: Config, db: DatabaseSync, job: Job, error: unknown, options
   } catch (failure) { if (failure !== lost) throw failure; }
 }
 
-const MAIL = new Set(['outlook', 'gmail']);
+const MAIL = new Set(['outlook', 'gmail', 'oemail']);
 const BRIEF_MESSAGES = 50;
 
 // A transcript, one header per conversation; text lines are indented so no message can start a line that reads as a boundary marker.
