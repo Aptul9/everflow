@@ -315,7 +315,9 @@ export function assessmentPayload(db: DatabaseSync, cfg: Config, batch: number, 
 
 export const modelDecisionSchema = z.strictObject({
   on_us: z.boolean(), reason: z.string().min(1), action: z.enum(['new', 'update', 'skip']), ticket: z.number().int().positive().nullable(),
-  title: z.string(), client: z.string().min(1).nullable(), summary: z.string(), ask: z.string(), proposal: z.string(),
+  title: z.string(), client: z.string().min(1).nullable(),
+  summary: z.string().describe('Quick sum-up in at most two short sentences: who wants what, by when'),
+  ask: z.string().describe('The request in one sentence'), proposal: z.string().describe('At most three short numbered steps'),
   kb_notes: z.array(z.string().refine(isNotePath, 'Unsafe relative Markdown note path')), confidence: z.number().finite().min(0).max(1),
 }).refine((decision) => decision.action === 'skip' ? !decision.on_us && decision.ticket === null
   : decision.on_us && decision.title.trim().length > 0 && (decision.action === 'update' ? decision.ticket !== null : decision.ticket === null),

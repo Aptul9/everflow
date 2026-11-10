@@ -72,6 +72,19 @@ test('the triage system prompt spells out every valid action, on_us and ticket c
   expect(system).toMatch(/already tracked.*skip/i);
 });
 
+test('the triage prompt asks for a short sum-up and keeps evidence in the reason', async () => {
+  const { cfg } = kbFixture();
+  using db = openDb(cfg.db.path);
+  await using peer = await scriptedPeer(() => ({ body: text(JSON.stringify(decision())) }));
+  await run(cfg, context(), [], 'new', undefined, { db, providers: { first: provider(peer.baseURL) } });
+  const system = peer.requests[0]!.system;
+  expect(system).toContain('summary: a quick sum-up');
+  expect(system).toMatch(/evidence.*belong in reason/i);
+  const schema = JSON.parse(system.slice(system.indexOf('{"$schema"'), system.lastIndexOf('}') + 1));
+  expect(schema.properties.summary.description).toMatch(/two short sentences/);
+  expect(schema.properties.ask.description).toMatch(/one sentence/);
+});
+
 test('real HTTP peer searches, reads and returns strict JSON with matching tool ids and only two tools', async () => {
   const { cfg } = kbFixture();
   using db = openDb(cfg.db.path);

@@ -98,6 +98,11 @@ Action, on_us, ticket and title must form one of these combinations:
 - new: on_us true, ticket null, non-empty title.
 - update: on_us true, ticket set to an offered candidate id, non-empty title.
 on_us true means a ticket is created or updated. Work that is already tracked, already answered or only chatter is skip, even when it is Antonio's.
+Antonio reads the ticket card at a glance, so keep it short and plain:
+- summary: a quick sum-up in at most two short sentences, about 200 characters: who wants what, by when.
+- ask: the request in one sentence.
+- proposal: at most three short numbered steps.
+Timestamps, quotes, vault citations and other evidence belong in reason, never in summary, ask or proposal.
 ${JSON.stringify(z.toJSONSchema(modelDecisionSchema))}`;
 
 function systemPrompt(cfg: Config): string {

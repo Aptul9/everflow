@@ -226,7 +226,7 @@ export function TicketCard(props: {
         <span className="ml-auto font-mono text-muted-foreground">#{ticket.id}</span>
       </div>
       <div className="space-y-2">
-        {ticket.summary && <p className="line-clamp-3 text-[13px] whitespace-pre-wrap text-muted-foreground">{ticket.summary}</p>}
+        {ticket.summary && <p className="line-clamp-3 text-[13px] whitespace-pre-wrap">{ticket.summary}</p>}
         {ticket.lifecycle === 'proposed' && <dl className="grid gap-1.5">
           <Field label="Ask" expanded={false}>{ticket.ask || '(none)'}</Field>
           <Field label="Proposal" expanded={false}>{ticket.proposal || '(none)'}</Field>
