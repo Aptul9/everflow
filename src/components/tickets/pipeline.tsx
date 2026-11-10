@@ -51,8 +51,12 @@ function Picker(props: { label: string; value: string; items: PickItem[]; onPick
         <ChevronsUpDown className="size-3.5 opacity-50" aria-hidden="true" />
       </Button>
     </PopoverTrigger>
-    <PopoverContent align="start" className="w-(--radix-popover-trigger-width) min-w-64 p-0"
-      onOpenAutoFocus={(event) => { if (!props.search) { event.preventDefault(); listRef.current?.focus(); } }}>
+    <PopoverContent align="start" className="w-(--radix-popover-trigger-width) min-w-80 p-0"
+      onOpenAutoFocus={(event) => {
+        if (!props.search) { event.preventDefault(); listRef.current?.focus(); }
+        // The list is laid out only once the popover is placed, so the current pick is scrolled to here
+        requestAnimationFrame(() => document.getElementById(optionId(active))?.scrollIntoView?.({ block: 'center' }));
+      }}>
       {props.search && <div className="flex h-9 items-center gap-2 border-b px-2.5">
         <Search className="size-3.5 shrink-0 opacity-50" aria-hidden="true" />
         <input value={query} placeholder={props.search} aria-label={props.search} role="combobox" aria-expanded="true" aria-controls={listId}
@@ -69,9 +73,9 @@ function Picker(props: { label: string; value: string; items: PickItem[]; onPick
             onMouseMove={() => setActive(index)} onClick={() => pick(item.value)}
             className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-xs select-none data-[active=true]:bg-accent data-[active=true]:text-accent-foreground">
             <Check className={cn('size-3.5 shrink-0', item.value === props.value ? 'opacity-100' : 'opacity-0')} aria-hidden="true" />
-            <span className="min-w-0 flex-1 truncate">{item.label}</span>
+            <span className="min-w-0 flex-1 truncate" title={item.label}>{item.label}</span>
             {item.tag && <span className="shrink-0 rounded-sm bg-muted px-1 text-[10px] text-muted-foreground">{item.tag}</span>}
-            {item.detail && <span className="max-w-[45%] shrink-0 truncate text-[11px] text-muted-foreground">{item.detail}</span>}
+            {item.detail && <span className="max-w-[40%] min-w-0 shrink-[3] truncate text-[11px] text-muted-foreground">{item.detail}</span>}
           </div>
         </Fragment>)}
       </div>
@@ -103,7 +107,7 @@ function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options:
           })().catch(() => {});
         }}>
         <span className="truncate" title={choice.model}>{current.name}</span>
-        {split(choice.model).provider && <span className="truncate text-muted-foreground">{split(choice.model).provider}</span>}
+        {split(choice.model).provider && <span className="min-w-0 shrink-[4] truncate text-muted-foreground">{split(choice.model).provider}</span>}
       </Picker>
       <Picker label={`${what} effort`} value={choice.effort ?? ''} disabled={props.disabled}
         items={[{ value: '', label: 'Default effort', detail: "model's own" }, ...efforts.map((effort) => ({ value: effort, label: effort }))]}
