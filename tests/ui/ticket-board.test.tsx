@@ -285,14 +285,26 @@ test('triage and chat boxes pick the next model and effort; stale option lists a
   const health = screen.getByRole('region', { name: 'Health' });
   await waitFor(() => expect(fetcher.mock.calls.some(([path, init]) => path === '/api/setting' && String(init?.body) === '{"refresh":true}')).toBe(true));
   const triage = health.querySelector<HTMLElement>('[data-node="triage"]')!;
-  expect((within(triage).getByLabelText('Triage model') as HTMLSelectElement).value).toBe('claude-haiku-5-5');
+  expect(within(triage).getByRole('button', { name: 'Triage model' }).textContent).toBe('claude-haiku-5-5');
   expect(within(triage).getByRole('alert').textContent).toBe('triage: Provider first HTTP 503');
   const chat = health.querySelector<HTMLElement>('[data-node="openchamber"]')!;
-  const effort = within(chat).getByLabelText('Chat effort') as HTMLSelectElement;
-  expect([...effort.options].map((option) => option.value)).toEqual(['', 'high', 'max']);
-  expect(effort.value).toBe('max');
+  expect(within(chat).getByRole('button', { name: 'Chat model' }).textContent).toBe('Opus automeridian-auto');
+  fireEvent.click(within(chat).getByRole('button', { name: 'Chat effort' }));
+  const efforts = await screen.findByRole('listbox', { name: 'Chat effort' });
+  expect(within(efforts).getAllByRole('option').map((option) => [option.textContent, option.getAttribute('aria-selected')]))
+    .toEqual([["Default effortmodel's own", 'false'], ['high', 'false'], ['max', 'true']]);
+  fireEvent.keyDown(efforts, { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('listbox', { name: 'Chat effort' })).toBeNull());
   fetcher.mockClear();
-  fireEvent.change(within(chat).getByLabelText('Chat model'), { target: { value: 'meridian-roar/claude-sonnet-5-5' } });
+  fireEvent.click(within(chat).getByRole('button', { name: 'Chat model' }));
+  const search = await screen.findByRole('combobox', { name: 'Search models' });
+  fireEvent.change(search, { target: { value: 'sonnet' } });
+  expect(within(screen.getByRole('listbox', { name: 'Chat model' })).getAllByRole('option').map((option) => option.textContent))
+    .toEqual(['Sonnet roarclaude-sonnet-5-5']);
+  fireEvent.change(search, { target: { value: 'nothing here' } });
+  expect(screen.getByText('No match')).toBeTruthy();
+  fireEvent.change(search, { target: { value: 'roar' } });
+  fireEvent.keyDown(search, { key: 'Enter' });
   await waitFor(() => expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').map(([, init]) => JSON.parse(String(init!.body)))).toEqual([
     { key: 'chat.model', value: 'meridian-roar/claude-sonnet-5-5' }, { key: 'chat.effort', value: '' }]));
 });

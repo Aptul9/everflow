@@ -1,11 +1,13 @@
 'use client';
 
-import { Bot, ChevronDown, CircleCheck, CirclePause, Cpu, Inbox, LoaderCircle, RotateCw, Ticket, TriangleAlert, Workflow } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { Bot, Check, ChevronDown, ChevronsUpDown, CircleCheck, CirclePause, Cpu, Inbox, LoaderCircle, RotateCw, Search, Ticket, TriangleAlert, Workflow } from 'lucide-react';
+import { Fragment, useEffect, useId, useRef, useState } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import { groups } from '../../lib/web-types.ts';
 import type { Agent, Health, OverviewState } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Button } from '../ui/button.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 import { Time } from './ticket-card.tsx';
 
 type State = Health['state'];
@@ -15,42 +17,99 @@ type Choice = OverviewState['models']['triage'];
 type ModelOption = OverviewState['models']['options']['chat'][number];
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
+interface PickItem { value: string; label: string; detail?: string; group?: string | undefined; tag?: string }
+
+// Popover list in the shadcn Command look; with `search` a filter field drives it, otherwise the list itself takes the keys
+function Picker(props: { label: string; value: string; items: PickItem[]; onPick: (value: string) => void; disabled: boolean;
+  search?: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [active, setActive] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const ordered = [...props.items].sort((a, b) => (a.group ?? '').localeCompare(b.group ?? ''));
+  const shown = ordered.filter((item) => words.every((word) => `${item.label} ${item.value} ${item.group ?? ''}`.toLowerCase().includes(word)));
+  const optionId = (index: number) => `${listId}-${index}`;
+  useEffect(() => { if (open) document.getElementById(optionId(active))?.scrollIntoView?.({ block: 'nearest' }); });
+  const pick = (value: string) => { setOpen(false); if (value !== props.value) props.onPick(value); };
+  const keys = (event: KeyboardEvent) => {
+    const last = shown.length - 1;
+    const move: Record<string, number> = { ArrowDown: Math.min(active + 1, last), ArrowUp: Math.max(active - 1, 0), Home: 0, End: last };
+    if (event.key in move) { event.preventDefault(); setActive(Math.max(move[event.key]!, 0)); }
+    else if (event.key === 'Enter' && shown[active]) { event.preventDefault(); pick(shown[active].value); }
+  };
+  const listKeys = props.search ? {} : { tabIndex: 0, onKeyDown: keys, 'aria-activedescendant': shown[active] ? optionId(active) : undefined };
+  return <Popover open={open} onOpenChange={(next) => {
+    setOpen(next);
+    if (next) { setQuery(''); setActive(Math.max(ordered.findIndex((item) => item.value === props.value), 0)); }
+  }}>
+    <PopoverTrigger asChild>
+      <Button variant="outline" size="sm" disabled={props.disabled} aria-haspopup="listbox" aria-label={props.label}
+        className="w-full min-w-0 justify-between gap-1 px-2 text-xs font-normal">
+        <span className="flex min-w-0 items-baseline gap-1.5">{props.children}</span>
+        <ChevronsUpDown className="size-3.5 opacity-50" aria-hidden="true" />
+      </Button>
+    </PopoverTrigger>
+    <PopoverContent align="start" className="w-(--radix-popover-trigger-width) min-w-64 p-0"
+      onOpenAutoFocus={(event) => { if (!props.search) { event.preventDefault(); listRef.current?.focus(); } }}>
+      {props.search && <div className="flex h-9 items-center gap-2 border-b px-2.5">
+        <Search className="size-3.5 shrink-0 opacity-50" aria-hidden="true" />
+        <input value={query} placeholder={props.search} aria-label={props.search} role="combobox" aria-expanded="true" aria-controls={listId}
+          aria-autocomplete="list" aria-activedescendant={shown[active] ? optionId(active) : undefined} onKeyDown={keys}
+          onChange={(event) => { setQuery(event.target.value); setActive(0); }}
+          className="h-full w-full min-w-0 bg-transparent text-xs outline-hidden placeholder:text-muted-foreground" />
+      </div>}
+      <div ref={listRef} id={listId} role="listbox" aria-label={props.label} {...listKeys} className="max-h-72 scroll-py-1 overflow-y-auto p-1 outline-hidden">
+        {!shown.length && <p className="py-5 text-center text-xs text-muted-foreground">No match</p>}
+        {shown.map((item, index) => <Fragment key={item.value}>
+          {item.group && item.group !== shown[index - 1]?.group
+            && <p role="presentation" className="px-2 pt-2 pb-1 text-[11px] font-medium text-muted-foreground">{item.group}</p>}
+          <div id={optionId(index)} role="option" aria-selected={item.value === props.value} data-active={index === active}
+            onMouseMove={() => setActive(index)} onClick={() => pick(item.value)}
+            className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-xs select-none data-[active=true]:bg-accent data-[active=true]:text-accent-foreground">
+            <Check className={cn('size-3.5 shrink-0', item.value === props.value ? 'opacity-100' : 'opacity-0')} aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">{item.label}</span>
+            {item.tag && <span className="shrink-0 rounded-sm bg-muted px-1 text-[10px] text-muted-foreground">{item.tag}</span>}
+            {item.detail && <span className="max-w-[45%] shrink-0 truncate text-[11px] text-muted-foreground">{item.detail}</span>}
+          </div>
+        </Fragment>)}
+      </div>
+    </PopoverContent>
+  </Popover>;
+}
+
 // Model and effort the next triage call or the next new ticket chat starts with; empty picks the config default
 function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options: ModelOption[]; disabled: boolean; post: PausePost; error?: string | undefined }) {
   const { scope, choice } = props;
   const list = props.options.some((option) => option.id === choice.model) ? props.options
     : [{ id: choice.model, name: choice.model, efforts: EFFORTS }, ...props.options];
-  const efforts = list.find((option) => option.id === choice.model)?.efforts.length ? list.find((option) => option.id === choice.model)!.efforts : EFFORTS;
+  const current = list.find((option) => option.id === choice.model)!;
+  const efforts = current.efforts.length ? current.efforts : EFFORTS;
   const save = (key: string, value: string) => props.post(`setting:${key}`, '/api/setting', { key, value });
-  const id = `${scope}-model`;
+  const split = (id: string) => id.includes('/') ? { provider: id.slice(0, id.indexOf('/')), model: id.slice(id.indexOf('/') + 1) } : { provider: undefined, model: id };
+  const models = list.map((option) => ({ value: option.id, label: option.name, detail: split(option.id).model, group: split(option.id).provider,
+    ...(option.id === choice.default_model ? { tag: 'default' } : {}) }));
+  const what = scope === 'triage' ? 'Triage' : 'Chat';
   return <div className="mt-2 border-t pt-2">
     <p className="mb-1 text-[11px] text-muted-foreground">{scope === 'triage' ? 'Next triage call' : 'Next new ticket chat'}</p>
     <div className="grid min-w-0 gap-1.5">
-      <label htmlFor={id} className="sr-only">{scope === 'triage' ? 'Triage model' : 'Chat model'}</label>
-      <select id={id} value={choice.model} disabled={props.disabled} title={choice.model}
-        onChange={(event) => {
-          const model = event.target.value;
+      <Picker label={`${what} model`} value={choice.model} items={models} disabled={props.disabled} search="Search models"
+        onPick={(model) => {
           const next = list.find((option) => option.id === model)?.efforts ?? [];
           void (async () => {
             await save(`${scope}.model`, model === choice.default_model ? '' : model);
             if (choice.effort && next.length && !next.includes(choice.effort)) await save(`${scope}.effort`, '');
           })().catch(() => {});
-        }}
-        className="h-8 w-full min-w-0 truncate rounded-md border bg-card px-1.5 text-xs disabled:opacity-50">
-        {list.map((option) => {
-          // Providers can share a display name (Copilot and Azure Sonnet), so a repeated name carries its provider
-          const shared = list.filter((other) => other.name === option.name).length > 1;
-          const name = shared && option.id.includes('/') ? `${option.name} · ${option.id.split('/')[0]}` : option.name;
-          return <option key={option.id} value={option.id}>{option.id === choice.default_model ? `${name} (default)` : name}</option>;
-        })}
-      </select>
-      <label htmlFor={`${id}-effort`} className="sr-only">{scope === 'triage' ? 'Triage effort' : 'Chat effort'}</label>
-      <select id={`${id}-effort`} value={choice.effort ?? ''} disabled={props.disabled}
-        onChange={(event) => { void save(`${scope}.effort`, event.target.value).catch(() => {}); }}
-        className="h-8 w-full rounded-md border bg-card px-1.5 text-xs disabled:opacity-50">
-        <option value="">Default effort</option>
-        {efforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
-      </select>
+        }}>
+        <span className="truncate" title={choice.model}>{current.name}</span>
+        {split(choice.model).provider && <span className="truncate text-muted-foreground">{split(choice.model).provider}</span>}
+      </Picker>
+      <Picker label={`${what} effort`} value={choice.effort ?? ''} disabled={props.disabled}
+        items={[{ value: '', label: 'Default effort', detail: "model's own" }, ...efforts.map((effort) => ({ value: effort, label: effort }))]}
+        onPick={(effort) => { void save(`${scope}.effort`, effort).catch(() => {}); }}>
+        <span className="text-muted-foreground">Effort</span><span className="truncate">{choice.effort ?? 'default'}</span>
+      </Picker>
     </div>
     {props.error && <p role="alert" className="mt-1 text-[11px] text-destructive">{props.error}</p>}
   </div>;
