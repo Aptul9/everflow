@@ -182,13 +182,18 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
     return messages;
   };
   return {
-    async create(title: string, store: string, ticket: number, signal?: AbortSignal): Promise<{ id: string }> {
+    // choice: the page's model/effort for new chats; without it the config model and the model's default effort
+    async create(title: string, store: string, ticket: number, signal?: AbortSignal, choice?: { model: string; effort: string | null }): Promise<{ id: string }> {
       if (!store || !Number.isSafeInteger(ticket) || ticket <= 0) throw new TypeError('A durable store and ticket id are required');
-      const [providerID, ...model] = cfg.opencode.model.split('/');
-      if (cfg.opencode.model && (!providerID || !model.join('/'))) throw new TypeError('OpenCode model must be provider/model');
+      const selected = choice?.model ?? cfg.opencode.model;
+      const [providerID, ...model] = selected.split('/');
+      if (selected && (!providerID || !model.join('/'))) throw new TypeError('OpenCode model must be provider/model');
       return client.session.create({ title, location: { directory: cfg.opencode.directory },
         metadata: { workdesk: { store_id: store, ticket } },
-        ...(cfg.opencode.model ? { model: { providerID: providerID!, id: model.join('/') } } : {}) }, request(signal));
+        ...(selected ? { model: { providerID: providerID!, id: model.join('/'), ...(choice?.effort ? { variant: choice.effort } : {}) } } : {}) }, request(signal));
+    },
+    async models(signal?: AbortSignal) {
+      return (await client.model.list({ location: { directory: cfg.opencode.directory }, types: ['chat'] }, request(signal))).data;
     },
     async findTicket(store: string, ticket: number, signal?: AbortSignal): Promise<string | null> {
       const matches = new Set<string>();

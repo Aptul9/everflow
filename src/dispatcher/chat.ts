@@ -7,6 +7,7 @@ import { backoff, classify, complete, defer, enqueue, fail, hasPendingInput, hea
 import type { Job } from './jobs.ts';
 import { connect } from './opencode.ts';
 import type { Peer, TurnDetail } from './opencode.ts';
+import { modelChoice } from './settings.ts';
 import { addRefs, batchMessages, extractRefs, ownContext, route, stage, TicketError } from './tickets.ts';
 import type { Message, Ticket } from './tickets.ts';
 import { utc } from './time.ts';
@@ -320,7 +321,7 @@ async function input(cfg: Config, db: DatabaseSync, job: Job, kind: 'brief' | 'f
       if (!found && (!cfg.tickets.enabled || !cfg.chats.enabled || ticketRow(db, owner.id).lifecycle !== 'active')) {
         defer(db, job, after(now(), cfg.jobs.collect_seconds), undefined, now); return;
       }
-      const session = found ?? (await peer.create(`[Working] #${owner.id} ${owner.title}`, store, owner.id, options.signal)).id;
+      const session = found ?? (await peer.create(`[Working] #${owner.id} ${owner.title}`, store, owner.id, options.signal, modelChoice(db, cfg, 'chat'))).id;
       if (!session) throw jobError('OpenCode returned no session identity');
       const saved = fenced(db, job, () => {
         const target = ticketRow(db, owner.id);

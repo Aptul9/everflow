@@ -1,5 +1,6 @@
 import type { Lifecycle } from '../dispatcher/types.ts';
 import type { Stage, TicketRef } from '../dispatcher/tickets.ts';
+import type { ModelChoice, ModelOptions } from '../dispatcher/settings.ts';
 
 export const groups = [
   ['needs_you', 'Needs you'], ['working', 'Working'], ['waiting_them', 'Waiting on them'],
@@ -126,6 +127,8 @@ export interface OverviewState {
   skipped: SkippedBatch[];
   triaging: TriageBatch[];
   agents: Agent[];
+  // Model and effort the next triage call and the next new ticket chat use, and what the pickers can offer
+  models: { triage: ModelChoice; chat: ModelChoice; options: ModelOptions };
   // Folder name of the OpenChamber project that holds ticket chats
   chat_project: string;
   muted: MutedConversation[];

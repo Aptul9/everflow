@@ -28,9 +28,9 @@ test('new Next entries are discovered rather than depending on a hand-maintained
 function webGraph() {
   const paths = [
     'src/web/api.ts', 'src/web/state.ts', 'src/web/instance.ts', 'src/lib/web-types.ts', 'src/lib/utils.ts',
-    'src/dispatcher/approval.ts', 'src/dispatcher/db.ts', 'src/dispatcher/jobs.ts', 'src/dispatcher/tickets.ts', 'src/dispatcher/time.ts', 'src/dispatcher/policy.ts',
+    'src/dispatcher/approval.ts', 'src/dispatcher/db.ts', 'src/dispatcher/jobs.ts', 'src/dispatcher/tickets.ts', 'src/dispatcher/time.ts', 'src/dispatcher/policy.ts', 'src/dispatcher/settings.ts',
     'src/app/page.tsx', 'src/app/layout.tsx', 'src/app/globals.css', 'src/app/api/state/route.ts', 'src/app/api/ticket/[id]/route.ts', 'src/app/api/ticket/[id]/[action]/route.ts',
-    'src/app/api/batch/[id]/ticket/route.ts', 'src/app/api/batch/[id]/mute/route.ts', 'src/app/api/batch/[id]/clear/route.ts', 'src/app/api/conversation/[id]/unmute/route.ts', 'src/app/api/input/route.ts', 'src/app/api/job/[id]/retry/route.ts',
+    'src/app/api/batch/[id]/ticket/route.ts', 'src/app/api/batch/[id]/mute/route.ts', 'src/app/api/batch/[id]/clear/route.ts', 'src/app/api/conversation/[id]/unmute/route.ts', 'src/app/api/input/route.ts', 'src/app/api/setting/route.ts', 'src/app/api/job/[id]/retry/route.ts',
     ...['action-dialog', 'markdown', 'pipeline', 'ticket-board', 'ticket-card', 'use-overview'].map((name) => `src/components/tickets/${name}.${name === 'use-overview' ? 'ts' : 'tsx'}`),
     ...['alert', 'badge', 'button', 'card', 'checkbox', 'dialog', 'input', 'scroll-area', 'separator', 'tabs', 'textarea'].map((name) => `src/components/ui/${name}.tsx`),
   ];

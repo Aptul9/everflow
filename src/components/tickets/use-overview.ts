@@ -88,9 +88,9 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
         const failure = await response.json().catch(() => null) as { error?: { message?: unknown } } | null;
         throw new Error(typeof failure?.error?.message === 'string' ? failure.error.message : `Action failed (${response.status})`);
       }
-      const result = await response.json() as { ticket?: number; job?: number; conversation?: number; input?: string };
+      const result = await response.json() as { ticket?: number; job?: number; conversation?: number; input?: string; setting?: string };
       const committed = result.ticket ?? result.job ?? result.conversation;
-      if (typeof result.input !== 'string' && (!Number.isSafeInteger(committed) || (committed ?? 0) <= 0)) throw new Error('Invalid committed action response');
+      if (typeof result.input !== 'string' && typeof result.setting !== 'string' && (!Number.isSafeInteger(committed) || (committed ?? 0) <= 0)) throw new Error('Invalid committed action response');
       if (mounted.current) { setNotice('Local action saved.'); void refresh(); }
       return result;
     } catch (error) {

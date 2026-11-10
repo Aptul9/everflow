@@ -275,6 +275,28 @@ test('each live source account row has a pause switch; paused rows say what wait
   expect(within(card).getByRole('status').textContent).toBe('Held: me@npo.invalid paused');
 });
 
+test('triage and chat boxes pick the next model and effort; stale option lists ask the daemon once', async () => {
+  const state = uiState();
+  state.health.push({ dependency: 'provider:first', scope: 'provider', state: 'failing', since: null, last_ok: null, last_error: 'down' });
+  state.models.options = { at: null, error: 'triage: Provider first HTTP 503', requested_at: null, triage: [],
+    chat: [{ id: 'meridian-auto/claude-opus-5-5', name: 'Opus auto', efforts: ['high', 'max'] }, { id: 'meridian-roar/claude-sonnet-5-5', name: 'Sonnet roar', efforts: ['low'] }] };
+  state.models.chat = { model: 'meridian-auto/claude-opus-5-5', effort: 'max', default_model: 'meridian-auto/claude-opus-5-5', overridden: true };
+  board(state);
+  const health = screen.getByRole('region', { name: 'Health' });
+  await waitFor(() => expect(fetcher.mock.calls.some(([path, init]) => path === '/api/setting' && String(init?.body) === '{"refresh":true}')).toBe(true));
+  const triage = health.querySelector<HTMLElement>('[data-node="triage"]')!;
+  expect((within(triage).getByLabelText('Triage model') as HTMLSelectElement).value).toBe('claude-haiku-5-5');
+  expect(within(triage).getByRole('alert').textContent).toBe('triage: Provider first HTTP 503');
+  const chat = health.querySelector<HTMLElement>('[data-node="openchamber"]')!;
+  const effort = within(chat).getByLabelText('Chat effort') as HTMLSelectElement;
+  expect([...effort.options].map((option) => option.value)).toEqual(['', 'high', 'max']);
+  expect(effort.value).toBe('max');
+  fetcher.mockClear();
+  fireEvent.change(within(chat).getByLabelText('Chat model'), { target: { value: 'meridian-roar/claude-sonnet-5-5' } });
+  await waitFor(() => expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').map(([, init]) => JSON.parse(String(init!.body)))).toEqual([
+    { key: 'chat.model', value: 'meridian-roar/claude-sonnet-5-5' }, { key: 'chat.effort', value: '' }]));
+});
+
 test('a batch in triage shows at the top of Needs you before its ticket exists', async () => {
   const state = uiState();
   state.triaging = [{ id: 20, title: 'Fresh request', source: 'teamsrelay', account: 'me@example.invalid', created_at: '2026-11-06T05:58:00.000000Z', job: 'running',

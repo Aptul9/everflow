@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { approve } from '../dispatcher/approval.ts';
 import { transaction } from '../dispatcher/db.ts';
 import { retry } from '../dispatcher/jobs.ts';
+import { requestModelOptions, saveSetting } from '../dispatcher/settings.ts';
 import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, muteBatch, muteTicket, pauseInput, TicketError } from '../dispatcher/tickets.ts';
 import { HttpError, instance, withDatabase } from './instance.ts';
 import type { WebInstance } from './instance.ts';
@@ -92,6 +93,19 @@ export function ticketGet(request: Request, id: string): Response {
     const current = instance();
     if (!allowedHost(request.headers.get('host'), current.port)) throw new HttpError(403, 'host.forbidden', 'Local Host required');
     return json(request, withDatabase(false, (db) => ticketDetail(db, validId(id))));
+  } catch (error) { return errorResponse(error); }
+}
+
+const settingBody = z.union([z.strictObject({ key: z.string().min(1).max(64), value: z.string().max(200) }), z.strictObject({ refresh: z.literal(true) })]);
+
+// Saves a model/effort choice, or asks the daemon to refresh the picker options
+export async function settingPost(request: Request): Promise<Response> {
+  try {
+    const current = instance();
+    guardPost(request.headers, current);
+    const input = await body(request, settingBody) as { key: string; value: string } | { refresh: true };
+    const result = withDatabase(true, (db) => ({ setting: 'refresh' in input ? requestModelOptions(db) : saveSetting(db, input.key, input.value) }));
+    return Response.json(result, { headers: { 'cache-control': 'no-store' } });
   } catch (error) { return errorResponse(error); }
 }
 

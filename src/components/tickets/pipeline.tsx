@@ -10,7 +10,46 @@ import { Time } from './ticket-card.tsx';
 
 type State = Health['state'];
 type Post = (key: string, path: string) => Promise<unknown>;
-type PausePost = (key: string, path: string, input: { source: string; account: string; paused: boolean }) => Promise<unknown>;
+type PausePost = (key: string, path: string, input: Record<string, string | boolean>) => Promise<unknown>;
+type Choice = OverviewState['models']['triage'];
+type ModelOption = OverviewState['models']['options']['chat'][number];
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+// Model and effort the next triage call or the next new ticket chat starts with; empty picks the config default
+function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options: ModelOption[]; disabled: boolean; post: PausePost; error?: string | undefined }) {
+  const { scope, choice } = props;
+  const list = props.options.some((option) => option.id === choice.model) ? props.options
+    : [{ id: choice.model, name: choice.model, efforts: EFFORTS }, ...props.options];
+  const efforts = list.find((option) => option.id === choice.model)?.efforts.length ? list.find((option) => option.id === choice.model)!.efforts : EFFORTS;
+  const save = (key: string, value: string) => props.post(`setting:${key}`, '/api/setting', { key, value });
+  const id = `${scope}-model`;
+  return <div className="mt-2 border-t pt-2">
+    <p className="mb-1 text-[11px] text-muted-foreground">{scope === 'triage' ? 'Next triage call' : 'Next new ticket chat'}</p>
+    <div className="flex min-w-0 gap-1.5">
+      <label htmlFor={id} className="sr-only">{scope === 'triage' ? 'Triage model' : 'Chat model'}</label>
+      <select id={id} value={choice.model} disabled={props.disabled} title={choice.model}
+        onChange={(event) => {
+          const model = event.target.value;
+          const next = list.find((option) => option.id === model)?.efforts ?? [];
+          void (async () => {
+            await save(`${scope}.model`, model === choice.default_model ? '' : model);
+            if (choice.effort && next.length && !next.includes(choice.effort)) await save(`${scope}.effort`, '');
+          })().catch(() => {});
+        }}
+        className="h-8 min-w-0 flex-1 truncate rounded-md border bg-card px-1.5 text-xs disabled:opacity-50">
+        {list.map((option) => <option key={option.id} value={option.id}>{option.id === choice.default_model ? `${option.name} (default)` : option.name}</option>)}
+      </select>
+      <label htmlFor={`${id}-effort`} className="sr-only">{scope === 'triage' ? 'Triage effort' : 'Chat effort'}</label>
+      <select id={`${id}-effort`} value={choice.effort ?? ''} disabled={props.disabled}
+        onChange={(event) => { void save(`${scope}.effort`, event.target.value).catch(() => {}); }}
+        className="h-8 shrink-0 rounded-md border bg-card px-1.5 text-xs disabled:opacity-50">
+        <option value="">Default effort</option>
+        {efforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+      </select>
+    </div>
+    {props.error && <p role="alert" className="mt-1 text-[11px] text-destructive">{props.error}</p>}
+  </div>;
+}
 
 const rank: Record<State, number> = { failing: 5, stopped: 4, retrying: 3, unknown: 2, disabled: 1, ok: 0 };
 const dot: Record<State, string> = {
@@ -143,6 +182,18 @@ export function Pipeline({ state, expired = false, pending = new Set(), errors =
   const problems = jobs.length + quarantine.length + triage.length;
   const healthy = problems === 0 && summary.every(([, value]) => rank[value] < rank.retrying);
   const shown = open ?? !healthy;
+  const options = state.models.options;
+  const asked = useRef(false);
+  // Picker lists come from the daemon; ask it once per page when they are missing or older than 10 minutes
+  useEffect(() => {
+    if (!shown || asked.current || expired || !state.tickets_enabled || options.requested_at) return;
+    if (options.at && Date.now() - Date.parse(options.at) < 600_000) return;
+    asked.current = true;
+    void post('setting:refresh', '/api/setting', { refresh: true }).catch(() => {});
+  }, [shown, expired, state.tickets_enabled, options.at, options.requested_at, post]);
+  const pickerError = (scope: 'triage' | 'chat') => errors[`setting:${scope}.model`] ?? errors[`setting:${scope}.effort`]
+    ?? options.error?.split('; ').find((part) => part.startsWith(`${scope}:`));
+  const pickerDisabled = expired || !state.tickets_enabled || [...pending].some((key) => key.startsWith('setting:'));
   const paused = accounts.filter((item) => item.paused);
   const toggle = (source: string, item: Health) => {
     const account = item.dependency.slice(source.length + 1);
@@ -252,6 +303,7 @@ export function Pipeline({ state, expired = false, pending = new Set(), errors =
             {providers.length === 0 && <li className="py-1 text-xs text-muted-foreground">No providers configured.</li>}
           </ul>
           <Agents agents={state.agents} kind="triage" />
+          <ModelPicker scope="triage" choice={state.models.triage} options={options.triage} disabled={pickerDisabled} post={post} error={pickerError('triage')} />
         </Node>
       </Stage>
 
@@ -276,6 +328,7 @@ export function Pipeline({ state, expired = false, pending = new Set(), errors =
             {openchamber.map((item) => <Row key={item.dependency} name={item.dependency === 'opencode' ? 'Server' : item.dependency.replace(/^opencode:/, '')} item={item} />)}
           </ul>
           <Agents agents={state.agents} kind="chat" />
+          <ModelPicker scope="chat" choice={state.models.chat} options={options.chat} disabled={pickerDisabled} post={post} error={pickerError('chat')} />
         </Node>
       </Stage>
     </div>}

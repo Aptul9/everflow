@@ -15,6 +15,9 @@ const sourceMuteTable = `CREATE TABLE IF NOT EXISTS source_mute (
   source TEXT NOT NULL, account TEXT NOT NULL, native_id TEXT NOT NULL,
   PRIMARY KEY (source, account, native_id));`;
 
+// Choices made on the page that override config defaults (triage and chat model/effort)
+const settingTable = `CREATE TABLE IF NOT EXISTS setting (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);`;
+
 // Source accounts paused on the page: their new input waits, untriaged and unforwarded, until switched back on
 const inputPauseTable = `CREATE TABLE IF NOT EXISTS input_pause (
   source TEXT NOT NULL, account TEXT NOT NULL, paused_at TEXT NOT NULL, PRIMARY KEY (source, account));`;
@@ -195,6 +198,7 @@ function refineBatch(db: DatabaseSync): void {
   }
   if (!hasTable(db, 'source_mute')) db.exec(sourceMuteTable);
   if (!hasTable(db, 'input_pause')) db.exec(inputPauseTable);
+  if (!hasTable(db, 'setting')) db.exec(settingTable);
 }
 
 function scopeLegacyKeys(db: DatabaseSync): void {

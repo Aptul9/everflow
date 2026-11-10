@@ -15,8 +15,10 @@ import type { OwnedProcess } from './daemon.ts';
 import { ingest, IngestError, schedule, sourceStart } from './ingest.ts';
 import { claim, complete, defer, enqueue, fail, hasPendingInput, healthError, healthOk, owns, startRenewal } from './jobs.ts';
 import type { Job } from './jobs.ts';
-import { handleTriage } from './kb-agent.ts';
+import { handleTriage, triageModels } from './kb-agent.ts';
 import { connect } from './opencode.ts';
+import type { Peer } from './opencode.ts';
+import { storeModelOptions, takeModelRequest } from './settings.ts';
 import { sourceAccounts } from './policy.ts';
 import { utc } from './time.ts';
 import { createKernel, sameProcess, spawnedIdentity } from '../windows/kernel.ts';
@@ -290,6 +292,19 @@ export function scheduleMaintenance(db: DatabaseSync, cfg: Config, at?: string):
 
 export function heartbeat(db: DatabaseSync, metadata: Record<string, unknown>, at?: string) { healthOk(db, 'daemon', at, metadata); }
 
+// Picker options: triage models from the first triage route, chat models from OpenChamber. One side failing keeps the other.
+export async function modelOptions(cfg: Config, peer: Pick<Peer, 'models'> = connect(cfg), fetcher: typeof fetch = fetch) {
+  const [triage, chat] = await Promise.allSettled([triageModels(cfg, fetcher), peer.models()]);
+  const message = (result: PromiseSettledResult<unknown>) => result.status === 'rejected' ? String((result.reason as Error)?.message ?? result.reason).slice(0, 200) : null;
+  return {
+    triage: triage.status === 'fulfilled' ? triage.value : [],
+    chat: chat.status === 'fulfilled' ? chat.value.filter((model) => model.enabled !== false && model.status !== 'deprecated')
+      .map((model) => ({ id: `${model.providerID}/${model.modelID}`, name: model.name, efforts: model.variants.map((variant) => variant.id) }))
+      .sort((a, b) => a.id.localeCompare(b.id)) : [],
+    at: utc(), error: [message(triage) && `triage: ${message(triage)}`, message(chat) && `chat: ${message(chat)}`].filter(Boolean).join('; ') || null,
+  };
+}
+
 export async function runJob(cfg: Config, db: DatabaseSync, job: Job, options: ChatOptions = {}) {
   if (job.kind === 'purge') {
     const now = () => utc(options.clock?.());
@@ -336,11 +351,22 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
     const failure = Object.assign(new DaemonError('runtime.failed'), fields);
     healthError(db, cfg, 'daemon', 'runtime.failed'); log({ source: 'daemon', code: 'runtime.failed', ...fields }); options.onError?.(failure);
   };
+  let refreshing = false;
+  // The page asks for picker options; one fetch at a time, failures kept with the old lists so the page can show them
+  const refreshModels = () => {
+    if (refreshing || !takeModelRequest(db)) return;
+    refreshing = true;
+    void modelOptions(cfg).then((value) => { if (!stopped) storeModelOptions(db, value); })
+      .catch((error: unknown) => log({ source: 'daemon', code: 'models.refresh-failed', ...failureFields(error, 'models.refresh') }))
+      .finally(() => { refreshing = false; });
+  };
   function tick() {
     if (stopped || ticking) return;
     ticking = true;
     let stage = 'runtime.schedule';
     try {
+      stage = 'runtime.models'; refreshModels();
+      stage = 'runtime.schedule';
       schedule(db, cfg); stage = 'runtime.maintenance'; scheduleMaintenance(db, cfg);
       for (const id of reconcile) if (['done', 'cancelled', 'parked'].includes(String(db.prepare('SELECT state FROM job WHERE id=?').get(id)?.state))) reconcile.delete(id);
       for (;;) {
