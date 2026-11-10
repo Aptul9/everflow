@@ -134,6 +134,32 @@ test('the popup renders light Markdown from the AI fields safely, and the close 
   expect(close.className).not.toMatch(/(^|\s)focus:ring-2/);
 });
 
+test('a healthy pipeline folds into one status line with the problem count, and opens itself when something fails', () => {
+  const state = uiState();
+  const at = '2026-11-06T06:00:00.000000Z';
+  state.health = [{ dependency: 'daemon', scope: 'daemon', state: 'ok', since: at, last_ok: at, last_error: null }];
+  state.problems = { jobs: [], quarantine: [], triage: [] };
+  board(state);
+  const health = screen.getByRole('region', { name: 'Health' });
+  expect(health.querySelector('#pipeline-diagram')).toBeNull();
+  expect(health.textContent).toContain('No problems');
+  expect(screen.queryByRole('region', { name: 'Problems' })).toBeNull();
+  expect(within(health).getByRole('button', { name: /Show/ }).getAttribute('aria-expanded')).toBe('false');
+  cleanup();
+  board();
+  expect(screen.getByRole('region', { name: 'Health' }).querySelector('#pipeline-diagram')).not.toBeNull();
+  expect(screen.getByRole('region', { name: 'Problems' })).toBeTruthy();
+});
+
+test('cards are flat with a status stripe in the column color', () => {
+  board();
+  const stripe = (card: HTMLElement) => card.querySelector('[data-stripe]')!.className;
+  expect(ticket().className).not.toContain('shadow-xs');
+  expect(stripe(ticket())).toContain('bg-primary');
+  expect(stripe(screen.getByRole('article', { name: 'Ticket #5: Failed work' }))).toContain('bg-destructive');
+  expect(stripe(screen.getByRole('heading', { name: 'Batch #10: Skipped source' }).closest<HTMLElement>('[data-batch-id]')!)).toContain('bg-input');
+});
+
 test('a closed ticket card keeps its sum-up instead of the close reason', () => {
   const state = uiState();
   Object.assign(state.groups.done_today[0]!, { summary: 'Install request from Giovanni', report_line: 'Closed manually' });

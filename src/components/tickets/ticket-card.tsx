@@ -211,8 +211,9 @@ export function TicketCard(props: {
   const starting = props.pending.has(keys.start);
   return <article tabIndex={-1} aria-labelledby={heading} data-ticket-id={ticket.id} draggable={actions}
     onDragStart={(event) => { event.dataTransfer?.setData('text/plain', `#${ticket.id}`); props.onDrag?.(true); }} onDragEnd={() => props.onDrag?.(false)}
-    className={cn('group/card scroll-mt-28 rounded-lg border bg-card shadow-xs transition-[box-shadow,border-color] hover:border-foreground/15 hover:shadow-sm', actions && 'cursor-grab active:cursor-grabbing',
+    className={cn('group/card relative scroll-mt-28 overflow-hidden rounded-lg border bg-card transition-colors hover:border-foreground/20', actions && 'cursor-grab active:cursor-grabbing',
       'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring', props.selected && 'border-primary/40 bg-accent/40')}>
+    <span data-stripe aria-hidden="true" className={cn('absolute inset-y-0 left-0 w-1', style.bar)} />
     <div className="space-y-2 p-3">
       <div className="flex min-w-0 items-center gap-2 text-xs">
         {props.enabled && <Checkbox checked={props.selected} onCheckedChange={(checked) => props.onSelect(checked === true)} aria-label={`Select ticket #${ticket.id}`} className="size-4.5" />}

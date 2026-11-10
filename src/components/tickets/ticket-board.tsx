@@ -44,7 +44,8 @@ function BatchCard(props: { batch: SkippedBatch; enabled: boolean; expired: bool
   const error = props.errors[key] || props.errors[muteKey] || props.errors[clearKey];
   return <div data-batch-id={batch.id} draggable={props.enabled}
     onDragStart={(event) => { event.dataTransfer?.setData('text/plain', `batch #${batch.id}`); props.onDrag(true); }} onDragEnd={() => props.onDrag(false)}
-    className={cn('rounded-lg border bg-card shadow-xs', props.enabled && 'cursor-grab active:cursor-grabbing', props.selected && 'border-primary/40 bg-accent/40')}>
+    className={cn('relative overflow-hidden rounded-lg border bg-card transition-colors hover:border-foreground/20', props.enabled && 'cursor-grab active:cursor-grabbing', props.selected && 'border-primary/40 bg-accent/40')}>
+    <span data-stripe aria-hidden="true" className={cn('absolute inset-y-0 left-0 w-1', tones.skipped.bar)} />
     <div className="space-y-2 p-3">
       <div className="flex min-w-0 items-center gap-2 text-xs">
         {props.enabled && <Checkbox checked={props.selected} onCheckedChange={(checked) => props.onSelect(checked === true)} aria-label={`Select batch #${batch.id}`} className="size-4.5" />}

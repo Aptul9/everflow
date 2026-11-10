@@ -71,7 +71,8 @@ function Stage({ label, children, className }: { label: string; children: React.
 
 export function Pipeline({ state }: { state: OverviewState }) {
   const box = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(true);
+  // null until toggled: the diagram then follows health, folded while everything works
+  const [open, setOpen] = useState<boolean | null>(null);
   const [paths, setPaths] = useState<{ key: string; d: string; state: State; end: [number, number] }[]>([]);
   const health = state.health;
   const sources = health.filter((item) => item.scope === 'source');
@@ -105,6 +106,11 @@ export function Pipeline({ state }: { state: OverviewState }) {
     ['daemon', 'triage', daemonState], ['triage', 'tickets', triageState], ['tickets', 'openchamber', chatState],
   ];
   const signature = JSON.stringify([edges, worstOf(inputs.map((input) => input.state))]);
+  const summary: [string, State][] = [['Inputs', worstOf(inputs.map((input) => input.state))], ['Daemon', daemonState], ['Triage', triageState], ['Chats', chatState]];
+  const { jobs, quarantine, triage } = state.problems;
+  const problems = jobs.length + quarantine.length + triage.length;
+  const healthy = problems === 0 && summary.every(([, value]) => rank[value] < rank.retrying);
+  const shown = open ?? !healthy;
 
   useEffect(() => {
     const root = box.current;
@@ -136,19 +142,22 @@ export function Pipeline({ state }: { state: OverviewState }) {
     observer.observe(root);
     for (const node of root.querySelectorAll('[data-node]')) observer.observe(node);
     return () => observer.disconnect();
-  }, [signature, open]);
+  }, [signature, shown]);
 
-  const summary: [string, State][] = [['Inputs', worstOf(inputs.map((input) => input.state))], ['Daemon', daemonState], ['Triage', triageState], ['Chats', chatState]];
-  return <section aria-label="Health" className="rounded-xl border bg-card/60 p-4">
-    <div className={cn('flex flex-wrap items-center gap-x-3 gap-y-1', open && 'mb-3')}>
+  return <section aria-label="Health" className={cn('rounded-xl border bg-card/60', shown ? 'p-4' : 'px-4 py-2')}>
+    <div className={cn('flex flex-wrap items-center gap-x-3 gap-y-1', shown && 'mb-3')}>
       <h2 className="text-sm font-semibold">Pipeline</h2>
-      {open ? <p className="hidden text-xs text-muted-foreground sm:block">Inputs flow through the daemon and triage into tickets and approved chats.</p>
-        : <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">{summary.map(([name, value]) => <li key={name} className="inline-flex items-center gap-1.5"><Dot state={value} />{name}</li>)}</ul>}
-      <Button type="button" variant="ghost" size="sm" className="ml-auto h-8 text-muted-foreground" aria-expanded={open} aria-controls={open ? 'pipeline-diagram' : undefined} onClick={() => setOpen(!open)}>
-        {open ? 'Hide' : 'Show'}<ChevronDown aria-hidden="true" className={cn('transition-transform', open && 'rotate-180')} />
+      {shown ? <p className="hidden text-xs text-muted-foreground sm:block">Inputs flow through the daemon and triage into tickets and approved chats.</p>
+        : <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">{summary.map(([name, value]) => <li key={name} className="inline-flex items-center gap-1.5"><Dot state={value} />{name}</li>)}
+          <li className={cn('inline-flex items-center gap-1.5', problems > 0 && 'font-medium text-warning')}>
+            {problems > 0 ? <TriangleAlert aria-hidden="true" className="size-3.5" /> : <CircleCheck aria-hidden="true" className="size-3.5 text-success" />}
+            {problems > 0 ? `${problems} problem${problems === 1 ? '' : 's'}` : 'No problems'}
+          </li></ul>}
+      <Button type="button" variant="ghost" size="sm" className="ml-auto h-8 text-muted-foreground" aria-expanded={shown} aria-controls={shown ? 'pipeline-diagram' : undefined} onClick={() => setOpen(!shown)}>
+        {shown ? 'Hide' : 'Show'}<ChevronDown aria-hidden="true" className={cn('transition-transform', shown && 'rotate-180')} />
       </Button>
     </div>
-    {open && <div ref={box} id="pipeline-diagram" className="relative flex flex-col gap-8 lg:grid lg:grid-cols-[minmax(230px,1.4fr)_repeat(4,minmax(150px,1fr))] lg:items-center lg:gap-x-12">
+    {shown && <div ref={box} id="pipeline-diagram" className="relative flex flex-col gap-8 lg:grid lg:grid-cols-[minmax(230px,1.4fr)_repeat(4,minmax(150px,1fr))] lg:items-center lg:gap-x-12">
       <svg aria-hidden="true" className="pointer-events-none absolute inset-0 size-full overflow-visible">
         {paths.map((path) => <g key={path.key}>
           <path d={path.d} fill="none" stroke={stroke[path.state]} strokeOpacity={path.state === 'ok' ? 0.25 : 0.35} strokeWidth={6} strokeLinecap="round" />
@@ -255,18 +264,19 @@ export function Problems(props: { state: OverviewState; expired: boolean; pendin
   const { jobs, quarantine, triage } = props.state.problems;
   const count = jobs.length + quarantine.length + triage.length;
   const [open, setOpen] = useState(true);
-  return <section aria-label="Problems" className={cn('rounded-xl border p-3', count > 0 ? 'border-warning/30 bg-warning-soft/40' : 'bg-card/60')}>
+  // With nothing to fix, the pipeline status line already says so
+  if (count === 0) return null;
+  return <section aria-label="Problems" className="rounded-xl border border-warning/30 bg-warning-soft/40 p-3">
     <div className="flex items-center gap-2">
-      {count > 0 ? <TriangleAlert aria-hidden="true" className="size-4 text-warning" /> : <CircleCheck aria-hidden="true" className="size-4 text-success" />}
+      <TriangleAlert aria-hidden="true" className="size-4 text-warning" />
       <h2 className="text-sm font-semibold">Problems</h2>
-      <span className={cn('rounded-full px-1.5 text-xs font-semibold tabular-nums', count > 0 ? 'bg-warning text-white' : 'bg-muted text-muted-foreground')}>{count}</span>
-      {count === 0 && <p className="text-sm text-muted-foreground">No recorded problems.</p>}
-      {count > 0 && <p className="hidden text-xs text-muted-foreground sm:block">{jobs.length} parked · {quarantine.length} quarantined · {triage.length} invalid triage</p>}
-      {count > 0 && <Button type="button" variant="ghost" size="sm" className="ml-auto h-8 text-muted-foreground" aria-expanded={open} aria-controls={open ? 'problem-list' : undefined} onClick={() => setOpen(!open)}>
+      <span className="rounded-full bg-warning px-1.5 text-xs font-semibold text-white tabular-nums">{count}</span>
+      <p className="hidden text-xs text-muted-foreground sm:block">{jobs.length} parked · {quarantine.length} quarantined · {triage.length} invalid triage</p>
+      <Button type="button" variant="ghost" size="sm" className="ml-auto h-8 text-muted-foreground" aria-expanded={open} aria-controls={open ? 'problem-list' : undefined} onClick={() => setOpen(!open)}>
         {open ? 'Hide' : 'Show'}<ChevronDown aria-hidden="true" className={cn('transition-transform', open && 'rotate-180')} />
-      </Button>}
+      </Button>
     </div>
-    {count > 0 && open && <ul id="problem-list" className="mt-2.5 grid gap-2 lg:grid-cols-2">
+    {open && <ul id="problem-list" className="mt-2.5 grid gap-2 lg:grid-cols-2">
       {jobs.map((job) => <Problem key={`job:${job.id}`} id={`problem-job-${job.id}`} stage={job.kind === 'triage' ? 'Triage' : 'Chat'}
         title={`${job.ticket === null ? 'Unbound job' : 'Job'} #${job.id} · ${job.kind}${job.ticket === null ? '' : ` · Ticket #${job.ticket}`}`}
         at={job.updated_at} error={job.last_error} detail={job.parse_error} raw={job.raw} alert={props.errors[`job:${job.id}:retry`]}>
