@@ -132,6 +132,27 @@ test('page clear hides a skipped batch, keeps its messages and refuses other bat
   } finally { release(current); }
 });
 
+test('a chat muted at the source skips triage unless a message mentions the owner, and unmuting restores triage', () => {
+  const f = instance();
+  using db = openDb(f.path);
+  const chat = 'chat-me@example.invalid';
+  const outcome = () => String(db.prepare('SELECT outcome FROM batch ORDER BY id DESC').get()!.outcome);
+  expect(ingest(db, { source: 'teams', account: 'Me@Example.invalid', muted: [chat, 'other-chat'] })).toBe(true);
+  ingest(db, message('me@example.invalid', 'quiet-1'));
+  schedule(db, f.cfg, later(10));
+  expect(outcome()).toBe('muted');
+  expect(db.prepare("SELECT COUNT(*) AS n FROM job WHERE kind='triage'").get()!.n).toBe(0);
+  ingest(db, message('me@example.invalid', 'tagged-1', { sent_at: later(20), ref: { mentions_me: true } }));
+  expect(schedule(db, f.cfg, later(30))).toHaveLength(1);
+  expect(outcome()).toBe('triage');
+  ingest(db, { source: 'teams', account: 'me@example.invalid', muted: [] });
+  ingest(db, message('me@example.invalid', 'after-unmute', { conversation_id: 'other-chat', sent_at: later(60) }));
+  schedule(db, f.cfg, later(70));
+  expect(outcome()).toBe('triage');
+  expect(db.prepare("SELECT COUNT(*) AS n FROM batch WHERE outcome='muted'").get()!.n).toBe(1);
+  expect(() => ingest(db, { source: 'teams', account: 'me@example.invalid', muted: [''] })).toThrow();
+});
+
 test('a muted chat stays out of triage until the mute ends, and own-only batches stay answered', () => {
   const f = instance();
   using db = openDb(f.path);

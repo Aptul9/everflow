@@ -10,6 +10,11 @@ const batchColumns = `
   created_at TEXT NOT NULL, delivered_at TEXT, done_at TEXT,
   outcome TEXT, ticket INTEGER REFERENCES ticket, cleared_at TEXT`;
 
+// Conversations muted in the source app, replaced per source account by the watcher
+const sourceMuteTable = `CREATE TABLE IF NOT EXISTS source_mute (
+  source TEXT NOT NULL, account TEXT NOT NULL, native_id TEXT NOT NULL,
+  PRIMARY KEY (source, account, native_id));`;
+
 const schema = `
 CREATE TABLE IF NOT EXISTS cursor (
   source TEXT NOT NULL, account TEXT NOT NULL, since TEXT NOT NULL,
@@ -106,6 +111,7 @@ CREATE TABLE IF NOT EXISTS quarantine (
   id INTEGER PRIMARY KEY, source TEXT NOT NULL,
   line TEXT NOT NULL CHECK (length(CAST(line AS BLOB)) <= 4096), error TEXT NOT NULL, at TEXT NOT NULL,
   replayed_at TEXT, truncated INTEGER NOT NULL DEFAULT 0 CHECK (truncated IN (0,1)));
+${sourceMuteTable}
 `;
 
 function version(db: DatabaseSync): number {
@@ -175,8 +181,10 @@ function refineConversation(db: DatabaseSync): void {
 }
 
 function refineBatch(db: DatabaseSync): void {
-  if (db.prepare('PRAGMA table_info(batch)').all().some((column) => column.name === 'cleared_at')) return;
-  transaction(db, () => db.exec('ALTER TABLE batch ADD COLUMN cleared_at TEXT'));
+  if (!db.prepare('PRAGMA table_info(batch)').all().some((column) => column.name === 'cleared_at')) {
+    transaction(db, () => db.exec('ALTER TABLE batch ADD COLUMN cleared_at TEXT'));
+  }
+  if (!hasTable(db, 'source_mute')) db.exec(sourceMuteTable);
 }
 
 function scopeLegacyKeys(db: DatabaseSync): void {

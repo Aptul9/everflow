@@ -29,6 +29,7 @@ const messageSchema = z.looseObject({
   ref: refSchema.default({}),
 });
 const inventorySchema = z.strictObject({ source: sourceSchema, accounts: accountsSchema });
+const mutedSchema = z.strictObject({ source: sourceSchema, account: accountSchema, muted: z.array(idSchema).max(10_000) });
 const checkpointSchema = z.strictObject({
   source: sourceSchema, checkpoint: timestamp, accounts: accountsSchema.optional(),
   coverage: z.enum(['saved-history-replay', 'recent-topics']).optional(), observed_at: timestamp.optional(),
@@ -128,6 +129,16 @@ export function ingest(db: DatabaseSync, record: unknown): boolean {
       return true;
     });
   }
+  if ('muted' in record) {
+    const state = parse(mutedSchema, record);
+    return transaction(db, () => {
+      const account = state.account.toLowerCase();
+      db.prepare('DELETE FROM source_mute WHERE source=? AND account=?').run(state.source, account);
+      const insert = db.prepare('INSERT OR IGNORE INTO source_mute(source,account,native_id) VALUES (?,?,?)');
+      for (const id of state.muted) insert.run(state.source, account, id);
+      return true;
+    });
+  }
   if ('ref' in record) jsonField(record.ref, 'ref');
   if ('attachments' in record) jsonField(record.attachments, 'attachments');
   const message = parse(messageSchema, record);
@@ -203,7 +214,7 @@ export function schedule(db: DatabaseSync, cfg: Config, at?: string): number[] {
     const now = utc(at);
     const scheduled = new Set<number>();
     for (const conversation of db.prepare('SELECT DISTINCT c.id,c.source FROM conversation c JOIN message m ON m.conversation=c.id WHERE m.batch IS NULL ORDER BY c.id').all()) {
-      const pending = db.prepare('SELECT id,sent_at,sender_is_me FROM message WHERE conversation=? AND batch IS NULL ORDER BY id').all(conversation.id!);
+      const pending = db.prepare("SELECT id,sent_at,sender_is_me,json_extract(ref,'$.mentions_me') AS mention FROM message WHERE conversation=? AND batch IS NULL ORDER BY id").all(conversation.id!);
       const last = pending.map((message) => utc(String(message.sent_at))).sort().at(-1)!;
       if (last > shiftMinutes(now, -Number(cfg.windows[String(conversation.source)] ?? 300) / 60)) continue;
       const existing = triageForConversation(db, Number(conversation.id));
@@ -217,7 +228,10 @@ export function schedule(db: DatabaseSync, cfg: Config, at?: string): number[] {
       }
       const own = pending.every((message) => message.sender_is_me === 1);
       const until = db.prepare('SELECT muted_until FROM conversation WHERE id=?').get(conversation.id!)?.muted_until;
-      const muted = !own && typeof until === 'string' && utc(until) > now;
+      // Muted in the source app: only an @mention of the owner reaches triage
+      const sourceMuted = db.prepare(`SELECT 1 FROM source_mute s JOIN conversation c ON s.source=c.source AND s.account=lower(c.account) AND s.native_id=c.native_id
+        WHERE c.id=?`).get(conversation.id!) !== undefined && !pending.some((message) => message.mention === 1);
+      const muted = !own && (typeof until === 'string' && utc(until) > now || sourceMuted);
       const id = Number(db.prepare('INSERT INTO batch(conversation,state,created_at,done_at,outcome) VALUES (?,?,?,?,?)')
         .run(conversation.id!, own || muted ? 'done' : 'pending', now, own || muted ? now : null, own ? 'answered' : muted ? 'muted' : 'pending').lastInsertRowid);
       db.prepare('UPDATE message SET batch=? WHERE conversation=? AND batch IS NULL').run(id, conversation.id!);

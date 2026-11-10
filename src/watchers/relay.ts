@@ -7,7 +7,7 @@ import type { Emit, SourceMessage } from './source.ts';
 export interface RelayOptions { host: string; root: string; owner: string; maxRows?: number; maxAccounts?: number; timeoutMs?: number; maxBytes?: number }
 export type RelayQuery = (path: string, sql: string, signal?: AbortSignal) => Promise<Record<string, any>[]>;
 export type SshSpawn = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
-export interface RelaySnapshot { accounts: { slot: number; email: string; scanAt: number; messages: SourceMessage[] }[]; errors: { code: string; account: string }[] }
+export interface RelaySnapshot { accounts: { slot: number; email: string; scanAt: number; muted: string[]; messages: SourceMessage[] }[]; errors: { code: string; account: string }[] }
 export function shellQuote(value: string): string {
   if (value.includes('\0')) throw new SourceError('teamsrelay', 'relay.invalid-argument');
   return "'" + value.replaceAll("'", "'\"'\"'") + "'";
@@ -96,7 +96,8 @@ function normalize(email: string, slot: number, raw: Record<string, any>): Sourc
     message_id: `${email}/${raw.chat};messageid=${raw.mid}`, sender: String(raw.author || ''), sender_name: String(raw.author || ''), sender_is_me: raw.mine === true || raw.mine === 1,
     sent_at: new Date(Number(raw.mid)).toISOString(), text: deleted ? '' : text,
     attachments: deleted ? [] : files.map((file: any) => ({ name: file && typeof file === 'object' ? String(file.name || file.title || '?') : String(file ?? '?'), size: null })),
-    ref: { chat: raw.chat, id: raw.mid, account: email, relay_slot: slot, ...(quote ? { quote } : {}), ...(deleted ? { deleted: true } : {}) } };
+    ref: { chat: raw.chat, id: raw.mid, account: email, relay_slot: slot, ...(quote ? { quote } : {}), ...(deleted ? { deleted: true } : {}),
+      ...(extra.mentionsMe === true ? { mentions_me: true } : {}) } };
 }
 
 export async function readRelay(options: RelayOptions, floor: number, signal?: AbortSignal, input?: RelayQuery): Promise<RelaySnapshot> {
@@ -117,7 +118,7 @@ export async function readRelay(options: RelayOptions, floor: number, signal?: A
   for (const slot of ids) {
     signal?.throwIfAborted();
     try {
-      const rows = await query(posix.join(options.root, String(slot), 'messages.db'), `SELECT json_object('state',json((SELECT json_group_object(k,v) FROM state WHERE k IN ('me','last_scan_ts','state'))),'messages',json((SELECT json_group_array(json_object('chat',chat,'mid',mid,'author',author,'text',text,'mine',mine,'extra',extra)) FROM (SELECT chat,mid,author,substr(text,1,2000) AS text,mine,extra FROM chat_messages WHERE mid GLOB '[0-9]*' AND mid NOT GLOB '*[^0-9]*' AND CAST(mid AS INTEGER)>=${floor} ORDER BY CAST(mid AS INTEGER),chat LIMIT ${maxRows + 1})))) AS snapshot`, signal);
+      const rows = await query(posix.join(options.root, String(slot), 'messages.db'), `SELECT json_object('state',json((SELECT json_group_object(k,v) FROM state WHERE k IN ('me','last_scan_ts','state'))),'muted',json((SELECT json_group_array(name) FROM chats WHERE muted=1)),'messages',json((SELECT json_group_array(json_object('chat',chat,'mid',mid,'author',author,'text',text,'mine',mine,'extra',extra)) FROM (SELECT chat,mid,author,substr(text,1,2000) AS text,mine,extra FROM chat_messages WHERE mid GLOB '[0-9]*' AND mid NOT GLOB '*[^0-9]*' AND CAST(mid AS INTEGER)>=${floor} ORDER BY CAST(mid AS INTEGER),chat LIMIT ${maxRows + 1})))) AS snapshot`, signal);
       if (rows.length !== 1) throw new SourceError('teamsrelay', 'relay.saved-shape');
       const saved = jsonObject(rows[0]!.snapshot), state = jsonObject(saved.state), me = jsonObject(state.me || '{}');
       const email = accountNames([me.email])[0]!;
@@ -125,7 +126,8 @@ export async function readRelay(options: RelayOptions, floor: number, signal?: A
       if (!Number.isSafeInteger(scanAt) || scanAt <= 0) throw new SourceError('teamsrelay', 'relay.scan-state');
       if (!Array.isArray(saved.messages)) throw new SourceError('teamsrelay', 'relay.saved-shape');
       if (saved.messages.length > maxRows) throw new SourceError('teamsrelay', 'relay.result-limit');
-      snapshot.accounts.push({ slot, email, scanAt, messages: saved.messages.map((message: any) => normalize(email, slot, message)) });
+      if (!Array.isArray(saved.muted) || saved.muted.some((name: unknown) => typeof name !== 'string' || !name)) throw new SourceError('teamsrelay', 'relay.saved-shape');
+      snapshot.accounts.push({ slot, email, scanAt, muted: [...saved.muted as string[]].sort(), messages: saved.messages.map((message: any) => normalize(email, slot, message)) });
     } catch (error) {
       snapshot.errors.push({ code: error instanceof SourceError ? error.code : 'relay.store-unavailable', account: `slot:${slot}` });
     }
@@ -133,12 +135,19 @@ export async function readRelay(options: RelayOptions, floor: number, signal?: A
   return snapshot;
 }
 export function createRelayState(since: string, expectedAccounts: string[] = []) {
-  return { floor: Date.parse(sourceStamp(since)), accounts: new Set(accountNames(expectedAccounts)), seen: new Map<string, string>(), reported: '' };
+  return { floor: Date.parse(sourceStamp(since)), accounts: new Set(accountNames(expectedAccounts)), seen: new Map<string, string>(), reported: '', muted: new Map<string, string>() };
 }
 
 export async function scanRelay(relay: { snapshot(floor: number, signal?: AbortSignal): Promise<RelaySnapshot> }, state: ReturnType<typeof createRelayState>, emit: Emit, now: () => string = () => new Date().toISOString(), signal?: AbortSignal): Promise<void> {
   const result = await relay.snapshot(state.floor, signal);
   publishAccounts('teamsrelay', state, result.accounts.map((account) => account.email), emit);
+  // Before the messages, so a batch of a muted chat never sees it unmuted
+  for (const account of result.accounts) {
+    const list = JSON.stringify(account.muted);
+    if (state.muted.get(account.email) === list) continue;
+    emit({ source: 'teamsrelay', account: account.email, muted: account.muted });
+    state.muted.set(account.email, list);
+  }
   for (const account of result.accounts) for (const message of account.messages) {
     signal?.throwIfAborted();
     if (Date.parse(message.sent_at) >= state.floor) emitChanged(state.seen, message, emit);

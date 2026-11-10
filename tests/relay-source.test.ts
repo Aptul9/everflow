@@ -31,7 +31,7 @@ function relayFixture() {
   fs.mkdirSync(join(root, '1'));
   const storePath = join(root, '1', 'messages.db');
   using store = new DatabaseSync(storePath);
-  store.exec('CREATE TABLE state(k TEXT,v TEXT); CREATE TABLE chat_messages(chat TEXT,idx INTEGER,mid TEXT,author TEXT,text TEXT,mine INTEGER,extra TEXT);');
+  store.exec('CREATE TABLE state(k TEXT,v TEXT); CREATE TABLE chat_messages(chat TEXT,idx INTEGER,mid TEXT,author TEXT,text TEXT,mine INTEGER,extra TEXT); CREATE TABLE chats(name TEXT PRIMARY KEY,muted INTEGER DEFAULT 0);');
   store.prepare('INSERT INTO state VALUES (?,?)').run('me', JSON.stringify({ email: 'ME@Example.Invalid' }));
   store.prepare('INSERT INTO state VALUES (?,?)').run('last_scan_ts', String(Date.parse(since) / 1000 + 600));
   for (let i = 0; i < 9; i++) store.prepare('INSERT INTO chat_messages VALUES (?,?,?,?,?,?,?)').run(`Saved chat ${i}`, i, String(Number(mid) + i), 'Bob', `Saved ${i}`, 0, '{}');
@@ -118,6 +118,33 @@ test('numeric mid epochms, saved text cap, quote/files/ref and deletion markers 
   expect(first).toMatchObject({ sender_is_me: true, sent_at: new Date(Number(mid)).toISOString(), attachments: [{ name: 'fixture.txt', size: null }], ref: { relay_slot: 1, id: mid, account: 'me@example.invalid' } });
   expect(first.text).toBe('> in reply to Alice: Quoted body\n' + 'x'.repeat(2000));
   expect(snapshot.accounts[0]!.messages[1]).toMatchObject({ text: '', attachments: [], ref: { deleted: true } });
+});
+
+test('chats muted in Teams and mentions of the account owner are read from the saved store', async () => {
+  const fixture = relayFixture();
+  {
+    using db = new DatabaseSync(fixture.storePath);
+    db.exec("INSERT INTO chats VALUES ('Saved chat 0',1),('Saved chat 1',0)");
+    db.prepare('UPDATE chat_messages SET extra=? WHERE idx=2').run(JSON.stringify({ mentionsMe: true }));
+  }
+  const snapshot = await readRelay(options, Date.parse(since), undefined, fixture.query);
+  expect(snapshot.accounts[0]!.muted).toEqual(['Saved chat 0']);
+  expect(snapshot.accounts[0]!.messages[2]!.ref).toMatchObject({ mentions_me: true });
+  expect(snapshot.accounts[0]!.messages[3]!.ref).not.toHaveProperty('mentions_me');
+
+  const relay = { snapshot: (floor: number) => readRelay(options, floor, undefined, fixture.query) };
+  const state = createRelayState(since);
+  const rows: SourceRecord[] = [];
+  const emit = (row: SourceRecord) => { rows.push(row); };
+  const mutes = () => rows.filter((row) => 'muted' in row);
+  await scanRelay(relay, state, emit);
+  expect(mutes()).toEqual([{ source: 'teamsrelay', account: 'me@example.invalid', muted: ['Saved chat 0'] }]);
+  expect(rows.findIndex((row) => 'muted' in row)).toBeLessThan(rows.findIndex((row) => 'message_id' in row));
+  await scanRelay(relay, state, emit);
+  expect(mutes()).toHaveLength(1);
+  { using db = new DatabaseSync(fixture.storePath); db.exec("UPDATE chats SET muted=0"); }
+  await scanRelay(relay, state, emit);
+  expect(mutes().at(-1)).toEqual({ source: 'teamsrelay', account: 'me@example.invalid', muted: [] });
 });
 
 test('late body save survives restart after list scan; fixed replay floor never advances from observed_at', async () => {
