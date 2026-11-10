@@ -191,12 +191,12 @@ export function TicketCard(props: {
     </div>
     {actions && <div className="flex items-center gap-1.5 border-t px-3 py-2">
       {ticket.lifecycle === 'proposed' && props.chats && <>
-        <Button type="button" size="sm" data-shortcut="s" data-action="start" title="Start (s)" className="h-9 flex-1 sm:h-8" disabled={props.expired || starting}
+        <Button type="button" size="sm" data-shortcut="s" data-action="start" title="Start (s)" className="h-9 min-w-0 flex-1 sm:h-8" disabled={props.expired || starting}
           onClick={() => { void post(keys.start, `/api/ticket/${ticket.id}/start`).catch(() => {}); }}>
           {starting ? <RotateCw aria-hidden="true" className="animate-spin" /> : <Play aria-hidden="true" />}{starting ? 'Saving Start' : 'Start'}
         </Button>
-        <ActionDialog label="Open chat with note" display="Chat" title={`Open chat for ticket #${ticket.id}`} confirm="Approve with note" note shortcut="c" size="sm"
-          icon={<MessageSquarePlus aria-hidden="true" />} className="h-9 flex-1 sm:h-8" disabled={props.expired || props.pending.has(keys.chat)}
+        <ActionDialog label="Open chat with note" display={null} title={`Open chat for ticket #${ticket.id}`} confirm="Approve with note" note shortcut="c" size="icon-sm"
+          icon={<MessageSquarePlus aria-hidden="true" />} className="h-9 w-9 sm:h-8 sm:w-8" disabled={props.expired || props.pending.has(keys.chat)}
           onConfirm={(note) => post(keys.chat, `/api/ticket/${ticket.id}/chat`, { note })} />
       </>}
       <ActionDialog label="Mark done" display={compact ? null : 'Done'} title={`Mark ticket #${ticket.id} done`} confirm="Confirm done" safe action="done"

@@ -50,6 +50,26 @@ test('switched-off sources and accounts fold away and unused dependencies say so
   expect(health.querySelector('[data-node="openchamber"]')!.textContent).not.toContain('unknown');
 });
 
+test('an unused fallback provider does not grey out a working triage stage', () => {
+  const state = uiState();
+  const at = '2026-11-06T06:00:00.000000Z';
+  state.health.push(
+    { dependency: 'provider:first', scope: 'provider', state: 'ok', since: at, last_ok: at, last_error: null },
+    { dependency: 'provider:fallback', scope: 'provider', state: 'unknown', since: null, last_ok: null, last_error: null },
+  );
+  board(state);
+  const triage = screen.getByRole('region', { name: 'Health' }).querySelector('[data-node="triage"]')!;
+  expect(triage.querySelector('h3')!.parentElement!.textContent).toContain('ok');
+  expect(triage.querySelector('h3')!.parentElement!.textContent).not.toContain('not used yet');
+});
+
+test('a proposed ticket keeps all four actions inside the card, with Chat as an icon', () => {
+  board();
+  const chat = within(ticket()).getByRole('button', { name: 'Open chat with note' });
+  expect(chat.textContent).not.toContain('Chat');
+  expect(within(ticket()).getByRole('button', { name: /^Start/ }).className).toContain('min-w-0');
+});
+
 test('a ticket expands to its full text and the triage reasoning', async () => {
   board();
   const first = ticket();

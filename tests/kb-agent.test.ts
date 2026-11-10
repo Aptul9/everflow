@@ -60,6 +60,18 @@ test('configured vault guide reaches the triage system prompt and an empty guide
   expect(peer.requests[1]!.system).toContain("Vault layout, from Antonio's configuration (trusted): 01_Projects/<slug>.md holds one page per client engagement.");
 });
 
+test('the triage system prompt spells out every valid action, on_us and ticket combination', async () => {
+  const { cfg } = kbFixture();
+  using db = openDb(cfg.db.path);
+  await using peer = await scriptedPeer(() => ({ body: text(JSON.stringify(decision())) }));
+  await run(cfg, context(), [], 'new', undefined, { db, providers: { first: provider(peer.baseURL) } });
+  const system = peer.requests[0]!.system;
+  expect(system).toContain('skip: on_us false, ticket null');
+  expect(system).toContain('new: on_us true, ticket null, non-empty title');
+  expect(system).toContain('update: on_us true, ticket set to an offered candidate id, non-empty title');
+  expect(system).toMatch(/already tracked.*skip/i);
+});
+
 test('real HTTP peer searches, reads and returns strict JSON with matching tool ids and only two tools', async () => {
   const { cfg } = kbFixture();
   using db = openDb(cfg.db.path);

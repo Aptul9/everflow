@@ -96,7 +96,8 @@ export function Pipeline({ state }: { state: OverviewState }) {
   const triageJobs = state.problems.jobs.filter((job) => job.kind === 'triage');
   const chatJobs = state.problems.jobs.filter((job) => job.kind !== 'triage');
   const daemonState = worst([...daemon, ...maintenance]);
-  const triageState = worst(providers);
+  // A fallback provider never called yet says nothing about a stage that already works
+  const triageState = worst(providers.some((item) => item.state !== 'unknown') ? providers.filter((item) => item.state !== 'unknown') : providers);
   const chatState = state.chats_enabled ? worst(openchamber) : 'disabled';
   const ticketCount = Object.values(state.groups).reduce((sum, list) => sum + list.length, 0);
   const edges: [string, string, State][] = [
