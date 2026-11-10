@@ -79,7 +79,7 @@ test('backs up every v1 row before preserving source identities and historical b
     using db = openDb(path);
     expect(snapshot(db, retained)).toEqual(migrated(rows));
     expect(db.prepare('SELECT * FROM batch ORDER BY id').all())
-      .toEqual(batches.map((batch) => ({ ...batch, outcome: 'historical', ticket: null })));
+      .toEqual(batches.map((batch) => ({ ...batch, outcome: 'historical', ticket: null, cleared_at: null })));
     expect(db.prepare('SELECT COUNT(*) AS n FROM ticket').get()?.n).toBe(0);
     expect(db.prepare('SELECT COUNT(*) AS n FROM job').get()?.n).toBe(0);
     expect(db.prepare('SELECT COUNT(*) AS n FROM turn').get()?.n).toBe(0);
