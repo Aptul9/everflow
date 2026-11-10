@@ -11,6 +11,7 @@ import { Button } from '../ui/button.tsx';
 import { Checkbox } from '../ui/checkbox.tsx';
 import { Input } from '../ui/input.tsx';
 import { ActionDialog, Kbd } from './action-dialog.tsx';
+import { Inline, Markdown } from './markdown.tsx';
 import { Pipeline, Problems } from './pipeline.tsx';
 import { age, Expand, Field, formatTime, MessageList, Section, TicketCard, Time, Toggle, tones } from './ticket-card.tsx';
 import type { Tone } from './ticket-card.tsx';
@@ -53,13 +54,13 @@ function BatchCard(props: { batch: SkippedBatch; enabled: boolean; expired: bool
       </div>
       <h4 title={batch.title ?? undefined} className="line-clamp-3 text-sm leading-snug font-semibold"><span className="sr-only">{`Batch #${batch.id}:`}</span>{' '}{batch.title ?? '(no title)'}</h4>
       <p className="truncate text-xs text-muted-foreground" title={`${batch.source} · ${batch.account}`}>{batch.source} · {batch.account}</p>
-      {batch.reason && <dl><Field label="Why" expanded={false}>{batch.reason}</Field></dl>}
+      {batch.reason && <dl><Field label="Why" expanded={false}><Inline text={batch.reason} /></Field></dl>}
       <Expand label={`Expand batch #${batch.id}`} title={batch.title ?? '(no title)'} meta={<>
         <Badge variant="secondary" className="px-1.5 text-[11px]">{outcomes[batch.outcome]}</Badge>
         <span>{batch.source} · {batch.account}</span>
         <span>Age: {age(props.now, batch.created_at)}</span>
       </>}>
-        {batch.reason && <dl><Field label="Why" expanded>{batch.reason}</Field></dl>}
+        {batch.reason && <dl><Field label="Why" expanded><Markdown text={batch.reason} /></Field></dl>}
         <Section title={`Messages (${batch.messages.length})`}><MessageList id={fullMessagesId} messages={batch.messages} /></Section>
       </Expand>
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}

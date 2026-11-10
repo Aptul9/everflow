@@ -105,6 +105,35 @@ test('the board card shows only the title and a two-line description; ask, propo
   expect(within(active).queryByText('North access investigation')).toBeNull();
 });
 
+test('the popup renders light Markdown from the AI fields safely, and the close button is centered', async () => {
+  const state = uiState();
+  Object.assign(state.groups.needs_you[0]!, {
+    summary: 'Giovanni wants **SNAM UAT** updated by `16:00`.',
+    proposal: '1. Check **dmm-ui** 1.34\n2. Install on *pre-prod*\n3. Read [the guide](https://example.invalid/guide) and [bad](javascript:alert(1))',
+    reason: 'Path 01_Projects/dmm_onprem.md stays literal. <img src=x onerror=bad()>\n\n- first point\n- second point',
+  });
+  board(state);
+  expect(within(ticket()).getByText('SNAM UAT').tagName).toBe('STRONG');
+  await userEvent.click(within(ticket()).getByRole('button', { name: 'Expand ticket #1' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Reset access' });
+  expect(within(dialog).getByText('SNAM UAT').tagName).toBe('STRONG');
+  expect(within(dialog).getByText('16:00').tagName).toBe('CODE');
+  const steps = within(dialog).getByText('dmm-ui').closest('ol')!;
+  expect(within(steps).getAllByRole('listitem')).toHaveLength(3);
+  expect(within(dialog).getByText('pre-prod').tagName).toBe('EM');
+  expect(within(dialog).getByRole('link', { name: 'the guide' }).getAttribute('href')).toBe('https://example.invalid/guide');
+  expect(within(dialog).queryByRole('link', { name: 'bad' })).toBeNull();
+  expect(dialog.textContent).toContain('01_Projects/dmm_onprem.md');
+  expect(dialog.textContent).toContain('<img src=x onerror=bad()>');
+  expect(dialog.querySelector('img')).toBeNull();
+  expect(within(dialog).getByText('second point').closest('ul')).not.toBeNull();
+  expect(dialog.textContent).not.toContain('**');
+  const close = within(dialog).getByRole('button', { name: 'Close' });
+  expect(close.className).toMatch(/\binline-flex\b.*\bitems-center\b.*\bjustify-center\b/);
+  expect(close.className).toContain('focus-visible:ring-2');
+  expect(close.className).not.toMatch(/(^|\s)focus:ring-2/);
+});
+
 test('a closed ticket card keeps its sum-up instead of the close reason', () => {
   const state = uiState();
   Object.assign(state.groups.done_today[0]!, { summary: 'Install request from Giovanni', report_line: 'Closed manually' });

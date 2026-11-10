@@ -105,6 +105,7 @@ Antonio reads the ticket card at a glance, so keep it short and plain:
 - ask: the request in one sentence.
 - proposal: at most three short numbered steps.
 Timestamps, quotes, vault citations and other evidence belong in reason, never in summary, ask or proposal.
+summary, ask, proposal and reason may use light Markdown: **bold** for the key person, system or deadline, \`code\` for hosts, paths and versions, numbered lists for steps. No headings, tables or HTML.
 ${JSON.stringify(z.toJSONSchema(modelDecisionSchema))}`;
 
 function systemPrompt(cfg: Config): string {

@@ -72,6 +72,7 @@ test('the triage system prompt spells out every valid action, on_us and ticket c
   expect(system).toMatch(/already tracked.*skip/i);
   expect(system).toMatch(/mode is update.*different request.*is new/is);
   expect(system).toMatch(/mentions_me true tags Antonio.*never skip/is);
+  expect(system).toMatch(/light Markdown.*\*\*bold\*\*/is);
 });
 
 test('the triage prompt asks for a short sum-up and keeps evidence in the reason', async () => {

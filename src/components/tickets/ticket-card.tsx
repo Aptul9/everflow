@@ -10,6 +10,7 @@ import { Checkbox } from '../ui/checkbox.tsx';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../ui/dialog.tsx';
 import { ScrollArea } from '../ui/scroll-area.tsx';
 import { ActionDialog } from './action-dialog.tsx';
+import { Inline, Markdown } from './markdown.tsx';
 
 export type Tone = 'needs' | 'working' | 'waiting' | 'failed' | 'done' | 'skipped';
 
@@ -132,7 +133,7 @@ export function Expand({ label, title, meta, children }: { label: string; title:
       </Button>
     </DialogTrigger>
     <DialogContent className="max-h-[calc(100dvh-2rem)] gap-4 overflow-y-auto sm:max-w-3xl">
-      <DialogHeader className="gap-1.5 pr-6 text-left">
+      <DialogHeader className="gap-1.5 pr-10 text-left">
         <DialogDescription className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">{meta}</DialogDescription>
         <DialogTitle className="text-lg leading-snug">{title}</DialogTitle>
       </DialogHeader>
@@ -165,14 +166,14 @@ function TicketDetails({ ticket, now, badge }: { ticket: CardData; now: number; 
     <span>Age: {age(now, ticket.created_at)}</span>
     <span className="font-mono">#{ticket.id}</span>
   </>}>
-    {ticket.summary && <p className="text-sm whitespace-pre-wrap">{ticket.summary}</p>}
+    {ticket.summary && <Markdown text={ticket.summary} className="text-sm" />}
     <dl className="grid gap-2">
       {ticket.lifecycle === 'proposed' && <>
-        <Field label="Ask" expanded>{ticket.ask || '(none)'}</Field>
-        <Field label="Proposal" expanded>{ticket.proposal || '(none)'}</Field>
+        <Field label="Ask" expanded><Markdown text={ticket.ask || '(none)'} /></Field>
+        <Field label="Proposal" expanded><Markdown text={ticket.proposal || '(none)'} /></Field>
       </>}
-      {ticket.report_line && <Field label="Report" expanded>{ticket.report_line}</Field>}
-      {ticket.reason && <Field label="Why" expanded>{ticket.reason}</Field>}
+      {ticket.report_line && <Field label="Report" expanded><Markdown text={ticket.report_line} /></Field>}
+      {ticket.reason && <Field label="Why" expanded><Markdown text={ticket.reason} /></Field>}
       {ticket.session_title && <Field label="Session" expanded>{ticket.session_title}</Field>}
     </dl>
     <Notes ticket={ticket} />
@@ -235,7 +236,7 @@ export function TicketCard(props: {
       </div>
       {/* The card is a glance: the AI sum-up, or the chat's latest status while it runs; the rest is in Expand */}
       {(ticket.lifecycle === 'active' && ticket.report_line || ticket.summary) && <p className="line-clamp-2 text-[13px] whitespace-pre-wrap">
-        {ticket.lifecycle === 'active' && ticket.report_line || ticket.summary}
+        <Inline text={ticket.lifecycle === 'active' && ticket.report_line || ticket.summary} />
       </p>}
       <TicketDetails ticket={ticket} now={props.now} badge={style.badge} />
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
