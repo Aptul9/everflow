@@ -648,6 +648,16 @@ export function clearBatch(db: DatabaseSync, batch: number, at?: string): number
   });
 }
 
+// Takes a dismissed or done ticket off the page; the ticket and its history stay.
+export function clearTicket(db: DatabaseSync, ticket: number, at?: string): number {
+  return transaction(db, () => {
+    const row = getTicket(db, ticket);
+    if (row.lifecycle !== 'dismissed' && row.lifecycle !== 'done') throw new TicketError('ticket.conflict', 'Clear requires a dismissed or done ticket');
+    db.prepare('UPDATE ticket SET cleared_at=COALESCE(cleared_at,?) WHERE id=?').run(utc(at), ticket);
+    return ticket;
+  });
+}
+
 export function makeTicket(db: DatabaseSync, batch: number, at?: string, actor: 'you' | 'chat' = 'you'): number {
   return transaction(db, () => {
     const now = utc(at);

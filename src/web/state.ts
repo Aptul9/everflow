@@ -5,7 +5,7 @@ import { sourceAccounts, sourceEnabled } from '../dispatcher/policy.ts';
 import { batchMessages, detail, feedback, MUTE_FOREVER } from '../dispatcher/tickets.ts';
 import type { Message } from '../dispatcher/tickets.ts';
 import { utc } from '../dispatcher/time.ts';
-import type { Health, OverviewState, Reference, SkippedBatch, SourceMessage, TicketCard, TicketDetail } from '../lib/web-types.ts';
+import type { Health, OverviewState, Reference, SkippedBatch, SourceMessage, TicketCard, TicketDetail, TriageBatch } from '../lib/web-types.ts';
 
 export function calendarDay(at: string | Date): string {
   const date = new Date(at);
@@ -77,9 +77,10 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
   const tickets = db.prepare('SELECT id FROM ticket ORDER BY id').all().map((row) => ticketDetail(db, Number(row.id)).ticket)
     .sort((a, b) => Number(b.lifecycle === 'proposed') - Number(a.lifecycle === 'proposed')
       || utc(b.last_activity_at ?? b.created_at).localeCompare(utc(a.last_activity_at ?? a.created_at)) || b.id - a.id);
+  const cleared = new Set(db.prepare('SELECT id FROM ticket WHERE cleared_at IS NOT NULL').all().map((row) => Number(row.id)));
   for (const ticket of tickets) {
     if (ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed') {
-      if (ticket.closed_at && calendarDay(ticket.closed_at) === day) groups[ticket.lifecycle === 'dismissed' ? 'skipped' : 'done_today'].push(ticket);
+      if (ticket.closed_at && calendarDay(ticket.closed_at) === day && !cleared.has(ticket.id)) groups[ticket.lifecycle === 'dismissed' ? 'skipped' : 'done_today'].push(ticket);
     } else if (ticket.stage === 'Failed') groups.failed.push(ticket);
     else if (ticket.stage === 'Needs you') groups.needs_you.push(ticket);
     else if (ticket.stage === 'Waiting on them') groups.waiting_them.push(ticket);
@@ -91,6 +92,13 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
     id: Number(row.id), title: row.title as string | null, source: String(row.source), account: String(row.account),
     outcome: row.outcome as SkippedBatch['outcome'], created_at: String(row.created_at), reason: row.reason as string | null,
     messages: batchMessages(db, Number(row.id)).reverse().map(message),
+  }));
+  const triaging = db.prepare(`SELECT b.id,c.title,c.source,c.account,b.created_at,
+    (SELECT j.state FROM job j WHERE j.kind='triage' AND json_extract(j.payload,'$.batch')=b.id AND j.state IN ('queued','running','parked') ORDER BY j.id DESC LIMIT 1) AS job
+    FROM batch b JOIN conversation c ON c.id=b.conversation
+    WHERE b.state='pending' AND b.ticket IS NULL AND b.outcome IN ('pending','triage') ORDER BY b.created_at DESC,b.id DESC`).all().map((row) => ({
+    id: Number(row.id), title: row.title as string | null, source: String(row.source), account: String(row.account), created_at: String(row.created_at),
+    job: row.job as TriageBatch['job'], messages: batchMessages(db, Number(row.id)).reverse().map(message),
   }));
   const muted = db.prepare('SELECT id,title,source,account,muted_until FROM conversation WHERE muted_until > ? ORDER BY muted_until,id').all(utc(at.toISOString()))
     .map((row) => ({ id: Number(row.id), title: row.title as string | null, source: String(row.source), account: String(row.account),
@@ -107,7 +115,7 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
     AND NOT EXISTS (SELECT 1 FROM triage_log v WHERE v.batch=t.batch AND v.id>t.id AND v.action IN ('new','update','skip')) ORDER BY at DESC,id DESC`).all()
     .map((row) => ({ id: Number(row.id), batch: row.batch === null ? null : Number(row.batch), at: String(row.at),
       raw: row.raw as string | null, parse_error: row.reason as string | null }));
-  return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped, muted,
+  return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped, triaging, muted,
     health: health(db, cfg), problems: { jobs, quarantine, triage }, feedback: feedback(db) };
 }
 

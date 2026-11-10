@@ -184,6 +184,9 @@ function refineBatch(db: DatabaseSync): void {
   if (!db.prepare('PRAGMA table_info(batch)').all().some((column) => column.name === 'cleared_at')) {
     transaction(db, () => db.exec('ALTER TABLE batch ADD COLUMN cleared_at TEXT'));
   }
+  if (!db.prepare('PRAGMA table_info(ticket)').all().some((column) => column.name === 'cleared_at')) {
+    transaction(db, () => db.exec('ALTER TABLE ticket ADD COLUMN cleared_at TEXT'));
+  }
   if (!hasTable(db, 'source_mute')) db.exec(sourceMuteTable);
 }
 

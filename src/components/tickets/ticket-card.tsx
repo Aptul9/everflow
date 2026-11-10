@@ -200,9 +200,9 @@ export function TicketCard(props: {
   const timelineId = useId();
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
-  const keys = { start: `ticket:${ticket.id}:start`, chat: `ticket:${ticket.id}:chat`, dismiss: `ticket:${ticket.id}:dismiss`, close: `ticket:${ticket.id}:close` };
+  const keys = { start: `ticket:${ticket.id}:start`, chat: `ticket:${ticket.id}:chat`, dismiss: `ticket:${ticket.id}:dismiss`, close: `ticket:${ticket.id}:close`, clear: `ticket:${ticket.id}:clear` };
   const terminal = ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed';
-  const error = props.errors[keys.start] || props.errors[keys.chat] || props.errors[keys.dismiss] || props.errors[keys.close];
+  const error = props.errors[keys.start] || props.errors[keys.chat] || props.errors[keys.dismiss] || props.errors[keys.close] || props.errors[keys.clear];
   const compact = ticket.lifecycle === 'proposed' && props.chats;
   const style = tones[tone(ticket)];
   const actions = props.enabled && !terminal;
@@ -213,9 +213,12 @@ export function TicketCard(props: {
       'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring', props.selected && 'border-primary/40 bg-accent/40')}>
     <div className="space-y-2 p-3">
       <div className="flex min-w-0 items-center gap-2 text-xs">
-        {actions && <Checkbox checked={props.selected} onCheckedChange={(checked) => props.onSelect(checked === true)} aria-label={`Select ticket #${ticket.id}`} className="size-4.5" />}
+        {props.enabled && <Checkbox checked={props.selected} onCheckedChange={(checked) => props.onSelect(checked === true)} aria-label={`Select ticket #${ticket.id}`} className="size-4.5" />}
         <span className="min-w-0 truncate font-semibold" title={ticket.client ?? undefined}>{ticket.client ?? 'Unassigned'}</span>
         <span className="ml-auto inline-flex shrink-0 items-center gap-0.5 text-muted-foreground"><Clock aria-hidden="true" className="size-3" /><time dateTime={ticket.created_at} title={ticket.created_at} className="tabular-nums">Age: {age(props.now, ticket.created_at)}</time></span>
+        {props.enabled && terminal && <Button type="button" variant="ghost" size="icon-sm" aria-label={`Clear ticket #${ticket.id}`} title="Clear from the board (the ticket is kept)"
+          className="-my-1 -mr-1.5 size-7 shrink-0 text-muted-foreground hover:text-foreground" disabled={props.expired || props.pending.has(keys.clear)}
+          onClick={() => { void post(keys.clear, `/api/ticket/${ticket.id}/clear`).catch(() => {}); }}><X aria-hidden="true" /></Button>}
       </div>
       <h4 id={heading} className="text-sm leading-snug font-semibold"><span className="sr-only">{`Ticket #${ticket.id}:`}</span>{' '}{ticket.title}</h4>
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">

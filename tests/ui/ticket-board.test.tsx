@@ -118,8 +118,38 @@ test('skipped batches clear one by one or selected in bulk', async () => {
   await userEvent.click(screen.getByRole('checkbox', { name: 'Select batch #11' }));
   expect(screen.getByRole('button', { name: 'Clear selected (1)' })).toBeTruthy();
   await userEvent.click(screen.getByRole('checkbox', { name: 'Select all skipped' }));
-  await userEvent.click(screen.getByRole('button', { name: 'Clear selected (3)' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Clear selected (4)' }));
   for (const id of [10, 11, 12]) expect(fetcher).toHaveBeenCalledWith(`/api/batch/${id}/clear`, expect.objectContaining({ method: 'POST' }));
+  expect(fetcher).toHaveBeenCalledWith('/api/ticket/6/clear', expect.objectContaining({ method: 'POST' }));
+});
+
+test('a dismissed or done ticket clears from the board on its own or with the skipped selection', async () => {
+  board();
+  const dismissed = screen.getByRole('article', { name: 'Ticket #6: Dismissed work' });
+  expect(within(dismissed).getByRole('checkbox', { name: 'Select ticket #6' })).toBeTruthy();
+  await userEvent.click(within(dismissed).getByRole('button', { name: 'Clear ticket #6' }));
+  expect(fetcher).toHaveBeenCalledWith('/api/ticket/6/clear', expect.objectContaining({ method: 'POST', body: '{}' }));
+  const done = screen.getByRole('article', { name: 'Ticket #7: Closed work' });
+  await userEvent.click(within(done).getByRole('button', { name: 'Clear ticket #7' }));
+  expect(fetcher).toHaveBeenCalledWith('/api/ticket/7/clear', expect.objectContaining({ method: 'POST' }));
+  await userEvent.click(within(dismissed).getByRole('checkbox', { name: 'Select ticket #6' }));
+  expect(screen.getByRole('button', { name: 'Clear selected (1)' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Dismiss selected (0)' })).toBeTruthy();
+  expect(within(ticket()).queryByRole('button', { name: /^Clear ticket/ })).toBeNull();
+});
+
+test('a batch in triage shows at the top of Needs you before its ticket exists', async () => {
+  const state = uiState();
+  state.triaging = [{ id: 20, title: 'Fresh request', source: 'teamsrelay', account: 'me@example.invalid', created_at: '2026-11-06T05:58:00.000000Z', job: 'running',
+    messages: [{ id: 30, source: 'teamsrelay', sender: 'Colleague', sent_at: '2026-11-06T05:58:00.000000Z', text: 'Can you check the VPN?' }] }];
+  board(state);
+  const column = screen.getByRole('region', { name: 'Needs you (3)' });
+  const card = within(column).getByRole('heading', { name: 'Batch #20: Fresh request' }).closest<HTMLElement>('[data-triage-batch]')!;
+  expect(column.querySelector('[data-triage-batch], article')).toBe(card);
+  expect(within(card).getByRole('status').textContent).toBe('Triage running');
+  await userEvent.click(within(card).getByRole('button', { name: 'Messages (1)' }));
+  expect(within(card).getByText('Can you check the VPN?')).toBeTruthy();
+  expect(card.getAttribute('draggable')).toBeNull();
 });
 
 test('dragging a ticket to Working starts it, to Done today or Skipped opens the matching confirmation', async () => {

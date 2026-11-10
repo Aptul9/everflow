@@ -92,18 +92,20 @@ test('opening an earlier v2 database adds the mute column in place, and the page
   release(current);
 });
 
-test('opening an earlier v2 database adds the batch clear column in place, and the page refuses it before that', () => {
+test('opening an earlier v2 database adds the batch and ticket clear columns in place, and the page refuses it before that', () => {
   const f = instance();
   {
     using db = openDb(f.path);
     ingest(db, message('me@example.invalid', 'm1'));
     schedule(db, f.cfg, later(10));
     db.exec('ALTER TABLE batch DROP COLUMN cleared_at');
+    db.exec('ALTER TABLE ticket DROP COLUMN cleared_at');
   }
   const current = { config: f.cfg, configPath: f.cfg._config_path, port: 12348, token: 'd'.repeat(64) };
   expect(() => initialize(current)).toThrow('Web instance requires an initialized current database');
   using db = openDb(f.path);
   expect(db.prepare('SELECT cleared_at FROM batch').all().map((row) => ({ ...row }))).toEqual([{ cleared_at: null }]);
+  expect(db.prepare('PRAGMA table_info(ticket)').all().some((column) => column.name === 'cleared_at')).toBe(true);
   initialize(current);
   release(current);
 });
@@ -130,6 +132,47 @@ test('page clear hides a skipped batch, keeps its messages and refuses other bat
     expect(readState(db, fixture.cfg).skipped.map((batch) => batch.id)).toEqual(expect.arrayContaining([fixture.backlog, fixture.answered]));
     expect(db.prepare("SELECT outcome,cleared_at IS NOT NULL AS cleared FROM batch WHERE id=?").get(fixture.skipped)).toMatchObject({ outcome: 'not_on_us', cleared: 1 });
   } finally { release(current); }
+});
+
+test('page clear hides a dismissed or done ticket and refuses open tickets', async () => {
+  const fixture = webFixture();
+  const current = { config: fixture.cfg, configPath: fixture.cfg._config_path, port: 12350, token: 'f'.repeat(64) };
+  const post = (id: number) => actionPost(new Request(`http://127.0.0.1:12350/api/ticket/${id}/clear`, {
+    method: 'POST', body: '{}',
+    headers: { host: '127.0.0.1:12350', origin: 'http://127.0.0.1:12350', 'x-dispatcher-token': current.token, 'content-type': 'application/json' },
+  }), 'ticket', String(id), 'clear');
+  initialize(current);
+  try {
+    const cleared = await post(fixture.dismissed);
+    expect(cleared.status).toBe(200);
+    expect(await cleared.json()).toEqual({ ticket: fixture.dismissed });
+    expect((await post(fixture.dismissed)).status).toBe(200);
+    expect((await post(fixture.done)).status).toBe(200);
+    expect((await post(fixture.proposal)).status).toBe(409);
+    expect((await post(fixture.active)).status).toBe(409);
+    expect((await post(999_999)).status).toBe(404);
+    using db = new DatabaseSync(fixture.path, { readOnly: true });
+    const state = readState(db, fixture.cfg);
+    expect(state.groups.skipped.map((ticket) => ticket.id)).not.toContain(fixture.dismissed);
+    expect(state.groups.done_today.map((ticket) => ticket.id)).not.toContain(fixture.done);
+    expect(db.prepare('SELECT lifecycle FROM ticket WHERE id=?').get(fixture.dismissed)!.lifecycle).toBe('dismissed');
+  } finally { release(current); }
+});
+
+test('a batch waiting for or in triage shows as triaging until its assessment lands', () => {
+  const f = instance();
+  using db = openDb(f.path);
+  ingest(db, message('me@example.invalid', 'fresh-1'));
+  expect(readState(db, f.cfg, new Date(later(1))).triaging).toEqual([]);
+  schedule(db, f.cfg, later(10));
+  const triaging = readState(db, f.cfg, new Date(later(11))).triaging;
+  expect(triaging).toHaveLength(1);
+  expect(triaging[0]).toMatchObject({ title: 'Chat me@example.invalid', source: 'teams', account: 'me@example.invalid', job: 'queued' });
+  expect(triaging[0]!.messages.map((item) => item.text)).toEqual(['Synthetic fresh-1']);
+  db.prepare("UPDATE job SET state='running' WHERE kind='triage'").run();
+  expect(readState(db, f.cfg, new Date(later(12))).triaging[0]!.job).toBe('running');
+  db.prepare("UPDATE batch SET state='done',outcome='not_on_us',done_at=?").run(later(13));
+  expect(readState(db, f.cfg, new Date(later(14))).triaging).toEqual([]);
 });
 
 test('a chat muted at the source skips triage unless a message mentions the owner, and unmuting restores triage', () => {

@@ -26,6 +26,7 @@ export function uiState(): OverviewState {
       { id: 11, title: 'Backlog source', outcome: 'backlog', source: 'teams', account: 'test@example.invalid', created_at: AT, reason: null, messages: [] },
       { id: 12, title: 'Answered source', outcome: 'answered', source: 'teams', account: 'test@example.invalid', created_at: AT, reason: null, messages: [] },
     ],
+    triaging: [],
     muted: [],
     health: [
       { dependency: 'daemon', scope: 'daemon', state: 'ok', since: AT, last_ok: AT, last_error: null },

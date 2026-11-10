@@ -81,6 +81,17 @@ export interface SkippedBatch {
   messages: SourceMessage[];
 }
 
+// A batch waiting for or in triage, shown before its ticket exists
+export interface TriageBatch {
+  id: number;
+  title: string | null;
+  source: string;
+  account: string;
+  created_at: string;
+  job: 'queued' | 'running' | 'parked' | null;
+  messages: SourceMessage[];
+}
+
 export interface MutedConversation {
   id: number;
   title: string | null;
@@ -96,6 +107,7 @@ export interface OverviewState {
   day: string;
   groups: Record<Group, TicketCard[]>;
   skipped: SkippedBatch[];
+  triaging: TriageBatch[];
   muted: MutedConversation[];
   health: Health[];
   problems: {
