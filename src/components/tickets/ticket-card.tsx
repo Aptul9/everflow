@@ -189,9 +189,9 @@ export function TicketCard(props: {
       </Button>
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
     </div>
-    {actions && <div className="flex items-center gap-1.5 border-t px-3 py-2">
+    {actions && <div className="flex flex-wrap items-center gap-1.5 border-t px-3 py-2">
       {ticket.lifecycle === 'proposed' && props.chats && <>
-        <Button type="button" size="sm" data-shortcut="s" data-action="start" title="Start (s)" className="h-9 min-w-0 flex-1 sm:h-8" disabled={props.expired || starting}
+        <Button type="button" size="sm" data-shortcut="s" data-action="start" title="Start (s)" className="h-9 min-w-fit flex-1 sm:h-8" disabled={props.expired || starting}
           onClick={() => { void post(keys.start, `/api/ticket/${ticket.id}/start`).catch(() => {}); }}>
           {starting ? <RotateCw aria-hidden="true" className="animate-spin" /> : <Play aria-hidden="true" />}{starting ? 'Saving Start' : 'Start'}
         </Button>
@@ -208,7 +208,7 @@ export function TicketCard(props: {
         className={cn('h-9 sm:h-8', ticket.lifecycle === 'proposed' && props.chats ? 'w-9 sm:w-8' : 'flex-1')} disabled={props.expired || props.pending.has(keys.dismiss)}
         onConfirm={(reason, mute) => post(keys.dismiss, `/api/ticket/${ticket.id}/dismiss`, mute === undefined ? { reason } : { reason, mute_hours: mute })} />
     </div>}
-    <div className="flex items-center gap-1 border-t px-2 py-1">
+    <div className="flex flex-wrap items-center gap-1 border-t px-2 py-1">
       <Toggle expanded={messagesOpen} controls={messagesId} onClick={() => setMessagesOpen(!messagesOpen)} icon={<MessagesSquare aria-hidden="true" />}>Messages ({ticket.messages.length})</Toggle>
       <Toggle expanded={timelineOpen} controls={timelineId} onClick={() => setTimelineOpen(!timelineOpen)} icon={<GitCommitVertical aria-hidden="true" />}>Timeline</Toggle>
     </div>

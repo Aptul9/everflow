@@ -67,7 +67,25 @@ test('a proposed ticket keeps all four actions inside the card, with Chat as an 
   board();
   const chat = within(ticket()).getByRole('button', { name: 'Open chat with note' });
   expect(chat.textContent).not.toContain('Chat');
-  expect(within(ticket()).getByRole('button', { name: /^Start/ }).className).toContain('min-w-0');
+  const start = within(ticket()).getByRole('button', { name: /^Start/ });
+  expect(start.className).toContain('min-w-fit');
+  expect(start.parentElement!.className).toContain('flex-wrap');
+  expect(within(ticket()).getByRole('button', { name: 'Timeline' }).parentElement!.className).toContain('flex-wrap');
+});
+
+test('empty columns collapse so columns with cards take the board width, and the board is not capped', () => {
+  const state = uiState();
+  state.groups.failed = [];
+  board(state);
+  const column = (name: RegExp) => screen.getByRole('region', { name });
+  const full = column(/^Needs you/), empty = column(/^Failed/);
+  expect(within(full).queryByText(/^No tickets/)).toBeNull();
+  expect(full.className).toContain('xl:flex-1');
+  expect(full.className).not.toContain('xl:w-40');
+  expect(empty.className).toContain('xl:w-40');
+  expect(empty.className).not.toContain('xl:flex-1');
+  expect(full.parentElement!.className).not.toContain('grid-cols-6');
+  expect(document.querySelector('.max-w-\\[1600px\\]')).toBeNull();
 });
 
 test('a ticket expands to its full text and the triage reasoning', async () => {

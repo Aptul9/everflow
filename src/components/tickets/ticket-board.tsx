@@ -59,8 +59,8 @@ function BatchCard(props: { batch: SkippedBatch; enabled: boolean; expired: bool
       </Button>}
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
     </div>
-    {props.enabled && <div className="flex items-center gap-1.5 border-t px-3 py-2">
-      <Button type="button" variant="outline" size="sm" data-action="make" className="h-9 min-w-0 flex-1 sm:h-8" aria-label={`Make ticket from batch #${batch.id}`} disabled={props.expired || props.pending.has(key)}
+    {props.enabled && <div className="flex flex-wrap items-center gap-1.5 border-t px-3 py-2">
+      <Button type="button" variant="outline" size="sm" data-action="make" className="h-9 min-w-fit flex-1 sm:h-8" aria-label={`Make ticket from batch #${batch.id}`} disabled={props.expired || props.pending.has(key)}
         onClick={() => { void props.post(key, `/api/batch/${batch.id}/ticket`).catch(() => {}); }}><FilePlus aria-hidden="true" />Make ticket</Button>
       {batch.outcome !== 'muted' && <ActionDialog label={`Mute chat of batch #${batch.id}`} display={null} title={`Mute ${batch.title ?? 'this chat'}`} confirm="Mute chat" mute="only" size="icon-sm"
         icon={<BellOff aria-hidden="true" />} className="h-9 w-9 sm:h-8 sm:w-8" disabled={props.expired || props.pending.has(muteKey)}
@@ -162,7 +162,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
   return <div ref={root} className="min-h-dvh">
     <a href="#tickets" className="sr-only rounded-md bg-background p-3 text-primary focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50">Skip to tickets</a>
     <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur-md">
-      <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 sm:px-6">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 sm:px-6">
         <div className="flex min-w-0 items-center gap-2.5">
           <span aria-hidden="true" className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground shadow-sm"><Inbox className="size-4" /></span>
           <div className="leading-tight">
@@ -187,7 +187,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
       </div>
     </header>
 
-    <div className="mx-auto max-w-[1600px] space-y-4 px-4 py-4 sm:px-6 sm:py-5">
+    <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-5">
       {expired && <Alert variant="destructive" className="border-destructive/30 bg-destructive-soft">
         <TriangleAlert aria-hidden="true" />
         <AlertTitle>Reload required</AlertTitle>
@@ -235,12 +235,14 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
             <span aria-hidden="true" className={cn('size-1.5 rounded-full', tones[columnTone[column.group]].dot)} />{column.label}<span className="font-semibold tabular-nums">{column.total}</span>
           </a>)}
         </nav>
-        <div className="relative -mx-4 flex snap-x snap-mandatory scroll-px-4 gap-3 overflow-x-auto px-4 pb-3 sm:-mx-6 sm:scroll-px-6 sm:px-6 xl:mx-0 xl:grid xl:grid-cols-6 xl:overflow-visible xl:px-0 xl:pb-0">
+        <div className="relative -mx-4 flex snap-x snap-mandatory scroll-px-4 gap-3 overflow-x-auto px-4 pb-3 sm:-mx-6 sm:scroll-px-6 sm:px-6 xl:mx-0 xl:overflow-visible xl:px-0 xl:pb-0">
           {columns.map((column) => <section key={column.group} id={`col-${column.group}`} data-column={column.group} aria-label={`${column.label} (${column.total})`}
             onDragOver={(event) => { if (accepts(column.group)) { event.preventDefault(); if (over !== column.group) setOver(column.group); } }}
             onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(null); }}
             onDrop={(event) => { event.preventDefault(); drop(column.group); }}
-            className={cn('flex w-[84vw] max-w-[340px] shrink-0 scroll-mt-28 snap-start flex-col rounded-xl bg-muted/80 ring-1 ring-border/60 transition-shadow sm:w-[300px] xl:w-auto xl:max-w-none',
+            // An empty column stays a narrow drop target; columns with cards share the rest of the width
+            className={cn('flex w-[84vw] max-w-[340px] shrink-0 scroll-mt-28 snap-start flex-col rounded-xl bg-muted/80 ring-1 ring-border/60 transition-shadow sm:w-[300px] xl:max-w-none',
+              column.shown === 0 ? 'xl:w-40' : 'xl:w-auto xl:min-w-0 xl:flex-1',
               accepts(column.group) && 'ring-2 ring-primary/30', over === column.group && 'bg-accent/70 ring-primary/70')}>
             <div className="flex items-center gap-2 px-3 pt-3 pb-2">
               <span aria-hidden="true" className={cn('size-2 rounded-full', tones[columnTone[column.group]].dot)} />
