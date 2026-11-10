@@ -29,7 +29,9 @@ test('a page choice overrides the config model and effort; an empty value goes b
   expect(modelChoice(db, cfg, 'triage')).toMatchObject({ model: cfg.triage.model, effort: 'low', overridden: true });
   saveSetting(db, 'chat.model', ' ');
   expect(modelChoice(db, cfg, 'chat').model).toBe('meridian-auto/claude-opus-5-5');
-  for (const [key, value] of [['chat.effort', 'bogus'], ['chat.model', 'no-provider'], ['triage.model', 'a/b'], ['other.key', 'x']] as const) {
+  saveSetting(db, 'chat.effort', 'none');
+  expect(modelChoice(db, cfg, 'chat').effort).toBe('none');
+  for (const [key, value] of [['triage.effort', 'none'], ['chat.effort', 'Bad Value'], ['chat.model', 'no-provider'], ['triage.model', 'a/b'], ['other.key', 'x']] as const) {
     expect(() => saveSetting(db, key, value)).toThrow(TicketError);
   }
 });

@@ -61,7 +61,9 @@ export function storeModelOptions(db: DatabaseSync, value: Omit<ModelOptions, 'r
 export function saveSetting(db: DatabaseSync, key: string, value: string, at?: string): SettingKey {
   if (!(SETTING_KEYS as readonly string[]).includes(key)) throw new TicketError('ticket.invalid-input', `Unknown setting ${key}`);
   const clean = value.trim();
-  if (clean && key.endsWith('.effort') && !(EFFORTS as readonly string[]).includes(clean)) throw new TicketError('ticket.invalid-input', `Unknown effort ${clean}`);
+  // Chat effort is the model's own variant id (some list `none`); triage effort goes to Meridian, which takes only these
+  if (clean && key === 'triage.effort' && !(EFFORTS as readonly string[]).includes(clean)) throw new TicketError('ticket.invalid-input', `Unknown effort ${clean}`);
+  if (clean && key === 'chat.effort' && !/^[a-z0-9][a-z0-9-]{0,31}$/.test(clean)) throw new TicketError('ticket.invalid-input', `Unknown effort ${clean}`);
   if (clean && key === 'chat.model' && !/^[\w.-]+\/[\w.:-]+$/.test(clean)) throw new TicketError('ticket.invalid-input', 'Chat model must be provider/model');
   if (clean && key === 'triage.model' && !/^[\w.:-]+$/.test(clean)) throw new TicketError('ticket.invalid-input', 'Triage model must be a model id');
   transaction(db, () => {
