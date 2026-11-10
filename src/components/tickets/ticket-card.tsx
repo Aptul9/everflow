@@ -233,9 +233,9 @@ export function TicketCard(props: {
         {ticket.maybe_ticket !== null && <span className="rounded border border-dashed px-1 text-muted-foreground">Maybe #{ticket.maybe_ticket}</span>}
         <span className="ml-auto font-mono text-muted-foreground">#{ticket.id}</span>
       </div>
-      {/* The card is a glance: the AI sum-up, or the chat's latest status once it runs; the rest is in Expand */}
-      {(ticket.lifecycle !== 'proposed' && ticket.report_line || ticket.summary) && <p className="line-clamp-2 text-[13px] whitespace-pre-wrap">
-        {ticket.lifecycle !== 'proposed' && ticket.report_line || ticket.summary}
+      {/* The card is a glance: the AI sum-up, or the chat's latest status while it runs; the rest is in Expand */}
+      {(ticket.lifecycle === 'active' && ticket.report_line || ticket.summary) && <p className="line-clamp-2 text-[13px] whitespace-pre-wrap">
+        {ticket.lifecycle === 'active' && ticket.report_line || ticket.summary}
       </p>}
       <TicketDetails ticket={ticket} now={props.now} badge={style.badge} />
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}

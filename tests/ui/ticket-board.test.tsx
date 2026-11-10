@@ -105,6 +105,15 @@ test('the board card shows only the title and a two-line description; ask, propo
   expect(within(active).queryByText('North access investigation')).toBeNull();
 });
 
+test('a closed ticket card keeps its sum-up instead of the close reason', () => {
+  const state = uiState();
+  Object.assign(state.groups.done_today[0]!, { summary: 'Install request from Giovanni', report_line: 'Closed manually' });
+  board(state);
+  const done = screen.getByRole('article', { name: 'Ticket #7: Closed work' });
+  expect(within(done).getByText('Install request from Giovanni')).toBeTruthy();
+  expect(within(done).queryByText('Closed manually')).toBeNull();
+});
+
 test('Expand opens a popup with the full ticket, its reasoning, messages and timeline', async () => {
   board();
   const first = ticket();
