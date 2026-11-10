@@ -385,6 +385,9 @@ export function applyDecision(db: DatabaseSync, batch: number, input: unknown): 
       owner = null;
       outcome = 'not_on_us';
     } else {
+      // A different request in a chat that feeds a proposed ticket gets its own ticket; the chat keeps routing to the first one
+      const separate = routed.mode === 'update' && decision.action === 'new';
+      if (separate) owner = null;
       let maybe: number | null = null;
       if (owner === null && decision.ticket !== null) {
         const candidate = getTicket(db, decision.ticket);
@@ -398,7 +401,7 @@ export function applyDecision(db: DatabaseSync, batch: number, input: unknown): 
       if (owner === null) {
         owner = newProposal(db, decision, now, maybe);
         if (maybe !== null) installLink(db, maybe, row.conversation, 'context', 'agent', now);
-        installLink(db, owner, row.conversation, 'primary', 'agent', now);
+        if (!separate) installLink(db, owner, row.conversation, 'primary', 'agent', now);
       } else {
         if (routed.ticket === null) installLink(db, owner, row.conversation, 'linked', 'agent', now);
         proposedFields(db, owner, decision, now);

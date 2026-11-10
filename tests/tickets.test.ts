@@ -290,8 +290,24 @@ test('a rule-linked proposal gets a fresh assessment instead of bypassing triage
   const input = batch(db);
   const offered = offer(db, cfg, input);
   expect(JSON.parse(String(offered.payload))).toMatchObject({ mode: 'update', ticket: owner });
-  expect(api.applyDecision?.(db, input, decision())).toBe(owner);
+  expect(api.applyDecision?.(db, input, decision({ action: 'update', ticket: owner }))).toBe(owner);
   expect(db.prepare('SELECT proposal,lifecycle FROM ticket WHERE id=?').get(owner)).toEqual({ proposal: 'Inspect logs', lifecycle: 'proposed' });
+});
+
+test('a different request in a chat that feeds a proposed ticket becomes its own ticket, and the chat keeps its route', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const owner = ticket(db, { proposal: 'Install the fix', summary: 'Install request' });
+  const input = batch(db, { text: 'I need the Keycloak users' });
+  link(db, owner, conversation(db, input));
+  offer(db, cfg, input);
+  const separate = api.applyDecision?.(db, input, decision({ title: 'Keycloak users', proposal: 'Create the users' }))!;
+  expect(separate).not.toBe(owner);
+  expect(db.prepare('SELECT title,proposal,lifecycle FROM ticket WHERE id=?').get(separate)).toEqual({ title: 'Keycloak users', proposal: 'Create the users', lifecycle: 'proposed' });
+  expect(db.prepare('SELECT proposal,summary FROM ticket WHERE id=?').get(owner)).toEqual({ proposal: 'Install the fix', summary: 'Install request' });
+  expect(db.prepare('SELECT ticket,outcome FROM batch WHERE id=?').get(input)).toEqual({ ticket: separate, outcome: 'proposed' });
+  expect(db.prepare('SELECT ticket,kind FROM ticket_conversation ORDER BY ticket').all()).toEqual([{ ticket: owner, kind: 'primary' }]);
+  expect(api.detail(db, separate).messages.map((message) => message.text)).toEqual(['I need the Keycloak users']);
 });
 
 test.each(['forged-id', 'not-offered', 'unknown-client'])('rejects %s at the local decision boundary without partial writes', (invalid) => {
@@ -1110,7 +1126,7 @@ test('R1 historical-message title edit fences another batch before effects and p
   const staleEffects = vi.fn(() => { api.applyDecision(db, input, stale); });
   expect(jobs.complete(db, job, staleEffects)).toBe(false);
   expect(staleEffects).not.toHaveBeenCalled();
-  const fresh = decision({ title: 'Current title assessment', proposal: 'Fresh current-title assessment' });
+  const fresh = decision({ action: 'update', ticket: owner, title: 'Current title assessment', proposal: 'Fresh current-title assessment' });
   expect(jobs.complete(db, freshJob, () => { api.applyDecision(db, input, fresh); })).toBe(true);
   expect(db.prepare('SELECT proposal FROM ticket WHERE id=?').get(owner)?.proposal).toBe('Fresh current-title assessment');
   expect(correctionMarkers(db, owner)).toEqual(markers);
@@ -1132,7 +1148,7 @@ test.each(['Original title', null, ''])('R1 unchanged shared title %j is explici
   const job = jobs.claim(db, cfg, 'unchanged-shared-title', AT)!;
   expect(Object.hasOwn(job.payload, 'conversation_title')).toBe(true);
   expect(job.payload.conversation_title).toBe(title);
-  expect(jobs.complete(db, job, () => { api.applyDecision(db, input, decision({ proposal: 'Unchanged-title assessment' })); })).toBe(true);
+  expect(jobs.complete(db, job, () => { api.applyDecision(db, input, decision({ action: 'update', ticket: owner, proposal: 'Unchanged-title assessment' })); })).toBe(true);
   expect(db.prepare('SELECT proposal FROM ticket WHERE id=?').get(owner)?.proposal).toBe('Unchanged-title assessment');
 });
 

@@ -98,6 +98,7 @@ Action, on_us, ticket and title must form one of these combinations:
 - new: on_us true, ticket null, non-empty title.
 - update: on_us true, ticket set to an offered candidate id, non-empty title.
 on_us true means a ticket is created or updated. Work that is already tracked, already answered or only chatter is skip, even when it is Antonio's.
+When mode is update, the conversation already feeds that ticket: use update only when the new messages continue the same request. A different request, from another person or for a different deliverable, is new even in the same chat, and gets its own ticket.
 Antonio reads the ticket card at a glance, so keep it short and plain:
 - summary: a quick sum-up in at most two short sentences, about 200 characters: who wants what, by when.
 - ask: the request in one sentence.
