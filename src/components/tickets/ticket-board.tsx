@@ -318,7 +318,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
         <p>Dismissed: {state.feedback.dismiss_count}. Made tickets: {state.feedback.make_ticket_count}.</p>
         <p className="hidden flex-wrap items-center gap-x-3 gap-y-1 sm:flex">
           <Keyboard aria-hidden="true" className="size-4" />
-          <span><Kbd>j</Kbd> <Kbd>k</Kbd> cards</span><span><Kbd>h</Kbd> <Kbd>l</Kbd> columns</span><span><Kbd>s</Kbd> Start</span><span><Kbd>c</Kbd> note</span><span><Kbd>d</Kbd> Dismiss</span><span><Kbd>e</Kbd> Expand</span><span><Kbd>/</Kbd> search</span><span><Kbd>Esc</Kbd> close</span>
+          <span><Kbd>j</Kbd> <Kbd>k</Kbd> cards</span><span><Kbd>h</Kbd> <Kbd>l</Kbd> columns</span><span><Kbd>s</Kbd> Start</span><span><Kbd>c</Kbd> Discuss</span><span><Kbd>d</Kbd> Dismiss</span><span><Kbd>e</Kbd> Expand</span><span><Kbd>/</Kbd> search</span><span><Kbd>Esc</Kbd> close</span>
         </p>
         <p role="status" aria-live="polite" className="w-full">{notice}</p>
       </footer>

@@ -1,6 +1,6 @@
 'use client';
 
-import { BookOpen, Check, Clock, GitCommitVertical, LoaderCircle, Maximize2, MessageSquarePlus, MessagesSquare, Play, RotateCw, X } from 'lucide-react';
+import { BookOpen, Check, Clock, ExternalLink, GitCommitVertical, LoaderCircle, Maximize2, MessageSquarePlus, MessagesSquare, Play, RotateCw, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { SourceMessage, TicketCard as CardData, TicketDetail } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
@@ -202,10 +202,9 @@ export function TicketCard(props: {
   const timelineId = useId();
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
-  const keys = { start: `ticket:${ticket.id}:start`, chat: `ticket:${ticket.id}:chat`, dismiss: `ticket:${ticket.id}:dismiss`, close: `ticket:${ticket.id}:close`, clear: `ticket:${ticket.id}:clear` };
+  const keys = { start: `ticket:${ticket.id}:start`, discuss: `ticket:${ticket.id}:discuss`, dismiss: `ticket:${ticket.id}:dismiss`, close: `ticket:${ticket.id}:close`, clear: `ticket:${ticket.id}:clear` };
   const terminal = ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed';
-  const error = props.errors[keys.start] || props.errors[keys.chat] || props.errors[keys.dismiss] || props.errors[keys.close] || props.errors[keys.clear];
-  const compact = ticket.lifecycle === 'proposed' && props.chats;
+  const error = props.errors[keys.start] || props.errors[keys.discuss] || props.errors[keys.dismiss] || props.errors[keys.close] || props.errors[keys.clear];
   const style = tones[tone(ticket)];
   const actions = props.enabled && !terminal;
   const starting = props.pending.has(keys.start);
@@ -227,6 +226,10 @@ export function TicketCard(props: {
       {ticket.session_id && !terminal && <p title={`Session ${ticket.session_id}`} className="flex min-w-0 items-center gap-1.5 rounded-md bg-info-soft px-2 py-1 text-xs font-medium text-info">
         {ticket.chat_running ? <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin" /> : <MessagesSquare aria-hidden="true" className="size-3.5 shrink-0" />}
         <span className="min-w-0">{`${ticket.chat_running ? 'Chat working now' : 'Chat open in OpenChamber'}${props.chatProject ? `, project ${props.chatProject}` : ''}`}</span>
+        <a href={`openchamber://session/${encodeURIComponent(ticket.session_id)}`} aria-label={`Open the chat of ticket #${ticket.id} in OpenChamber`}
+          className="ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1 font-semibold underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring">
+          Open<ExternalLink aria-hidden="true" className="size-3" />
+        </a>
       </p>}
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
         <Badge className={cn('border-transparent px-1.5 text-[11px]', style.badge)}>{ticket.lifecycle === 'proposed' ? 'Proposed' : ticket.stage}</Badge>
@@ -242,24 +245,23 @@ export function TicketCard(props: {
       <TicketDetails ticket={ticket} now={props.now} badge={style.badge} />
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
     </div>
-    {/* Below the label width the main button keeps only its icon, so the icon buttons never wrap alone */}
-    {actions && <div className="@container flex flex-wrap items-center gap-1.5 border-t px-3 py-2">
+    {/* Two equal columns: Start and Discuss over Done and Dismiss, so every label fits and nothing wraps alone */}
+    {actions && <div className="grid grid-cols-2 gap-1.5 border-t px-3 py-2">
       {ticket.lifecycle === 'proposed' && props.chats && <>
-        <Button type="button" size="sm" data-shortcut="s" data-action="start" title="Start (s)" aria-label={starting ? 'Saving Start' : 'Start'} className="h-9 min-w-0 flex-1 sm:h-8" disabled={props.expired || starting}
+        <Button type="button" size="sm" data-shortcut="s" data-action="start" title="Start (s)" aria-label={starting ? 'Saving Start' : 'Start'} className="h-9 min-w-0 sm:h-8" disabled={props.expired || starting}
           onClick={() => { void post(keys.start, `/api/ticket/${ticket.id}/start`).catch(() => {}); }}>
-          {starting ? <RotateCw aria-hidden="true" className="animate-spin" /> : <Play aria-hidden="true" />}<span className="hidden truncate @[12rem]:inline">{starting ? 'Saving Start' : 'Start'}</span>
+          {starting ? <RotateCw aria-hidden="true" className="animate-spin" /> : <Play aria-hidden="true" />}<span className="truncate">{starting ? 'Saving Start' : 'Start'}</span>
         </Button>
-        <ActionDialog label="Open chat with note" display={null} title={`Open chat for ticket #${ticket.id}`} confirm="Approve with note" note shortcut="c" size="icon-sm"
-          icon={<MessageSquarePlus aria-hidden="true" />} className="h-9 w-9 sm:h-8 sm:w-8" disabled={props.expired || props.pending.has(keys.chat)}
-          onConfirm={(note) => post(keys.chat, `/api/ticket/${ticket.id}/chat`, { note })} />
+        <ActionDialog label="Discuss" title={`Discuss ticket #${ticket.id} in OpenChamber`} confirm="Open chat" discuss shortcut="c" size="sm"
+          icon={<MessageSquarePlus aria-hidden="true" />} className="h-9 min-w-0 sm:h-8" disabled={props.expired || props.pending.has(keys.discuss)}
+          onConfirm={(note) => post(keys.discuss, `/api/ticket/${ticket.id}/discuss`, note.trim() ? { note } : {})} />
       </>}
-      <ActionDialog label="Mark done" display={compact ? null : 'Done'} title={`Mark ticket #${ticket.id} done`} confirm="Confirm done" safe action="done"
-        placeholder="What was done by hand (optional)" size={compact ? 'icon-sm' : 'sm'} icon={<Check aria-hidden="true" />}
-        className={cn('h-9 sm:h-8', compact ? 'w-9 sm:w-8' : 'flex-1')} disabled={props.expired || props.pending.has(keys.close)}
+      <ActionDialog label="Mark done" display="Done" title={`Mark ticket #${ticket.id} done`} confirm="Confirm done" safe action="done"
+        placeholder="What was done by hand (optional)" size="sm" icon={<Check aria-hidden="true" />}
+        className="h-9 min-w-0 sm:h-8" disabled={props.expired || props.pending.has(keys.close)}
         onConfirm={(reason) => post(keys.close, `/api/ticket/${ticket.id}/close`, { reason })} />
-      <ActionDialog label="Dismiss" display={ticket.lifecycle === 'proposed' && props.chats ? null : 'Dismiss'} title={`Dismiss ticket #${ticket.id}`} confirm="Confirm dismiss" shortcut="d" action="dismiss" mute="optional"
-        size={ticket.lifecycle === 'proposed' && props.chats ? 'icon-sm' : 'sm'} icon={<X aria-hidden="true" />}
-        className={cn('h-9 sm:h-8', ticket.lifecycle === 'proposed' && props.chats ? 'w-9 sm:w-8' : 'flex-1')} disabled={props.expired || props.pending.has(keys.dismiss)}
+      <ActionDialog label="Dismiss" display="Dismiss" title={`Dismiss ticket #${ticket.id}`} confirm="Confirm dismiss" shortcut="d" action="dismiss" mute="optional"
+        size="sm" icon={<X aria-hidden="true" />} className="h-9 min-w-0 sm:h-8" disabled={props.expired || props.pending.has(keys.dismiss)}
         onConfirm={(reason, mute) => post(keys.dismiss, `/api/ticket/${ticket.id}/dismiss`, mute === undefined ? { reason } : { reason, mute_hours: mute })} />
     </div>}
     <div className="flex flex-wrap items-center gap-1 border-t px-2 py-1">

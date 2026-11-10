@@ -6,7 +6,8 @@ import { TicketError } from './tickets.ts';
 import type { Ticket } from './tickets.ts';
 import { utc } from './time.ts';
 
-export function approve(cfg: Config, db: DatabaseSync, ticket: number, note = ''): number {
+// discuss: the chat opens with the ticket context and waits for Antonio's decision instead of doing the work
+export function approve(cfg: Config, db: DatabaseSync, ticket: number, note = '', discuss = false): number {
   if (typeof note !== 'string') throw new TicketError('ticket.invalid-input', 'Approval note must be a string');
   return transaction(db, () => {
     const row = db.prepare('SELECT * FROM ticket WHERE id=?').get(ticket);
@@ -21,8 +22,8 @@ export function approve(cfg: Config, db: DatabaseSync, ticket: number, note = ''
     const now = utc();
     db.prepare("UPDATE ticket SET lifecycle='active',approved_at=?,approval_note=?,last_activity_at=? WHERE id=?").run(now, note, now, ticket);
     db.prepare("INSERT INTO timeline(ticket,at,kind,actor,body,event_key) VALUES (?,?,'approval','you',?,?)")
-      .run(ticket, now, note, `approval:ticket:${ticket}`);
-    enqueue(db, 'start_chat', `start:ticket:${ticket}`, {}, ticket);
+      .run(ticket, now, discuss ? ['Discuss in chat first', note].filter(Boolean).join('\n') : note, `approval:ticket:${ticket}`);
+    enqueue(db, 'start_chat', `start:ticket:${ticket}`, discuss ? { discuss: true } : {}, ticket);
     return ticket;
   });
 }

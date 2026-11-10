@@ -19,7 +19,8 @@ export function ActionDialog(props: {
   label: string;
   title: string;
   confirm: string;
-  note?: boolean;
+  // Optional question for a chat that discusses the ticket before anything is done
+  discuss?: boolean;
   mute?: 'optional' | 'only';
   disabled?: boolean;
   shortcut?: string;
@@ -41,7 +42,7 @@ export function ActionDialog(props: {
   const [saving, setSaving] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const field = useRef<HTMLTextAreaElement>(null);
-  const limit = props.note ? 8_000 : 2_000;
+  const limit = props.discuss ? 8_000 : 2_000;
   const only = props.mute === 'only';
   const options = only ? muteOptions.slice(1) : muteOptions;
   const change = (next: boolean) => {
@@ -60,14 +61,13 @@ export function ActionDialog(props: {
     }}>
       <DialogHeader>
         <DialogTitle>{props.title}</DialogTitle>
-        <DialogDescription>{props.note ? 'Saves approval and queues a local chat job. No remote session is opened by this request.'
+        <DialogDescription>{props.discuss ? 'Opens a chat in OpenChamber with the ticket context, to clear your doubts. Nothing is done until you decide there.'
           : only ? 'New messages of this chat are kept but skip triage until the mute ends. Source messages remain unchanged.'
             : 'Closes the selected work locally. Source messages remain unchanged.'}</DialogDescription>
       </DialogHeader>
       <form onSubmit={(event) => {
         event.preventDefault();
         if (saving) return;
-        if (props.note && !value.trim()) { setError('Note is required'); field.current?.focus(); return; }
         setSaving(true);
         setError('');
         void props.onConfirm(value, props.mute ? muteValue(mute) : undefined).then(() => change(false)).catch((failure: unknown) => {
@@ -76,12 +76,12 @@ export function ActionDialog(props: {
       }} className="space-y-4">
         {!only && <div className="space-y-1.5">
           <div className="flex items-baseline justify-between gap-2">
-            <label htmlFor={id} className="text-sm font-medium">{props.note ? 'Note (required)' : 'Reason (optional)'}</label>
+            <label htmlFor={id} className="text-sm font-medium">{props.discuss ? 'What to discuss (optional)' : 'Reason (optional)'}</label>
             <span aria-hidden="true" className="text-xs tabular-nums text-muted-foreground">{value.length}/{limit}</span>
           </div>
           <Textarea ref={field} id={id} value={value} onChange={(event) => setValue(event.target.value)} maxLength={limit}
             aria-invalid={!!error} aria-describedby={error ? `${id}-error` : undefined} rows={5}
-            placeholder={props.placeholder ?? (props.note ? 'Exact instruction for the chat' : 'Why this is closed, for feedback')} />
+            placeholder={props.placeholder ?? (props.discuss ? 'What does not convince you' : 'Why this is closed, for feedback')} />
         </div>}
         {props.mute && <div className="space-y-1.5">
           <label htmlFor={`${id}-mute`} className="text-sm font-medium">{only ? 'Mute for' : 'Mute this chat'}</label>
@@ -93,7 +93,7 @@ export function ActionDialog(props: {
         {error && <p id={`${id}-error`} role="alert" className="text-sm text-destructive">{error}</p>}
         <DialogFooter className="gap-2">
           <DialogClose asChild><Button type="button" variant="outline" className="h-10 sm:h-9">Cancel</Button></DialogClose>
-          <Button type="submit" disabled={saving} variant={props.note || only || props.safe ? 'default' : 'destructive'} className="h-10 sm:h-9">{saving ? 'Saving...' : props.confirm}</Button>
+          <Button type="submit" disabled={saving} variant={props.discuss || only || props.safe ? 'default' : 'destructive'} className="h-10 sm:h-9">{saving ? 'Saving...' : props.confirm}</Button>
         </DialogFooter>
       </form>
     </DialogContent>

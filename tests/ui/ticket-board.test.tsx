@@ -63,15 +63,19 @@ test('an unused fallback provider does not grey out a working triage stage', () 
   expect(triage.querySelector('h3')!.parentElement!.textContent).not.toContain('not used yet');
 });
 
-test('a proposed ticket keeps all four actions inside the card, with Chat as an icon', () => {
+test('a proposed ticket shows Start and Discuss labelled, with Done and Dismiss on a second row of the same grid', () => {
   board();
-  const chat = within(ticket()).getByRole('button', { name: 'Open chat with note' });
-  expect(chat.textContent).not.toContain('Chat');
-  // A row too narrow for the label keeps the icon and the accessible name, so the icons never wrap alone
   const start = within(ticket()).getByRole('button', { name: 'Start' });
-  expect(start.className).toContain('min-w-0');
-  expect(start.parentElement!.className).toContain('@container');
-  expect(within(start).getByText('Start').className).toMatch(/\bhidden\b.*@\[12rem\]:inline/);
+  const discuss = within(ticket()).getByRole('button', { name: 'Discuss' });
+  expect(discuss.textContent).toBe('Discuss');
+  expect(discuss.getAttribute('data-shortcut')).toBe('c');
+  const grid = start.parentElement!;
+  expect(grid.className).toMatch(/\bgrid\b.*\bgrid-cols-2\b/);
+  expect([...grid.children].map((node) => node.textContent)).toEqual(['Start', 'Discuss', 'Done', 'Dismiss']);
+  expect(within(ticket()).queryByRole('button', { name: 'Open chat with note' })).toBeNull();
+  const active = screen.getByRole('article', { name: 'Ticket #3: Active work' });
+  expect(within(active).queryByRole('button', { name: 'Discuss' })).toBeNull();
+  expect(within(active).getByRole('button', { name: 'Mark done' }).parentElement!.className).toMatch(/\bgrid-cols-2\b/);
   const make = screen.getByRole('button', { name: 'Make ticket from batch #10' });
   expect(make.parentElement!.className).toContain('@container');
   expect(within(make).getByText('Make ticket').className).toMatch(/\bhidden\b.*@\[13rem\]:inline/);
@@ -227,6 +231,10 @@ test('a ticket with a chat says where the chat is, from the moment it opens', ()
   const chat = within(card).getByText('Chat open in OpenChamber, project Vault');
   expect(chat.closest('[title]')!.getAttribute('title')).toBe('Session ses_synthetic123');
   expect(within(ticket()).queryByText(/Chat open in OpenChamber/)).toBeNull();
+  const open = within(card).getByRole('link', { name: 'Open the chat of ticket #3 in OpenChamber' });
+  expect(open.getAttribute('href')).toBe('openchamber://session/ses_synthetic123');
+  expect(open.textContent).toBe('Open');
+  expect(within(ticket()).queryByRole('link', { name: /in OpenChamber/ })).toBeNull();
 });
 
 test('a ticket whose chat is running says so on the card', () => {
@@ -352,21 +360,22 @@ test('proposed fields, safe refs, expandable literal messages and newest-first d
   expect(within(events).getAllByRole('listitem').map((node) => node.textContent)).toEqual([expect.stringContaining('Newest timeline event'), expect.stringContaining('Older timeline event')]);
 });
 
-test('labelled note dialog commits exact text, traps focus, ignores shortcuts and restores trigger', async () => {
+test('Discuss dialog commits the exact question, traps focus, ignores shortcuts and restores trigger', async () => {
   const user = userEvent.setup();
   board();
-  const trigger = within(ticket()).getByRole('button', { name: 'Open chat with note' });
+  const trigger = within(ticket()).getByRole('button', { name: 'Discuss' });
   await user.click(trigger);
-  const dialog = screen.getByRole('dialog', { name: 'Open chat for ticket #1' });
-  const field = within(dialog).getByRole('textbox', { name: 'Note (required)' });
+  const dialog = screen.getByRole('dialog', { name: 'Discuss ticket #1 in OpenChamber' });
+  expect(within(dialog).getByText(/Nothing is done until you decide there/)).toBeTruthy();
+  const field = within(dialog).getByRole('textbox', { name: 'What to discuss (optional)' });
   expect(document.activeElement).toBe(field);
   await user.type(field, 'Exact note\nSecond line jskcd/');
   await user.tab({ shift: true });
   expect(dialog.contains(document.activeElement)).toBe(true);
   expect(fetcher).not.toHaveBeenCalled();
-  await user.click(within(dialog).getByRole('button', { name: 'Approve with note' }));
+  await user.click(within(dialog).getByRole('button', { name: 'Open chat' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(fetcher).toHaveBeenCalledWith('/api/ticket/1/chat', expect.objectContaining({ method: 'POST', body: JSON.stringify({ note: 'Exact note\nSecond line jskcd/' }),
+  expect(fetcher).toHaveBeenCalledWith('/api/ticket/1/discuss', expect.objectContaining({ method: 'POST', body: JSON.stringify({ note: 'Exact note\nSecond line jskcd/' }),
     headers: expect.objectContaining({ 'x-dispatcher-token': 'per-start-token', 'content-type': 'application/json' }) }));
   expect(document.activeElement).toBe(trigger);
 });
@@ -397,14 +406,15 @@ test('done dialog closes a ticket with an optional reason and does not dismiss i
   expect(fetcher).not.toHaveBeenCalledWith('/api/ticket/1/dismiss', expect.anything());
 });
 
-test('empty required note focuses its field without posting approval', async () => {
+test('Discuss without a question opens the chat with an empty body', async () => {
+  fetcher.mockImplementation(async (_input: string, init?: RequestInit) => init?.method === 'POST' ? Response.json({ ticket: 1 }) : new Response(null, { status: 304 }));
   board();
-  await userEvent.click(within(ticket()).getByRole('button', { name: 'Open chat with note' }));
-  const dialog = screen.getByRole('dialog', { name: 'Open chat for ticket #1' });
-  await userEvent.click(within(dialog).getByRole('button', { name: 'Approve with note' }));
-  expect(within(dialog).getByRole('alert').textContent).toBe('Note is required');
-  expect(document.activeElement).toBe(within(dialog).getByRole('textbox', { name: 'Note (required)' }));
-  expect(fetcher).not.toHaveBeenCalled();
+  await userEvent.click(within(ticket()).getByRole('button', { name: 'Discuss' }));
+  const dialog = screen.getByRole('dialog', { name: 'Discuss ticket #1 in OpenChamber' });
+  await userEvent.type(within(dialog).getByRole('textbox'), '   ');
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Open chat' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(fetcher).toHaveBeenCalledWith('/api/ticket/1/discuss', expect.objectContaining({ method: 'POST', body: '{}' }));
 });
 
 test('dialog close uses search fallback when committed refresh removes its trigger card', async () => {
@@ -412,10 +422,10 @@ test('dialog close uses search fallback when committed refresh removes its trigg
   changed.groups.needs_you = changed.groups.needs_you.filter((item) => item.id !== 1);
   fetcher.mockImplementation(async (_input: string, init?: RequestInit) => Response.json(init?.method === 'POST' ? { ticket: 1 } : changed));
   board();
-  await userEvent.click(within(ticket()).getByRole('button', { name: 'Open chat with note' }));
-  const dialog = screen.getByRole('dialog', { name: 'Open chat for ticket #1' });
+  await userEvent.click(within(ticket()).getByRole('button', { name: 'Discuss' }));
+  const dialog = screen.getByRole('dialog', { name: 'Discuss ticket #1 in OpenChamber' });
   await userEvent.type(within(dialog).getByRole('textbox'), 'Exact note');
-  await userEvent.click(within(dialog).getByRole('button', { name: 'Approve with note' }));
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Open chat' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('searchbox', { name: 'Search tickets' })));
 });
@@ -494,7 +504,7 @@ test('j/k focus cards; s/c/d and slash activate visible controls', async () => {
   await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/ticket/1/start', expect.objectContaining({ method: 'POST' })));
   ticket().focus();
   await user.keyboard('c');
-  expect(screen.getByRole('dialog', { name: 'Open chat for ticket #1' })).toBeTruthy();
+  expect(screen.getByRole('dialog', { name: 'Discuss ticket #1 in OpenChamber' })).toBeTruthy();
   await user.keyboard('{Escape}');
   ticket().focus();
   await user.keyboard('d');
@@ -709,5 +719,5 @@ test('tickets disabled retains health and Problems with no work controls; chats 
   board(chatsOff);
   expect(screen.getByText('Chats off')).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Start' })).toBeNull();
-  expect(screen.queryByRole('button', { name: 'Open chat with note' })).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Discuss' })).toBeNull();
 });

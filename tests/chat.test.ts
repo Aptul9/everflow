@@ -119,6 +119,39 @@ test('brief snapshots complete routed source context, exact instruction, canonic
   expect(db.prepare('SELECT state FROM turn').get()!.state).toBe('admitted');
 });
 
+test('a discuss chat briefs the session to assess and wait for Antonio, with his question and no approval to act', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  using db = openDb(path);
+  const ticket = proposed(db);
+  addBatch(db, ticket);
+  expect(chat.approve(cfg, db, ticket, 'Why UAT first?', true)).toBe(ticket);
+  expect(row(db, 'ticket', ticket)).toMatchObject({ lifecycle: 'active', approved_at: AT, approval_note: 'Why UAT first?' });
+  expect(JSON.parse(String(db.prepare("SELECT payload FROM job WHERE kind='start_chat'").get()!.payload))).toEqual({ discuss: true });
+  expect(db.prepare("SELECT body FROM timeline WHERE kind='approval'").get()!.body).toBe('Discuss in chat first\nWhy UAT first?');
+  expect(peer.calls).toHaveLength(0);
+  await chat.startChat(cfg, db, claimed(db, cfg));
+  const text = String(db.prepare('SELECT text FROM turn').get()!.text);
+  for (const exact of ['Exact summary', 'Exact proposal', 'Third-party source', 'Why UAT first?',
+    'Antonio opened this chat to discuss the ticket before deciding. Nothing is approved yet',
+    'end with STATUS: needs_you until he tells you to proceed or to close']) expect(text).toContain(exact);
+  expect(text).not.toContain('Approval timestamp');
+  expect(db.prepare('SELECT state FROM turn').get()!.state).toBe('admitted');
+});
+
+test('a Start brief carries no discussion wording', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  using db = openDb(path);
+  const ticket = proposed(db);
+  addBatch(db, ticket);
+  chat.approve(cfg, db, ticket, '');
+  await chat.startChat(cfg, db, claimed(db, cfg));
+  const text = String(db.prepare('SELECT text FROM turn').get()!.text);
+  expect(text).toContain('Approval timestamp');
+  expect(text).not.toContain('Nothing is approved yet');
+});
+
 async function admittedFixture() {
   const peer = await scriptedPeer();
   const files = chatFixture(peer.url);

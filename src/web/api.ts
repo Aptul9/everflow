@@ -11,6 +11,7 @@ import { readState, representation, ticketDetail } from './state.ts';
 export const MAX_BODY_BYTES = 32_768;
 const empty = z.strictObject({});
 const note = z.strictObject({ note: z.string().max(8_000).refine((value) => value.trim().length > 0, 'Note is required') });
+const question = z.strictObject({ note: z.string().max(8_000).optional() });
 // null mutes until unmuted
 const hours = z.number().int().min(1).max(8_760).nullable();
 const reason = z.strictObject({ reason: z.string().max(2_000).optional(), mute_hours: hours.optional() });
@@ -99,13 +100,14 @@ export async function actionPost(request: Request, scope: 'ticket' | 'batch' | '
     const current = instance();
     guardPost(request.headers, current);
     const value = validId(id);
-    const schema = scope === 'ticket' && action === 'chat' ? note : scope === 'ticket' && ['dismiss', 'close'].includes(action) ? reason : scope === 'batch' && action === 'mute' ? muteFor : empty;
+    const schema = scope === 'ticket' && action === 'chat' ? note : scope === 'ticket' && action === 'discuss' ? question : scope === 'ticket' && ['dismiss', 'close'].includes(action) ? reason : scope === 'batch' && action === 'mute' ? muteFor : empty;
     const input = await body(request, schema) as { note?: string; reason?: string; mute_hours?: number | null; hours?: number | null };
     if (!current.config.tickets.enabled) throw new HttpError(409, 'tickets.disabled', 'Tickets disabled');
-    if (scope === 'ticket' && ['start', 'chat'].includes(action) && !current.config.chats.enabled) throw new HttpError(409, 'chats.disabled', 'Chats off');
+    if (scope === 'ticket' && ['start', 'chat', 'discuss'].includes(action) && !current.config.chats.enabled) throw new HttpError(409, 'chats.disabled', 'Chats off');
     const result = withDatabase(true, (db) => transaction(db, () => {
       if (scope === 'ticket' && action === 'start') return { ticket: approve(current.config, db, value) };
       if (scope === 'ticket' && action === 'chat') return { ticket: approve(current.config, db, value, input.note!) };
+      if (scope === 'ticket' && action === 'discuss') return { ticket: approve(current.config, db, value, input.note ?? '', true) };
       if (scope === 'ticket' && action === 'dismiss') {
         dismiss(db, value, input.reason ?? '');
         if (input.mute_hours !== undefined) muteTicket(db, value, input.mute_hours);
