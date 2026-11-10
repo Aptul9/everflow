@@ -1,12 +1,13 @@
 'use client';
 
-import { BookOpen, Check, ChevronDown, Clock, GitCommitVertical, MessageSquarePlus, MessagesSquare, Play, RotateCw, X } from 'lucide-react';
+import { BookOpen, Check, Clock, GitCommitVertical, Maximize2, MessageSquarePlus, MessagesSquare, Play, RotateCw, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { SourceMessage, TicketCard as CardData, TicketDetail } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Badge } from '../ui/badge.tsx';
 import { Button } from '../ui/button.tsx';
 import { Checkbox } from '../ui/checkbox.tsx';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../ui/dialog.tsx';
 import { ScrollArea } from '../ui/scroll-area.tsx';
 import { ActionDialog } from './action-dialog.tsx';
 
@@ -115,6 +116,71 @@ export function Field({ label, expanded, children }: { label: string; expanded: 
   </div>;
 }
 
+export function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return <section className="space-y-1.5">
+    <h3 className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{title}</h3>
+    {children}
+  </section>;
+}
+
+// Full text of a card in a popup; the card itself stays a clamped preview
+export function Expand({ label, title, meta, children }: { label: string; title: string; meta: React.ReactNode; children: React.ReactNode }) {
+  return <Dialog>
+    <DialogTrigger asChild>
+      <Button variant="ghost" size="xs" type="button" data-shortcut="e" aria-label={label} title={`${label} (e)`} className="h-7 px-1.5 text-muted-foreground hover:text-foreground">
+        <Maximize2 aria-hidden="true" />Expand
+      </Button>
+    </DialogTrigger>
+    <DialogContent className="max-h-[calc(100dvh-2rem)] gap-4 overflow-y-auto sm:max-w-3xl">
+      <DialogHeader className="gap-1.5 pr-6 text-left">
+        <DialogDescription className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">{meta}</DialogDescription>
+        <DialogTitle className="text-lg leading-snug">{title}</DialogTitle>
+      </DialogHeader>
+      {children}
+    </DialogContent>
+  </Dialog>;
+}
+
+function Notes({ ticket, full }: { ticket: CardData; full: boolean }) {
+  if (ticket.refs.length === 0 && ticket.kb_notes.length === 0) return null;
+  return <div className="flex flex-wrap gap-1 text-[11px]">
+    {ticket.refs.length > 0 && <ul aria-label="References" className="flex flex-wrap gap-1">{ticket.refs.map((ref) => <li key={ref.id}>
+      <SafeLink url={ref.url} className="inline-flex items-center rounded border border-primary/20 bg-accent px-1.5 py-px font-medium text-accent-foreground">{ref.key}</SafeLink>
+    </li>)}</ul>}
+    {ticket.kb_notes.length > 0 && <ul aria-label="KB paths" className="flex min-w-0 flex-wrap gap-1">{ticket.kb_notes.map((path, index) => <li key={`${index}:${path}`} title={path}
+      className="inline-flex max-w-full min-w-0 items-center gap-1 rounded border bg-muted px-1.5 py-px text-muted-foreground">
+      <BookOpen aria-hidden="true" className="size-3 shrink-0" /><code className={cn('font-mono', full ? 'break-all' : 'truncate')}>{path}</code>
+    </li>)}</ul>}
+  </div>;
+}
+
+function TicketDetails({ ticket, now, badge }: { ticket: CardData; now: number; badge: string }) {
+  const messagesId = useId();
+  const timelineId = useId();
+  return <Expand label={`Expand ticket #${ticket.id}`} title={ticket.title} meta={<>
+    <Badge className={cn('border-transparent px-1.5 text-[11px]', badge)}>{ticket.lifecycle === 'proposed' ? 'Proposed' : ticket.stage}</Badge>
+    {ticket.confidence !== null && <span><span className="font-medium text-foreground tabular-nums">{Math.round(ticket.confidence * 100)}%</span> conf.</span>}
+    {ticket.maybe_ticket !== null && <span className="rounded border border-dashed px-1">Maybe #{ticket.maybe_ticket}</span>}
+    <span className="font-semibold text-foreground">{ticket.client ?? 'Unassigned'}</span>
+    <span>Age: {age(now, ticket.created_at)}</span>
+    <span className="font-mono">#{ticket.id}</span>
+  </>}>
+    {ticket.summary && <p className="text-sm whitespace-pre-wrap">{ticket.summary}</p>}
+    <dl className="grid gap-2">
+      {ticket.lifecycle === 'proposed' && <>
+        <Field label="Ask" expanded>{ticket.ask || '(none)'}</Field>
+        <Field label="Proposal" expanded>{ticket.proposal || '(none)'}</Field>
+      </>}
+      {ticket.report_line && <Field label="Report" expanded>{ticket.report_line}</Field>}
+      {ticket.reason && <Field label="Why" expanded>{ticket.reason}</Field>}
+      {ticket.session_title && <Field label="Session" expanded>{ticket.session_title}</Field>}
+    </dl>
+    <Notes ticket={ticket} full />
+    <Section title={`Messages (${ticket.messages.length})`}><MessageList id={messagesId} messages={ticket.messages} /></Section>
+    <Section title="Timeline"><Timeline id={timelineId} ticket={ticket.id} revision={ticket.timeline_revision} /></Section>
+  </Expand>;
+}
+
 export function TicketCard(props: {
   ticket: CardData;
   selected: boolean;
@@ -134,8 +200,6 @@ export function TicketCard(props: {
   const timelineId = useId();
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const bodyId = useId();
   const keys = { start: `ticket:${ticket.id}:start`, chat: `ticket:${ticket.id}:chat`, dismiss: `ticket:${ticket.id}:dismiss`, close: `ticket:${ticket.id}:close` };
   const terminal = ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed';
   const error = props.errors[keys.start] || props.errors[keys.chat] || props.errors[keys.dismiss] || props.errors[keys.close];
@@ -161,32 +225,19 @@ export function TicketCard(props: {
         {ticket.maybe_ticket !== null && <span className="rounded border border-dashed px-1 text-muted-foreground">Maybe #{ticket.maybe_ticket}</span>}
         <span className="ml-auto font-mono text-muted-foreground">#{ticket.id}</span>
       </div>
-      <div id={bodyId} className="space-y-2">
-        {ticket.summary && <p className={cn('text-[13px] whitespace-pre-wrap text-muted-foreground', !expanded && 'line-clamp-3')}>{ticket.summary}</p>}
+      <div className="space-y-2">
+        {ticket.summary && <p className="line-clamp-3 text-[13px] whitespace-pre-wrap text-muted-foreground">{ticket.summary}</p>}
         {ticket.lifecycle === 'proposed' && <dl className="grid gap-1.5">
-          <Field label="Ask" expanded={expanded}>{ticket.ask || '(none)'}</Field>
-          <Field label="Proposal" expanded={expanded}>{ticket.proposal || '(none)'}</Field>
-          {expanded && ticket.reason && <Field label="Why" expanded>{ticket.reason}</Field>}
+          <Field label="Ask" expanded={false}>{ticket.ask || '(none)'}</Field>
+          <Field label="Proposal" expanded={false}>{ticket.proposal || '(none)'}</Field>
         </dl>}
         {ticket.lifecycle !== 'proposed' && (ticket.report_line || ticket.session_title) && <dl className="space-y-1 text-[13px]">
-          {ticket.report_line && <div><dt className="sr-only">Report</dt><dd className={cn('whitespace-pre-wrap', !expanded && 'line-clamp-3')}>{ticket.report_line}</dd></div>}
-          {expanded && ticket.reason && <Field label="Why" expanded>{ticket.reason}</Field>}
+          {ticket.report_line && <div><dt className="sr-only">Report</dt><dd className="line-clamp-3 whitespace-pre-wrap">{ticket.report_line}</dd></div>}
           {ticket.session_title && <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"><dt><MessagesSquare aria-label="Session title" className="size-3.5" /></dt><dd className="min-w-0 truncate" title={ticket.session_title}>{ticket.session_title}</dd></div>}
         </dl>}
-        {(ticket.refs.length > 0 || ticket.kb_notes.length > 0) && <div className="flex flex-wrap gap-1 text-[11px]">
-          {ticket.refs.length > 0 && <ul aria-label="References" className="flex flex-wrap gap-1">{ticket.refs.map((ref) => <li key={ref.id}>
-            <SafeLink url={ref.url} className="inline-flex items-center rounded border border-primary/20 bg-accent px-1.5 py-px font-medium text-accent-foreground">{ref.key}</SafeLink>
-          </li>)}</ul>}
-          {ticket.kb_notes.length > 0 && <ul aria-label="KB paths" className="flex min-w-0 flex-wrap gap-1">{ticket.kb_notes.map((path, index) => <li key={`${index}:${path}`} title={path}
-            className="inline-flex max-w-full min-w-0 items-center gap-1 rounded border bg-muted px-1.5 py-px text-muted-foreground">
-            <BookOpen aria-hidden="true" className="size-3 shrink-0" /><code className={cn('font-mono', expanded ? 'break-all' : 'truncate')}>{path}</code>
-          </li>)}</ul>}
-        </div>}
+        <Notes ticket={ticket} full={false} />
       </div>
-      <Button variant="ghost" size="xs" type="button" aria-expanded={expanded} aria-controls={bodyId} onClick={() => setExpanded(!expanded)}
-        className="h-7 px-1.5 text-muted-foreground hover:text-foreground">
-        {expanded ? 'Show less' : 'Show more'}<ChevronDown aria-hidden="true" className={cn('transition-transform', expanded && 'rotate-180')} />
-      </Button>
+      <TicketDetails ticket={ticket} now={props.now} badge={style.badge} />
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
     </div>
     {actions && <div className="flex flex-wrap items-center gap-1.5 border-t px-3 py-2">

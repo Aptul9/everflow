@@ -1,6 +1,6 @@
 'use client';
 
-import { Bell, BellOff, ChevronDown, Clock, FilePlus, Inbox, Keyboard, MessagesSquare, RefreshCw, Search, TriangleAlert, WifiOff, X } from 'lucide-react';
+import { Bell, BellOff, Clock, FilePlus, Inbox, Keyboard, MessagesSquare, RefreshCw, Search, TriangleAlert, WifiOff, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { groups } from '../../lib/web-types.ts';
 import type { Group, OverviewState, SkippedBatch, TicketCard as CardData } from '../../lib/web-types.ts';
@@ -12,7 +12,7 @@ import { Checkbox } from '../ui/checkbox.tsx';
 import { Input } from '../ui/input.tsx';
 import { ActionDialog, Kbd } from './action-dialog.tsx';
 import { Pipeline, Problems } from './pipeline.tsx';
-import { age, Field, formatTime, MessageList, TicketCard, Time, Toggle, tones } from './ticket-card.tsx';
+import { age, Expand, Field, formatTime, MessageList, Section, TicketCard, Time, Toggle, tones } from './ticket-card.tsx';
 import type { Tone } from './ticket-card.tsx';
 import { useOverview } from './use-overview.ts';
 
@@ -38,8 +38,8 @@ function BatchCard(props: { batch: SkippedBatch; enabled: boolean; expired: bool
   const muteKey = `batch:${batch.id}:mute`;
   const clearKey = `batch:${batch.id}:clear`;
   const messagesId = useId();
+  const fullMessagesId = useId();
   const [messagesOpen, setMessagesOpen] = useState(false);
-  const [expanded, setExpanded] = useState(false);
   const error = props.errors[key] || props.errors[muteKey] || props.errors[clearKey];
   return <div data-batch-id={batch.id} draggable={props.enabled}
     onDragStart={(event) => { event.dataTransfer?.setData('text/plain', `batch #${batch.id}`); props.onDrag(true); }} onDragEnd={() => props.onDrag(false)}
@@ -53,10 +53,15 @@ function BatchCard(props: { batch: SkippedBatch; enabled: boolean; expired: bool
       </div>
       <h4 className="text-sm leading-snug font-semibold"><span className="sr-only">{`Batch #${batch.id}:`}</span>{' '}{batch.title ?? '(no title)'}</h4>
       <p className="truncate text-xs text-muted-foreground" title={`${batch.source} · ${batch.account}`}>{batch.source} · {batch.account}</p>
-      {batch.reason && <dl><Field label="Why" expanded={expanded}>{batch.reason}</Field></dl>}
-      {batch.reason && <Button variant="ghost" size="xs" type="button" aria-expanded={expanded} onClick={() => setExpanded(!expanded)} className="h-7 px-1.5 text-muted-foreground hover:text-foreground">
-        {expanded ? 'Show less' : 'Show more'}<ChevronDown aria-hidden="true" className={cn('transition-transform', expanded && 'rotate-180')} />
-      </Button>}
+      {batch.reason && <dl><Field label="Why" expanded={false}>{batch.reason}</Field></dl>}
+      <Expand label={`Expand batch #${batch.id}`} title={batch.title ?? '(no title)'} meta={<>
+        <Badge variant="secondary" className="px-1.5 text-[11px]">{outcomes[batch.outcome]}</Badge>
+        <span>{batch.source} · {batch.account}</span>
+        <span>Age: {age(props.now, batch.created_at)}</span>
+      </>}>
+        {batch.reason && <dl><Field label="Why" expanded>{batch.reason}</Field></dl>}
+        <Section title={`Messages (${batch.messages.length})`}><MessageList id={fullMessagesId} messages={batch.messages} /></Section>
+      </Expand>
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
     </div>
     {props.enabled && <div className="flex flex-wrap items-center gap-1.5 border-t px-3 py-2">
@@ -143,7 +148,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
           const column = columns[next]!;
           if (column.length) { event.preventDefault(); column[Math.min(row, column.length - 1)]!.focus(); break; }
         }
-      } else if (['s', 'c', 'd'].includes(event.key) && index >= 0) {
+      } else if (['s', 'c', 'd', 'e'].includes(event.key) && index >= 0) {
         const action = cards[index]!.querySelector<HTMLButtonElement>(`[data-shortcut="${event.key}"]`);
         if (action && !action.disabled) { event.preventDefault(); action.focus(); action.click(); }
       }
@@ -162,7 +167,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
   return <div ref={root} className="min-h-dvh">
     <a href="#tickets" className="sr-only rounded-md bg-background p-3 text-primary focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50">Skip to tickets</a>
     <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur-md">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 sm:px-6">
+      <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 sm:px-6">
         <div className="flex min-w-0 items-center gap-2.5">
           <span aria-hidden="true" className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground shadow-sm"><Inbox className="size-4" /></span>
           <div className="leading-tight">
@@ -187,7 +192,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
       </div>
     </header>
 
-    <div className="space-y-4 px-4 py-4 sm:px-6 sm:py-5">
+    <div className="mx-auto max-w-[1600px] space-y-4 px-4 py-4 sm:px-6 sm:py-5">
       {expired && <Alert variant="destructive" className="border-destructive/30 bg-destructive-soft">
         <TriangleAlert aria-hidden="true" />
         <AlertTitle>Reload required</AlertTitle>
@@ -235,14 +240,12 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
             <span aria-hidden="true" className={cn('size-1.5 rounded-full', tones[columnTone[column.group]].dot)} />{column.label}<span className="font-semibold tabular-nums">{column.total}</span>
           </a>)}
         </nav>
-        <div className="relative -mx-4 flex snap-x snap-mandatory scroll-px-4 gap-3 overflow-x-auto px-4 pb-3 sm:-mx-6 sm:scroll-px-6 sm:px-6 xl:mx-0 xl:overflow-visible xl:px-0 xl:pb-0">
+        <div className="relative -mx-4 flex snap-x snap-mandatory scroll-px-4 gap-3 overflow-x-auto px-4 pb-3 sm:-mx-6 sm:scroll-px-6 sm:px-6 xl:mx-0 xl:grid xl:grid-cols-6 xl:overflow-visible xl:px-0 xl:pb-0">
           {columns.map((column) => <section key={column.group} id={`col-${column.group}`} data-column={column.group} aria-label={`${column.label} (${column.total})`}
             onDragOver={(event) => { if (accepts(column.group)) { event.preventDefault(); if (over !== column.group) setOver(column.group); } }}
             onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(null); }}
             onDrop={(event) => { event.preventDefault(); drop(column.group); }}
-            // An empty column stays a narrow drop target; columns with cards share the rest of the width
-            className={cn('flex w-[84vw] max-w-[340px] shrink-0 scroll-mt-28 snap-start flex-col rounded-xl bg-muted/80 ring-1 ring-border/60 transition-shadow sm:w-[300px] xl:max-w-none',
-              column.shown === 0 ? 'xl:w-40' : 'xl:w-auto xl:min-w-0 xl:flex-1',
+            className={cn('flex w-[84vw] max-w-[340px] shrink-0 scroll-mt-28 snap-start flex-col rounded-xl bg-muted/80 ring-1 ring-border/60 transition-shadow sm:w-[300px] xl:w-auto xl:max-w-none',
               accepts(column.group) && 'ring-2 ring-primary/30', over === column.group && 'bg-accent/70 ring-primary/70')}>
             <div className="flex items-center gap-2 px-3 pt-3 pb-2">
               <span aria-hidden="true" className={cn('size-2 rounded-full', tones[columnTone[column.group]].dot)} />
@@ -273,7 +276,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
         <p>Dismissed: {state.feedback.dismiss_count}. Made tickets: {state.feedback.make_ticket_count}.</p>
         <p className="hidden flex-wrap items-center gap-x-3 gap-y-1 sm:flex">
           <Keyboard aria-hidden="true" className="size-4" />
-          <span><Kbd>j</Kbd> <Kbd>k</Kbd> cards</span><span><Kbd>h</Kbd> <Kbd>l</Kbd> columns</span><span><Kbd>s</Kbd> Start</span><span><Kbd>c</Kbd> note</span><span><Kbd>d</Kbd> Dismiss</span><span><Kbd>/</Kbd> search</span><span><Kbd>Esc</Kbd> close</span>
+          <span><Kbd>j</Kbd> <Kbd>k</Kbd> cards</span><span><Kbd>h</Kbd> <Kbd>l</Kbd> columns</span><span><Kbd>s</Kbd> Start</span><span><Kbd>c</Kbd> note</span><span><Kbd>d</Kbd> Dismiss</span><span><Kbd>e</Kbd> Expand</span><span><Kbd>/</Kbd> search</span><span><Kbd>Esc</Kbd> close</span>
         </p>
         <p role="status" aria-live="polite" className="w-full">{notice}</p>
       </footer>

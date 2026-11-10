@@ -73,35 +73,35 @@ test('a proposed ticket keeps all four actions inside the card, with Chat as an 
   expect(within(ticket()).getByRole('button', { name: 'Timeline' }).parentElement!.className).toContain('flex-wrap');
 });
 
-test('empty columns collapse so columns with cards take the board width, and the board is not capped', () => {
+test('board columns keep equal widths, empty or not', () => {
   const state = uiState();
   state.groups.failed = [];
   board(state);
-  const column = (name: RegExp) => screen.getByRole('region', { name });
-  const full = column(/^Needs you/), empty = column(/^Failed/);
-  expect(within(full).queryByText(/^No tickets/)).toBeNull();
-  expect(full.className).toContain('xl:flex-1');
-  expect(full.className).not.toContain('xl:w-40');
-  expect(empty.className).toContain('xl:w-40');
-  expect(empty.className).not.toContain('xl:flex-1');
-  expect(full.parentElement!.className).not.toContain('grid-cols-6');
-  expect(document.querySelector('.max-w-\\[1600px\\]')).toBeNull();
+  const full = screen.getByRole('region', { name: /^Needs you/ }), empty = screen.getByRole('region', { name: /^Failed/ });
+  expect(full.parentElement!.className).toContain('xl:grid-cols-6');
+  expect(full.className).not.toContain('xl:flex-1');
+  expect(empty.className).not.toContain('xl:w-40');
 });
 
-test('a ticket expands to its full text and the triage reasoning', async () => {
+test('Expand opens a popup with the full ticket, its reasoning, messages and timeline', async () => {
   board();
   const first = ticket();
-  const summary = within(first).getByText('Source summary');
-  expect(summary.className).toContain('line-clamp-3');
+  expect(within(first).getByText('Source summary').className).toContain('line-clamp-3');
   expect(within(first).queryByText('Same issue as the open access request')).toBeNull();
-  const more = within(first).getByRole('button', { name: 'Show more' });
-  expect(more.getAttribute('aria-expanded')).toBe('false');
-  await userEvent.click(more);
-  expect(within(first).getByRole('button', { name: 'Show less' }).getAttribute('aria-expanded')).toBe('true');
-  expect(summary.className).not.toContain('line-clamp');
-  expect(within(first).getByText('Confirm access scope').className).not.toContain('line-clamp');
-  expect(within(first).getByText('Why').closest('div')!.textContent).toContain('Same issue as the open access request');
-  expect(within(first).getByText('01_Projects/access.md').className).not.toContain('truncate');
+  expect(within(first).queryByRole('button', { name: 'Show more' })).toBeNull();
+  await userEvent.click(within(first).getByRole('button', { name: 'Expand ticket #1' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Reset access' });
+  expect(within(dialog).getByText('Source summary').className).not.toContain('line-clamp');
+  expect(within(dialog).getByText('Confirm access scope').className).not.toContain('line-clamp');
+  expect(within(dialog).getByText('Why').closest('div')!.textContent).toContain('Same issue as the open access request');
+  expect(within(dialog).getByText('01_Projects/access.md').className).toContain('break-all');
+  expect(within(dialog).getByText('Newest source message')).toBeTruthy();
+  expect(within(dialog).getByRole('heading', { name: 'Timeline' })).toBeTruthy();
+  await userEvent.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  ticket().focus();
+  await userEvent.keyboard('e');
+  expect(await screen.findByRole('dialog', { name: 'Reset access' })).toBeTruthy();
 });
 
 test('skipped batches clear one by one or selected in bulk', async () => {
@@ -149,10 +149,13 @@ test('dragging a ticket to Working starts it, to Done today or Skipped opens the
 test('a skipped batch shows why triage skipped it and drags onto Needs you to make a ticket', async () => {
   board();
   const batch = screen.getByRole('heading', { name: 'Batch #10: Skipped source' }).closest<HTMLElement>('[data-batch-id]')!;
-  const why = within(batch).getByText('Greeting only, nothing to do');
-  expect(why.className).toContain('line-clamp');
-  await userEvent.click(within(batch).getByRole('button', { name: 'Show more' }));
-  expect(why.className).not.toContain('line-clamp');
+  expect(within(batch).getByText('Greeting only, nothing to do').className).toContain('line-clamp');
+  await userEvent.click(within(batch).getByRole('button', { name: 'Expand batch #10' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Skipped source' });
+  expect(within(dialog).getByText('Greeting only, nothing to do').className).not.toContain('line-clamp');
+  expect(within(dialog).getByText('No source messages.')).toBeTruthy();
+  await userEvent.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   expect(within(batch).queryByText(/2026-11-06/)).toBeNull();
   expect(within(batch).getByRole('button', { name: 'Mute chat of batch #10' }).textContent).not.toContain('Mute');
   expect(batch.getAttribute('draggable')).toBe('true');
