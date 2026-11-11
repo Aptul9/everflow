@@ -195,7 +195,7 @@ Chat creation requires both rollout switches enabled and explicit ticket approva
 
 The brief identifies source messages and knowledge-base contents as untrusted data. It requires canonical files, normal shared-write approval and no desktop activation. These instructions and the page controls are not a sandbox for tools in an approved normal chat.
 
-Each completed turn ends with `STATUS: <working|needs_you|waiting_them|blocked|done> | <one line>`. Reports use the assistant message identity and completion timestamp. A later direct-chat report is not overwritten by an older collector or polling time. The page shows the stored session title for finding the chat. No working session deep-link is assumed.
+Each completed turn ends with `STATUS: <working|needs_you|waiting_them|done> | <one line>`; `blocked` from older sessions still parses as Needs you. Reports use the assistant message identity and completion timestamp. A later direct-chat report is not overwritten by an older collector or polling time. The page shows the stored session title for finding the chat. No working session deep-link is assumed.
 
 ## Backlog and migration
 
