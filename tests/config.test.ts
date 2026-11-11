@@ -22,7 +22,7 @@ test('defaults to disabled tickets/chats and every approved policy value', () =>
     triage_concurrency: 3, turn_concurrency: 4, lease_seconds: 120, renew_seconds: 30,
     backoff_initial_seconds: 10, backoff_max_seconds: 1800, backoff_jitter: 0.2,
     max_attempts: 5, max_recoveries: 2, dependency_failure_threshold: 3, collect_seconds: 10, sync_seconds: 300, heartbeat_seconds: 10,
-    archive_hours: 24, reopen_days: 14, purge_days: 30, log_max_bytes: 10485760, log_files: 5,
+    archive_hours: 24, reopen_days: 2, purge_days: 30, log_max_bytes: 10485760, log_files: 5,
   });
 });
 

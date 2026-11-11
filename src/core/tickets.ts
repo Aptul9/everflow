@@ -228,6 +228,9 @@ export interface Candidate {
   recent: boolean;
 }
 
+// Tickets one triage call may see, so the prompt stays bounded whatever the volume
+export const MAX_CANDIDATES = 30;
+
 export function candidates(db: DatabaseSync, cfg: Config, batch: number, at?: string): Candidate[] {
   const row = getBatch(db, batch);
   const clients = batchClients(db, cfg, batch);
@@ -238,14 +241,19 @@ export function candidates(db: DatabaseSync, cfg: Config, batch: number, at?: st
       WHERE m.person=? AND m.source=? AND m.sender_is_me=0`).all(message.person, message.source)) shared.add(Number(match.ticket));
   }
   const cutoff = daysBefore(utc(at), cfg.jobs.reopen_days);
+  // Customers never share tickets: a batch of a known client only sees that client's tickets
   return (db.prepare('SELECT * FROM ticket ORDER BY id').all() as unknown as Ticket[]).flatMap((ticket) => {
+    if (clients.length && (ticket.client === null || !clients.includes(ticket.client))) return [];
     const open = ticket.lifecycle === 'proposed' || ticket.lifecycle === 'active';
     const sameClient = open && (ticket.client === null ? clients.length === 0 : clients.includes(ticket.client));
     const recent = [ticket.created_at, ticket.last_activity_at, ticket.closed_at].some((stamp) => stamp !== null && utc(stamp) >= cutoff);
     if (!sameClient && !recent && !shared.has(ticket.id) && !references.has(ticket.id)) return [];
     return [{ id: ticket.id, title: ticket.title, client: ticket.client, lifecycle: ticket.lifecycle, summary: ticket.summary,
-      shared_people: shared.has(ticket.id), shared_ref: references.has(ticket.id), same_client: sameClient, recent }];
-  }).sort((a, b) => Number(b.shared_ref) - Number(a.shared_ref) || Number(b.shared_people) - Number(a.shared_people) || a.id - b.id);
+      shared_people: shared.has(ticket.id), shared_ref: references.has(ticket.id), same_client: sameClient, recent,
+      activity: utc(ticket.last_activity_at ?? ticket.created_at) }];
+  }).sort((a, b) => Number(b.shared_ref) - Number(a.shared_ref) || Number(b.shared_people) - Number(a.shared_people)
+    || Number(b.same_client) - Number(a.same_client) || b.activity.localeCompare(a.activity) || a.id - b.id)
+    .slice(0, MAX_CANDIDATES).map(({ activity: _activity, ...candidate }) => candidate);
 }
 
 export interface Route {
@@ -272,7 +280,7 @@ export function attachBatch(db: DatabaseSync, batch: number, ticket: number, at?
   });
 }
 
-export function route(db: DatabaseSync, batch: number, at?: string, reopenDays = 14): Route {
+export function route(db: DatabaseSync, batch: number, at?: string, reopenDays = 2): Route {
   return transaction(db, () => {
     const now = utc(at);
     const row = getBatch(db, batch);

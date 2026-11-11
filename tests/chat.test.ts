@@ -369,7 +369,7 @@ test('sync shows a ticket as Working while its chat runs a turn the owner starte
   expect(stage(db, ticket)).toBe('Waiting on them');
 });
 
-test('STATUS done closes, then within 14 days new linked input reopens and unarchives same approved session', async () => {
+test('STATUS done closes, then within 2 days new linked input reopens and unarchives same approved session', async () => {
   const f = await admittedFixture();
   await using peer = f.peer;
   using db = f.db;

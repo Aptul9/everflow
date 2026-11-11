@@ -115,7 +115,7 @@ test.each(['proposed', 'active'])('an existing %s route wins and keeps context l
   expect(db.prepare("SELECT COUNT(*) AS n FROM timeline WHERE kind='message' AND ticket=?").get(primary)?.n).toBe(1);
 });
 
-test.each(['2026-11-05T00:00:00Z', '2026-10-23T00:00:00Z'])('a done route closed at %s reopens the same approved ticket and session', (closedAt) => {
+test.each(['2026-11-05T00:00:00Z', '2026-11-04T00:00:00Z'])('a done route closed at %s reopens the same approved ticket and session', (closedAt) => {
   using db = openDb(fixture().path);
   const id = batch(db);
   const owner = ticket(db, { lifecycle: 'done', session_id: 'keep-this-session', approved_at: OLD, closed_at: closedAt, report: 'done' });
@@ -135,7 +135,7 @@ test('reopening a manually closed unapproved proposal cannot manufacture approva
 });
 
 test.each([
-  { lifecycle: 'done', closed_at: '2026-10-22T23:59:59.999999Z' },
+  { lifecycle: 'done', closed_at: '2026-11-03T23:59:59.999999Z' },
   { lifecycle: 'dismissed', closed_at: '2026-11-05T00:00:00Z' },
   { lifecycle: 'done', closed_at: '2026-11-05T00:00:00Z', merged_into: 1 },
 ])('old done, dismissed and merged tickets become context instead of routing: %j', (fields) => {
@@ -188,20 +188,23 @@ test('account mapping wins over quoted domains; otherwise sender, account and qu
   expect(api.batchClients?.(db, cfg, accountDomain)).toEqual(['other']);
 });
 
-test('offered candidates are the union of open same-client, source-local shared people and recent tickets', () => {
+test('offered candidates are the union of open same-client, source-local shared people and recent tickets of the batch client', () => {
   const { path, cfg } = fixture();
   using db = openDb(path);
   const input = batch(db, { text: 'No references' });
   const sameClient = ticket(db, { created_at: OLD, lifecycle: 'active', client: 'acme' });
   const sharedBatch = batch(db, { account: 'other@other.invalid', text: 'No refs' });
-  const shared = ticket(db, { created_at: OLD, lifecycle: 'active', client: 'other' });
+  const shared = ticket(db, { created_at: OLD, lifecycle: 'done', closed_at: OLD, client: 'acme' });
   link(db, shared, conversation(db, sharedBatch));
-  const recent = ticket(db, { created_at: '2026-10-23T00:00:00Z', lifecycle: 'done', client: 'other' });
-  const stale = ticket(db, { created_at: OLD, lifecycle: 'active', client: 'other' });
+  const recent = ticket(db, { created_at: '2026-11-04T00:00:00Z', lifecycle: 'done', client: 'acme' });
+  const stale = ticket(db, { created_at: OLD, lifecycle: 'done', closed_at: OLD, client: 'acme' });
+  const foreign = [ticket(db, { created_at: OLD, lifecycle: 'active', client: 'other' }), ticket(db, { lifecycle: 'done', client: 'other' })];
+  link(db, foreign[0]!, conversation(db, sharedBatch), 'context');
   const offered = api.candidates?.(db, cfg, input, AT);
   expect(offered?.map((item: { id: number }) => item.id).sort()).toEqual([sameClient, shared, recent].sort());
   expect(offered?.find((item: { id: number }) => item.id === shared)).toMatchObject({ shared_people: true });
   expect(offered?.map((item: { id: number }) => item.id)).not.toContain(stale);
+  for (const id of foreign) expect(offered?.map((item: { id: number }) => item.id)).not.toContain(id);
 });
 
 test('shared person ids across sources are not a verified cross-source identity association', () => {
@@ -947,11 +950,27 @@ test('source-local people shared through a context relation are offered without 
   using db = openDb(path);
   const input = batch(db, { text: 'No references' });
   const historical = batch(db, { text: 'No references' });
-  const context = ticket(db, { created_at: OLD, client: 'other', lifecycle: 'active', approved_at: OLD });
+  const context = ticket(db, { created_at: OLD, client: 'acme', lifecycle: 'active', approved_at: OLD });
   link(db, context, conversation(db, historical), 'context');
   expect(api.candidates(db, cfg, input, AT)).toMatchObject([{ id: context, shared_people: true }]);
   expect(api.route(db, input, AT)).toMatchObject({ mode: 'new', ticket: null });
   expect(db.prepare('SELECT approved_at,session_id FROM ticket WHERE id=?').get(context)).toEqual({ approved_at: OLD, session_id: null });
+});
+
+test('triage candidates stay inside the batch client and stop at 30, best matches first', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const input = batch(db, { text: 'No references' });
+  const foreign = ticket(db, { client: 'other', lifecycle: 'active', approved_at: AT, last_activity_at: AT });
+  const old = ticket(db, { client: 'acme', lifecycle: 'done', created_at: OLD, closed_at: '2026-11-03T00:00:00.000000Z' });
+  const own = Array.from({ length: 35 }, (_, i) => ticket(db, { client: 'acme', lifecycle: 'active', approved_at: OLD,
+    last_activity_at: `2026-11-05T${String(i % 24).padStart(2, '0')}:00:00.000000Z` }));
+  const offered = api.candidates(db, cfg, input, AT).map((candidate) => candidate.id);
+  expect(offered).toHaveLength(api.MAX_CANDIDATES);
+  expect(offered).not.toContain(foreign);
+  expect(offered).not.toContain(old);
+  expect(offered.every((id) => own.includes(id))).toBe(true);
+  expect(offered[0]).toBe(own[23]);
 });
 
 const CORRECTION_INPUT = '2026-11-06T01:00:00.123000Z';

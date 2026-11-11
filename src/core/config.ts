@@ -24,7 +24,7 @@ const jobs = z.strictObject({
   sync_seconds: positive.default(300),
   heartbeat_seconds: positive.default(10),
   archive_hours: positive.default(24),
-  reopen_days: nonnegative.default(14),
+  reopen_days: nonnegative.default(2),
   purge_days: positive.default(30),
   log_max_bytes: positive.default(10485760),
   log_files: positive.default(5),

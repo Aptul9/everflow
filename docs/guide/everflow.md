@@ -67,7 +67,7 @@ All values are the defaults in `src/core/config.ts`; the running instance does n
 | Page refresh | Every 10 s |
 | Sync of chat reports | Every 300 s |
 | Archive of an idle chat | After 24 h without activity or pending input, checked every 300 s |
-| Reopen of a done ticket by new messages | Within 14 days of closing |
+| Reopen of a done ticket by new messages | Within 2 days of closing |
 | Purge of message text | After 30 days, skipped batches with no ticket only, once a day |
 | Job lease | 120 s, renewed every 30 s |
 | Retry backoff | 10 s doubling to 1,800 s, 20% jitter |
@@ -84,13 +84,13 @@ All values are the defaults in `src/core/config.ts`; the running instance does n
 - Approval creates one chat named `[Working] #<id> <title>`, in the folder of the ticket's client (`[clients.<name>] directory`), or in `[opencode] directory` when the ticket has no client or the client has no folder. After each turn the chat is renamed `[<stage>] #<id> <title>`, with the stage `Needs you`, `Working`, `Waiting on them`, `Idle`, `Done` or `Failed`.
 - The last line of every turn must read `STATUS: <working|needs_you|waiting_them|done> | <one line>`. The brief defines each value. `done` closes the ticket. `blocked` is no longer offered but is still parsed as `Needs you`, for sessions opened before the change. A turn without a valid STATUS line parks its job.
 - Dismiss closes a ticket with an optional reason. The reasons are passed to every later triage. The same dialog can mute the ticket's chat.
-- Done closes a ticket that was handled by hand, with an optional note. It is not a Dismiss and is not passed to triage as negative feedback. New messages in its conversation within 14 days reopen it.
+- Done closes a ticket that was handled by hand, with an optional note. It is not a Dismiss and is not passed to triage as negative feedback. New messages in its conversation within 2 days reopen it.
 - During the trial every chat brief asks the chat to report a failing or missing tool in the turn and to append one line to `99_Inbox/everflow-tool-issues.md` in the Vault.
 - Mute keeps a chat out of triage for 8 hours, 1 day, 1 week or until unmuted, from a Skipped batch or from Dismiss. Its new messages land under Skipped as `Muted`. Muted chats are listed on the page with Unmute.
 - Make ticket turns a skipped, backlog or muted batch into a ticket, or adds it to the ticket the conversation already belongs to. It does not approve the ticket. On a muted batch it also ends the mute.
 - `accounts = [...]` under a source keeps only those receiving accounts; messages of the others are dropped before storage and the page shows them as `off`. No list means every account. The list is read at start.
 - New messages on an approved ticket go to the same chat. If a turn is still running, they wait and go in the next turn.
-- New messages on a ticket closed less than 14 days ago reopen it. Later messages make a new proposal with the old ticket as context.
+- New messages on a ticket closed less than 2 days ago reopen it. Later messages make a new proposal with the old ticket as context.
 - A failed chat turn gets a recovery turn that tells the chat to check sent items, pull requests and files before repeating anything. After 2 recoveries the ticket shows as Failed.
 - A dependency error (timeout, refused connection, HTTP 408, 429 or 5xx, database busy) waits and retries without counting an attempt. A job error (HTTP 400 or 403, missing chat, invalid triage decision after one repair) parks at once. Any other error retries and parks on the fifth attempt.
 - A parked job blocks later work on the same ticket until Retry is pressed. Sync, archive and purge never park.
