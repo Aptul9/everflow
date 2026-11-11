@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { Config } from './config.ts';
 import { transaction } from './db.ts';
 import { enqueue, healthOk } from './jobs.ts';
-import { assessmentPayload, attachBatch, batchPaused, pausedInputs, route } from './tickets.ts';
+import { ANSWERED_MYSELF, assessmentPayload, attachBatch, batchPaused, dismiss, pausedInputs, route } from './tickets.ts';
 import { utc } from './time.ts';
 
 export class IngestError extends TypeError {
@@ -243,8 +243,13 @@ export function schedule(db: DatabaseSync, cfg: Config, at?: string): number[] {
           muted && sourceMuted ? now : null).lastInsertRowid);
       db.prepare('UPDATE message SET batch=? WHERE conversation=? AND batch IS NULL').run(id, conversation.id!);
       if (own) {
-        const linked = db.prepare("SELECT ticket FROM ticket_conversation WHERE conversation=? AND kind IN ('primary','linked')").get(conversation.id!);
-        if (linked) attachBatch(db, id, Number(linked.ticket), now);
+        const linked = db.prepare(`SELECT l.ticket,t.lifecycle FROM ticket_conversation l JOIN ticket t ON t.id=l.ticket
+          WHERE l.conversation=? AND l.kind IN ('primary','linked')`).get(conversation.id!);
+        if (linked) {
+          attachBatch(db, id, Number(linked.ticket), now);
+          // Answering a chat whose ticket still waits for approval settles that ticket
+          if (linked.lifecycle === 'proposed') dismiss(db, Number(linked.ticket), ANSWERED_MYSELF, now);
+        }
       }
     }
     const paused = pausedInputs(db);

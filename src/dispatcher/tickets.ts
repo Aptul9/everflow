@@ -734,8 +734,11 @@ export function makeTicket(db: DatabaseSync, batch: number, at?: string, actor: 
   });
 }
 
+// Dismissal when Antonio answers a still-proposed ticket's chat himself; triage proposed it rightly, so it is no feedback
+export const ANSWERED_MYSELF = 'Answered myself in the source chat';
+
 export function feedback(db: DatabaseSync) {
-  const reasons = db.prepare("SELECT ticket,body AS reason,at FROM timeline WHERE event_key LIKE 'dismiss:ticket:%' ORDER BY id").all()
+  const reasons = db.prepare("SELECT ticket,body AS reason,at FROM timeline WHERE event_key LIKE 'dismiss:ticket:%' AND body IS NOT ? ORDER BY id").all(ANSWERED_MYSELF)
     .map((row) => ({ ticket: Number(row.ticket), reason: String(row.reason), at: String(row.at) }));
   return { make_ticket_count: Number(db.prepare("SELECT COUNT(*) AS n FROM timeline WHERE event_key LIKE 'make-ticket:batch:%'").get()!.n),
     dismiss_count: reasons.length, dismiss_reasons: reasons };
