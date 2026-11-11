@@ -267,7 +267,7 @@ test.each([['outlook', '2026-11-05T23:55:00Z'], ['teams', '2026-11-05T23:58:00Z'
   },
 );
 
-test('only all-own batches become answered; a mixed batch ending own still needs assessment', () => {
+test('a batch whose newest message is own becomes answered; a reply followed by their message still needs assessment', () => {
   const { path, cfg } = enabledFixture();
   using db = openDb(path);
   ingest(db, line({ sender_is_me: true }));
@@ -275,9 +275,25 @@ test('only all-own batches become answered; a mixed batch ending own still needs
   expect(db.prepare('SELECT state,outcome FROM batch').get()).toEqual({ state: 'done', outcome: 'answered' });
   ingest(db, line({ conversation_id: 'C2', message_id: 'question', sent_at: '2026-11-05T23:50:00Z' }));
   ingest(db, line({ conversation_id: 'C2', message_id: 'answer', sender_is_me: true, sent_at: '2026-11-05T23:54:00Z' }));
+  expect(api.schedule?.(db, cfg, AT)).toEqual([]);
+  expect(db.prepare('SELECT state,outcome FROM batch ORDER BY id DESC LIMIT 1').get()).toEqual({ state: 'done', outcome: 'answered' });
+  expect(db.prepare('SELECT COUNT(*) AS n FROM message WHERE batch=2').get()?.n).toBe(2);
+  ingest(db, line({ conversation_id: 'C3', message_id: 'reply', sender_is_me: true, sent_at: '2026-11-05T23:50:00Z' }));
+  ingest(db, line({ conversation_id: 'C3', message_id: 'followup', sent_at: '2026-11-05T23:54:00Z' }));
   expect(api.schedule?.(db, cfg, AT)).toHaveLength(1);
   expect(db.prepare('SELECT state,outcome FROM batch ORDER BY id DESC LIMIT 1').get()).toEqual({ state: 'pending', outcome: 'triage' });
-  expect(db.prepare('SELECT COUNT(*) AS n FROM message WHERE batch=2').get()?.n).toBe(2);
+});
+
+test('a mixed batch ending own on a running ticket chat still reaches that chat', () => {
+  const { path, cfg } = enabledFixture();
+  using db = openDb(path);
+  ingest(db, line({ message_id: 'question', sent_at: '2026-11-05T23:50:00Z' }));
+  ingest(db, line({ message_id: 'answer', sender_is_me: true, sent_at: '2026-11-05T23:54:00Z' }));
+  const owner = Number(db.prepare("INSERT INTO ticket(title,lifecycle,approved_at,session_id,created_at) VALUES ('Active','active',?,'existing-session',?)").run(AT, AT).lastInsertRowid);
+  db.prepare('INSERT INTO ticket_conversation VALUES (?,1,\'primary\',\'you\',?)').run(owner, AT);
+  expect(api.schedule?.(db, cfg, AT)).toHaveLength(1);
+  expect(db.prepare('SELECT outcome,ticket FROM batch').get()).toEqual({ outcome: 'forward', ticket: owner });
+  expect(db.prepare('SELECT kind FROM job').get()?.kind).toBe('forward');
 });
 
 test('tickets off leaves input durable without automatic batching, routing or triage', () => {
