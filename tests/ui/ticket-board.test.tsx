@@ -741,6 +741,35 @@ test('timeline-only server change invalidates state and refreshes expanded detai
   expect(document.activeElement === original).toBe(true);
 });
 
+test('tab title counts Needs you and Failed, and a chime plays only when the count grows', async () => {
+  const tones: number[] = [];
+  vi.stubGlobal('AudioContext', class {
+    currentTime = 0;
+    destination = {};
+    resume() { return Promise.resolve(); }
+    createOscillator() { return { frequency: { value: 0 }, connect: (node: unknown) => node, start() {}, stop() { tones.push(this.frequency.value); } }; }
+    createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect: (node: unknown) => node }; }
+  });
+  const interval = vi.spyOn(globalThis, 'setInterval');
+  board();
+  expect(document.title).toBe('(3) Workdesk');
+  expect(tones).toHaveLength(0);
+  const grown = uiState();
+  grown.groups.needs_you.push({ ...grown.groups.needs_you[0]!, id: 9, title: 'Fresh ask' });
+  fetcher.mockImplementation(async () => Response.json(grown, { headers: { etag: '"grown"' } }));
+  const tick = interval.mock.calls.find(([, delay]) => delay === 10_000)![0] as () => void;
+  await act(async () => tick());
+  await waitFor(() => expect(document.title).toBe('(4) Workdesk'));
+  expect(tones).toEqual([880, 1320]);
+  const cleared = uiState();
+  cleared.groups.needs_you = [];
+  cleared.groups.failed = [];
+  fetcher.mockImplementation(async () => Response.json(cleared, { headers: { etag: '"cleared"' } }));
+  await act(async () => tick());
+  await waitFor(() => expect(document.title).toBe('Workdesk'));
+  expect(tones).toHaveLength(2);
+});
+
 test('403 action displays reload notice and never retries stale approval', async () => {
   fetcher.mockResolvedValue(Response.json({ error: { message: 'Action token rejected' } }, { status: 403 }));
   board();

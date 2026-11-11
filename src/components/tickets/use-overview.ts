@@ -106,3 +106,46 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
 
   return { state, now, unreachable, expired, pending, errors, notice, post, refresh };
 }
+
+// Tab title carries the count of tickets waiting on Antonio; a chime plays when it grows.
+export function useAttention(count: number) {
+  const previous = useRef(count);
+  const audio = useRef<AudioContext | null>(null);
+
+  useEffect(() => {
+    // Browsers keep audio suspended until the page gets a gesture
+    const unlock = () => { void sound(audio)?.resume(); };
+    document.addEventListener('pointerdown', unlock);
+    document.addEventListener('keydown', unlock);
+    return () => { document.removeEventListener('pointerdown', unlock); document.removeEventListener('keydown', unlock); };
+  }, []);
+
+  useEffect(() => {
+    document.title = count > 0 ? `(${count}) Workdesk` : 'Workdesk';
+    if (count > previous.current) chime(sound(audio));
+    previous.current = count;
+  }, [count]);
+}
+
+function sound(audio: { current: AudioContext | null }): AudioContext | null {
+  if (typeof AudioContext === 'undefined') return null;
+  return audio.current ??= new AudioContext();
+}
+
+function chime(context: AudioContext | null) {
+  if (!context) return;
+  void context.resume();
+  const start = context.currentTime;
+  [880, 1320].forEach((frequency, index) => {
+    const at = start + index * 0.15;
+    const tone = context.createOscillator();
+    const gain = context.createGain();
+    tone.frequency.value = frequency;
+    gain.gain.setValueAtTime(0.0001, at);
+    gain.gain.exponentialRampToValueAtTime(0.2, at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.4);
+    tone.connect(gain).connect(context.destination);
+    tone.start(at);
+    tone.stop(at + 0.45);
+  });
+}

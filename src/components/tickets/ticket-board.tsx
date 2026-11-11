@@ -15,7 +15,7 @@ import { Inline, Markdown } from './markdown.tsx';
 import { Pipeline, Problems } from './pipeline.tsx';
 import { age, Expand, Field, formatTime, MessageList, Section, TicketCard, Time, Toggle, tones } from './ticket-card.tsx';
 import type { Tone } from './ticket-card.tsx';
-import { useOverview } from './use-overview.ts';
+import { useAttention, useOverview } from './use-overview.ts';
 
 const columnTone: Record<Group, Tone> = { needs_you: 'needs', working: 'working', waiting_them: 'waiting', failed: 'failed', done_today: 'done', skipped: 'skipped' };
 const outcomes: Record<SkippedBatch['outcome'], string> = { not_on_us: 'Not on us', backlog: 'Backlog', answered: 'Answered', muted: 'Muted' };
@@ -133,6 +133,7 @@ function MutedChats(props: { state: OverviewState; expired: boolean; pending: Re
 
 export function TicketBoard(props: { initialState: OverviewState; initialEtag: string; token: string; initialNow?: number }) {
   const { state, now, unreachable, expired, pending, errors, notice, post } = useOverview(props.initialState, props.initialEtag, props.token, props.initialNow);
+  useAttention(state.groups.needs_you.length + state.groups.failed.length);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const root = useRef<HTMLDivElement>(null);
