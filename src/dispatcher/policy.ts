@@ -25,6 +25,15 @@ export function sourceEnabled(cfg: object, source: string): boolean {
   return (cfg as { sources?: Record<string, { enabled?: unknown } | undefined> }).sources?.[source]?.enabled === true;
 }
 
+// A ticket chat opens in its client's project folder; no client or no folder, in [opencode] directory
+export function chatDirectory(cfg: Pick<Config, 'clients' | 'opencode'>, client: string | null): string {
+  return (client ? cfg.clients[client]?.directory : undefined) ?? cfg.opencode.directory;
+}
+
+export function chatDirectories(cfg: Pick<Config, 'clients' | 'opencode'>): string[] {
+  return [...new Set([cfg.opencode.directory, ...Object.values(cfg.clients).flatMap((client) => client.directory ?? [])])];
+}
+
 export function clientsFor(cfg: Pick<Config, 'clients'>, account: string, addresses: readonly string[]): string[] {
   const clients = Object.entries(cfg.clients);
   const hit = clients.filter(([, client]) => client.accounts.some((value) => value.toLowerCase() === account.toLowerCase()));

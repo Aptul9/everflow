@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import type { SessionMessageInfo } from '@opencode/client';
-import { loadConfig } from '../src/dispatcher/config.ts';
+import { chatDirectory, loadConfig } from '../src/dispatcher/config.ts';
 import * as transport from '../src/dispatcher/opencode.ts';
 import { classify } from '../src/dispatcher/jobs.ts';
 import { openDb } from '../src/dispatcher/db.ts';
@@ -122,6 +122,29 @@ test('transport has an explicit timeout and propagates cancellation', async () =
   await expect(api.get('ses_1')).rejects.toMatchObject({ cause: { name: 'TimeoutError' } });
   const controller = new AbortController(); controller.abort();
   await expect(api.get('ses_1', controller.signal)).rejects.toMatchObject({ cause: { name: 'AbortError' } });
+});
+
+test('a ticket chat opens in its client folder and is found there; other clients use the default folder', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg, files } = config(peer.url);
+  cfg.tickets.enabled = true;
+  cfg.chats.enabled = true;
+  const folder = `${cfg.opencode.directory}-client`;
+  cfg.clients['synthetic-client'] = { accounts: [], domains: [], keywords: [], directory: folder };
+  expect(chatDirectory(cfg, 'synthetic-client')).toBe(folder);
+  expect(chatDirectory(cfg, 'unknown')).toBe(cfg.opencode.directory);
+  expect(chatDirectory(cfg, null)).toBe(cfg.opencode.directory);
+  using db = openDb(files.path);
+  const ticket = proposed(db);
+  chat.approve(cfg, db, ticket, 'Synthetic client folder');
+  await chat.startChat(cfg, db, claimed(db, cfg));
+  const created = peer.calls.filter((call) => call.method === 'POST' && call.url.pathname === '/api/session');
+  expect(created).toHaveLength(1);
+  expect(created[0]!.body).toMatchObject({ location: { directory: folder } });
+  const session = String(row(db, 'ticket', ticket).session_id);
+  db.prepare("UPDATE ticket SET client='other' WHERE id=?").run(ticket);
+  const store = JSON.parse(String(db.prepare("SELECT detail FROM health WHERE dependency='daemon'").get()!.detail)).store_id;
+  expect(await transport.connect(cfg).findTicket(store, ticket)).toBe(session);
 });
 
 test('tag lookup scans every archived page, omits order with opaque cursors, rejects duplicates', async () => {

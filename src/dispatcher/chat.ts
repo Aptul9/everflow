@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from './config.ts';
+import { chatDirectory } from './policy.ts';
 import { transaction } from './db.ts';
 import { backoff, classify, complete, defer, enqueue, fail, hasPendingInput, healthError, healthOk, owns, reserveTurn } from './jobs.ts';
 import type { Job } from './jobs.ts';
@@ -327,7 +328,8 @@ async function input(cfg: Config, db: DatabaseSync, job: Job, kind: 'brief' | 'f
       if (!found && (!cfg.tickets.enabled || !cfg.chats.enabled || ticketRow(db, owner.id).lifecycle !== 'active')) {
         defer(db, job, after(now(), cfg.jobs.collect_seconds), undefined, now); return;
       }
-      const session = found ?? (await peer.create(`[Working] #${owner.id} ${owner.title}`, store, owner.id, options.signal, modelChoice(db, cfg, 'chat'))).id;
+      const session = found ?? (await peer.create(`[Working] #${owner.id} ${owner.title}`, store, owner.id, options.signal, modelChoice(db, cfg, 'chat'),
+        chatDirectory(cfg, ticketRow(db, owner.id).client))).id;
       if (!session) throw jobError('OpenCode returned no session identity');
       const saved = fenced(db, job, () => {
         const target = ticketRow(db, owner.id);

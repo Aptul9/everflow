@@ -61,6 +61,7 @@ const configSchema = z.looseObject({
   }).prefault({}),
   clients: z.record(z.string().min(1), z.looseObject({
     accounts: z.array(z.string()).default([]), domains: z.array(z.string()).default([]), keywords: z.array(z.string()).default([]),
+    directory: z.string().min(1).optional(),
   })).default({}),
 });
 
@@ -78,6 +79,8 @@ export function loadConfig(path: string): Config {
     vault: { ...cfg.vault, path: resolve(root, cfg.vault.path) },
     opencode: { ...cfg.opencode, directory: resolve(root, cfg.opencode.directory) },
     triage: { ...cfg.triage, ...(cfg.triage.provider_config_path ? { provider_config_path: resolve(root, cfg.triage.provider_config_path) } : {}) },
+    clients: Object.fromEntries(Object.entries(cfg.clients).map(([name, client]) =>
+      [name, { ...client, ...(client.directory ? { directory: resolve(root, client.directory) } : {}) }])),
   };
 }
 
@@ -90,4 +93,4 @@ export function readJsonc(path: string): unknown {
   return value;
 }
 
-export { clientsFor } from './policy.ts';
+export { chatDirectories, chatDirectory, clientsFor } from './policy.ts';

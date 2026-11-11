@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../dispatcher/config.ts';
-import { clientsFor, sourceAccounts, sourceEnabled } from '../dispatcher/policy.ts';
+import { chatDirectory, clientsFor, sourceAccounts, sourceEnabled } from '../dispatcher/policy.ts';
 import { batchClients, batchMessages, batchPaused, detail, feedback, MUTE_FOREVER, pausedInputs } from '../dispatcher/tickets.ts';
 import type { Message } from '../dispatcher/tickets.ts';
 import { modelChoice, readModelOptions } from '../dispatcher/settings.ts';
@@ -130,7 +130,8 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
     .map((row) => ({ id: Number(row.id), batch: row.batch === null ? null : Number(row.batch), at: String(row.at),
       raw: row.raw as string | null, parse_error: row.reason as string | null }));
   return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped, triaging, agents,
-    models: { triage: modelChoice(db, cfg, 'triage'), chat: modelChoice(db, cfg, 'chat'), options: readModelOptions(db) }, chat_project: basename(cfg.opencode.directory || ''), muted,
+    models: { triage: modelChoice(db, cfg, 'triage'), chat: modelChoice(db, cfg, 'chat'), options: readModelOptions(db) }, chat_project: basename(cfg.opencode.directory || ''),
+    chat_projects: Object.fromEntries(Object.keys(cfg.clients).map((client) => [client, basename(chatDirectory(cfg, client))])), muted,
     health: health(db, cfg), problems: { jobs, quarantine, triage }, feedback: feedback(db) };
 }
 

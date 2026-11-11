@@ -5,6 +5,7 @@ import { OpenCode } from '@opencode/client';
 import type { SessionMessageInfo, SessionStructuredError } from '@opencode/client';
 import { z } from 'zod';
 import type { Config } from './config.ts';
+import { chatDirectories } from './policy.ts';
 
 interface AuthOptions {
   url: string;
@@ -183,30 +184,33 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
   };
   return {
     // choice: the page's model/effort for new chats; without it the config model and the model's default effort
-    async create(title: string, store: string, ticket: number, signal?: AbortSignal, choice?: { model: string; effort: string | null }): Promise<{ id: string }> {
+    // directory: the client's project folder, default [opencode] directory
+    async create(title: string, store: string, ticket: number, signal?: AbortSignal, choice?: { model: string; effort: string | null },
+      directory = cfg.opencode.directory): Promise<{ id: string }> {
       if (!store || !Number.isSafeInteger(ticket) || ticket <= 0) throw new TypeError('A durable store and ticket id are required');
       const selected = choice?.model ?? cfg.opencode.model;
       const [providerID, ...model] = selected.split('/');
       if (selected && (!providerID || !model.join('/'))) throw new TypeError('OpenCode model must be provider/model');
-      return client.session.create({ title, location: { directory: cfg.opencode.directory },
+      return client.session.create({ title, location: { directory },
         metadata: { workdesk: { store_id: store, ticket } },
         ...(selected ? { model: { providerID: providerID!, id: model.join('/'), ...(choice?.effort ? { variant: choice.effort } : {}) } } : {}) }, request(signal));
     },
     async models(signal?: AbortSignal) {
       return (await client.model.list({ location: { directory: cfg.opencode.directory }, types: ['chat'] }, request(signal))).data;
     },
+    // Every chat folder: the ticket's client can change between a lost create and its recovery
     async findTicket(store: string, ticket: number, signal?: AbortSignal): Promise<string | null> {
       const matches = new Set<string>();
-      for (const archived of [false, true]) {
+      for (const directory of chatDirectories(cfg)) for (const archived of [false, true]) {
         const cursors = new Set<string>();
         let cursor: string | undefined;
         do {
-          const page = await client.session.list({ directory: cfg.opencode.directory, archived, limit: 100,
+          const page = await client.session.list({ directory, archived, limit: 100,
             ...(cursor ? { cursor } : { order: 'desc' }) }, request(signal));
           for (const session of page.data) {
             const tag = session.metadata?.workdesk;
             if (tag && typeof tag === 'object' && !Array.isArray(tag) && tag.store_id === store && tag.ticket === ticket
-              && directoryKey(session.location.directory) === directoryKey(cfg.opencode.directory)) matches.add(session.id);
+              && directoryKey(session.location.directory) === directoryKey(directory)) matches.add(session.id);
           }
           cursor = page.cursor.next ?? undefined;
           if (cursor && cursors.has(cursor)) throw new TypeError('OpenCode repeated a session cursor');
