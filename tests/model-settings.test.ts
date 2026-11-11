@@ -1,20 +1,20 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import * as chat from '../src/dispatcher/chat.ts';
-import { openDb } from '../src/dispatcher/db.ts';
-import { handleTriage } from '../src/dispatcher/kb-agent.ts';
-import { modelOptions } from '../src/dispatcher/runtime.ts';
-import { modelChoice, readModelOptions, requestModelOptions, saveSetting, storeModelOptions, takeModelRequest } from '../src/dispatcher/settings.ts';
-import { ingest, schedule } from '../src/dispatcher/ingest.ts';
-import * as jobs from '../src/dispatcher/jobs.ts';
-import { TicketError } from '../src/dispatcher/tickets.ts';
+import * as chat from '../src/core/chat.ts';
+import { openDb } from '../src/core/db.ts';
+import { handleTriage } from '../src/core/kb-agent.ts';
+import { modelOptions } from '../src/core/runtime.ts';
+import { modelChoice, readModelOptions, requestModelOptions, saveSetting, storeModelOptions, takeModelRequest } from '../src/core/settings.ts';
+import { ingest, schedule } from '../src/core/ingest.ts';
+import * as jobs from '../src/core/jobs.ts';
+import { TicketError } from '../src/core/tickets.ts';
 import { readState } from '../src/web/state.ts';
 import { AT, addBatch, chatFixture, claimed, proposed } from './chat-support.ts';
 import { decision, kbFixture, provider, scriptedPeer as triagePeer, text } from './kb-support.ts';
 import { scriptedPeer } from './opencode-support.ts';
 
-beforeEach(() => { vi.stubEnv('WORKDESK_OPENCODE_PASSWORD', ''); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(AT)); });
+beforeEach(() => { vi.stubEnv('EVERFLOW_OPENCODE_PASSWORD', ''); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(AT)); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 test('a page choice overrides the config model and effort; an empty value goes back to the default; bad values are refused', () => {

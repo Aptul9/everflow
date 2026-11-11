@@ -1,10 +1,10 @@
 import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
-import { approve } from '../dispatcher/approval.ts';
-import { transaction } from '../dispatcher/db.ts';
-import { retry } from '../dispatcher/jobs.ts';
-import { requestModelOptions, saveSetting } from '../dispatcher/settings.ts';
-import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, muteBatch, muteTicket, pauseInput, TicketError } from '../dispatcher/tickets.ts';
+import { approve } from '../core/approval.ts';
+import { transaction } from '../core/db.ts';
+import { retry } from '../core/jobs.ts';
+import { requestModelOptions, saveSetting } from '../core/settings.ts';
+import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, muteBatch, muteTicket, pauseInput, TicketError } from '../core/tickets.ts';
 import { HttpError, instance, withDatabase } from './instance.ts';
 import type { WebInstance } from './instance.ts';
 import { readState, representation, ticketDetail } from './state.ts';
@@ -24,7 +24,7 @@ export function allowedHost(host: string | undefined | null, port: number): bool
 
 export function guardPost(headers: Pick<Headers, 'get'>, current: WebInstance): void {
   const host = headers.get('host');
-  const supplied = Buffer.from(headers.get('x-dispatcher-token') ?? '', 'utf8');
+  const supplied = Buffer.from(headers.get('x-everflow-token') ?? '', 'utf8');
   const expected = Buffer.from(current.token, 'utf8');
   if (!allowedHost(host, current.port) || headers.get('origin') !== `http://${host}`
     || supplied.byteLength !== expected.byteLength || !timingSafeEqual(supplied, expected)) {

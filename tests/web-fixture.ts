@@ -1,9 +1,9 @@
 import { writeFileSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { openDb } from '../src/dispatcher/db.ts';
-import { enqueue, healthOk, park } from '../src/dispatcher/jobs.ts';
-import { addRefs } from '../src/dispatcher/tickets.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { openDb } from '../src/core/db.ts';
+import { enqueue, healthOk, park } from '../src/core/jobs.ts';
+import { addRefs } from '../src/core/tickets.ts';
 import { addBatch, proposed } from './chat-support.ts';
 import { scratch } from './support.ts';
 

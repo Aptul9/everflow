@@ -1,10 +1,10 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { expect } from 'vitest';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { prepareStart } from '../src/dispatcher/db.ts';
-import { ingest } from '../src/dispatcher/ingest.ts';
-import * as jobs from '../src/dispatcher/jobs.ts';
-import { attachBatch } from '../src/dispatcher/tickets.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { prepareStart } from '../src/core/db.ts';
+import { ingest } from '../src/core/ingest.ts';
+import * as jobs from '../src/core/jobs.ts';
+import { attachBatch } from '../src/core/tickets.ts';
 import { scratch } from './support.ts';
 
 export const AT = '2026-11-06T00:00:00.000000Z';

@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { expect, test } from 'vitest';
-import { openDb } from '../src/dispatcher/db.ts';
+import { openDb } from '../src/core/db.ts';
 import { OLD_AT, scratch } from './support.ts';
 import { raceChatOpen } from './jobs-support.ts';
 

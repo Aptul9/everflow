@@ -81,7 +81,7 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
     setPending(new Set(submitting.current));
     setErrors((previous) => { const next = { ...previous }; delete next[key]; return next; });
     try {
-      const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-dispatcher-token': token },
+      const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-everflow-token': token },
         body: JSON.stringify(input), signal: controller.signal, credentials: 'same-origin', mode: 'same-origin', redirect: 'error' });
       if (response.status === 403) { stale.current = true; if (mounted.current) setExpired(true); }
       if (!response.ok) {
@@ -121,7 +121,7 @@ export function useAttention(count: number) {
   }, []);
 
   useEffect(() => {
-    document.title = count > 0 ? `(${count}) Workdesk` : 'Workdesk';
+    document.title = count > 0 ? `(${count}) Everflow` : 'Everflow';
     if (count > previous.current) chime(sound(audio));
     previous.current = count;
   }, [count]);

@@ -9,8 +9,8 @@ import { createRelayState, readRelay, relayCommand, scanRelay, shellQuote, sqlLi
 import type { RelayOptions, RelayQuery, SshSpawn } from '../src/watchers/relay.ts';
 import { safeSourceDiagnostic } from '../src/watchers/source.ts';
 import type { SourceMessage, SourceRecord } from '../src/watchers/source.ts';
-import { migrate, openDb } from '../src/dispatcher/db.ts';
-import { ingest, sourceStart } from '../src/dispatcher/ingest.ts';
+import { migrate, openDb } from '../src/core/db.ts';
+import { ingest, sourceStart } from '../src/core/ingest.ts';
 import { scratch, snapshot } from './support.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
 import * as native from '../src/windows/kernel.ts';
@@ -255,11 +255,11 @@ test.each(['owner-capture', 'owner-dispose', 'child-capture', 'child-dispose', '
   readBuildReceipt(process.env.TEST_BUILD_RECEIPT); const files = scratch('phase7b-owner-setup-');
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
   const connected = Object.getOwnPropertyDescriptor(process, 'connected'), send = Object.getOwnPropertyDescriptor(process, 'send');
-  const originalOwner = process.env.WORKDESK_SOURCE_OWNER;
+  const originalOwner = process.env.EVERFLOW_SOURCE_OWNER;
   Object.defineProperty(process, 'connected', { value: true, configurable: true, writable: true });
   const notify = vi.fn((_value: unknown, callback?: (error?: Error) => void) => { callback?.(); });
   Object.defineProperty(process, 'send', { value: notify, configurable: true, writable: true });
-  process.env.WORKDESK_SOURCE_OWNER = String(process.ppid);
+  process.env.EVERFLOW_SOURCE_OWNER = String(process.ppid);
   const controller = new AbortController(), child: any = new EventEmitter();
   let spawned = 0, kills = 0, closed = false, kernels = 0;
   const controls: Record<string, unknown>[] = [];
@@ -308,7 +308,7 @@ test.each(['owner-capture', 'owner-dispose', 'child-capture', 'child-dispose', '
     child.stdout.destroy(); child.stderr.destroy(); kernel.mockRestore();
     if (connected) Object.defineProperty(process, 'connected', connected); else delete (process as any).connected;
     if (send) Object.defineProperty(process, 'send', send); else delete (process as any).send;
-    if (originalOwner === undefined) delete process.env.WORKDESK_SOURCE_OWNER; else process.env.WORKDESK_SOURCE_OWNER = originalOwner;
+    if (originalOwner === undefined) delete process.env.EVERFLOW_SOURCE_OWNER; else process.env.EVERFLOW_SOURCE_OWNER = originalOwner;
     fs.writeFileSync(join(files.root, 'proof.json'), JSON.stringify({ config: files.config, artifact: process.env.TEST_BUILD_RECEIPT, mode, observedAtQuerySettlement: snapshot, controls, finalClosed: closed, finalTimers: vi.getTimerCount() }, null, 2));
     vi.useRealTimers();
   }

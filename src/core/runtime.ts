@@ -95,7 +95,7 @@ export function sourceCommand(cfg: Config, db: DatabaseSync, source: Source, bui
     }
   }
   return { source, executable: process.execPath, args, cwd: artifact.root,
-    environment: { ...childEnvironment(), WORKDESK_SOURCE_OWNER: String(process.pid), WORKDESK_SOURCE_CONFIG: cfg._config_path, WORKDESK_ARTIFACT: buildReceipt } };
+    environment: { ...childEnvironment(), EVERFLOW_SOURCE_OWNER: String(process.pid), EVERFLOW_SOURCE_CONFIG: cfg._config_path, EVERFLOW_ARTIFACT: buildReceipt } };
 }
 
 export function createLog(path: string, policy: Pick<Config['jobs'], 'log_files' | 'log_max_bytes'>): Log {
@@ -241,7 +241,7 @@ export async function readWatcher(db: DatabaseSync, cfg: Config, source: Source,
   const readerFailed = (error: unknown) => {
     if (failed) return;
     failed = true; failure = error;
-    if (child.connected) child.send({ type: 'dispatcher.stop' }, () => {}); else child.kill();
+    if (child.connected) child.send({ type: 'everflow.stop' }, () => {}); else child.kill();
   };
   const stdout = lines(child.stdout, reader.stdout).then(() => {
     if (!stopping()) healthError(db, cfg, source, 'source.stdout-eof', undefined, true);
@@ -401,7 +401,7 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
   const close = () => closing ??= (async () => {
     stopped = true; clearInterval(interval); clearInterval(heartbeatTimer);
     for (const active of inFlight.values()) active.controller.abort();
-    for (const { child } of watchers) if (child.connected) child.send({ type: 'dispatcher.stop' }, () => {});
+    for (const { child } of watchers) if (child.connected) child.send({ type: 'everflow.stop' }, () => {});
     try { await bounded(Promise.allSettled(watchers.map((watcher) => watcher.done)), 5000, 'source.stop-timeout'); }
     catch {
       for (const { child } of watchers) if (child.exitCode === null && child.signalCode === null) child.kill();
@@ -436,8 +436,8 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
       child.on('message', (value: unknown) => {
         if (!value || typeof value !== 'object') return;
         const entry = value as { type?: unknown; identity?: ProcessIdentity; owner?: ProcessIdentity; pid?: unknown; active?: unknown; code?: unknown; status?: unknown };
-        if (entry.type === 'dispatcher.child-error') { log({ source, code: 'source.child-identity', ...failureFields(entry, 'child.capture') }); return; }
-        if (entry.type !== 'dispatcher.child') return;
+        if (entry.type === 'everflow.child-error') { log({ source, code: 'source.child-identity', ...failureFields(entry, 'child.capture') }); return; }
+        if (entry.type !== 'everflow.child') return;
         const valid = (item: unknown): item is ProcessIdentity => {
           if (!item || typeof item !== 'object') return false;
           const candidate = item as Partial<ProcessIdentity>;

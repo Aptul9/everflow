@@ -11,10 +11,10 @@ let native: DpapiBindings | undefined;
 function dpapiBindings(): DpapiBindings {
   if (native) return native;
   const koffi = win32Ffi(), crypt = koffi.load('crypt32.dll'), kernel = koffi.load('kernel32.dll');
-  const blob = koffi.struct('DispatcherDataBlob', { cbData: 'uint32_t', pbData: 'void *' });
+  const blob = koffi.struct('EverflowDataBlob', { cbData: 'uint32_t', pbData: 'void *' });
   if (koffi.sizeof(blob) !== 16 || koffi.offsetof(blob, 'pbData') !== 8) throw new NativeError('dpapi.abi-layout');
-  const protect = crypt.func('int __stdcall CryptProtectData(const DispatcherDataBlob *input, str16 description, const DispatcherDataBlob *entropy, void *reserved, void *prompt, uint32_t flags, _Out_ DispatcherDataBlob *output)');
-  const unprotect = crypt.func('int __stdcall CryptUnprotectData(const DispatcherDataBlob *input, void *description, const DispatcherDataBlob *entropy, void *reserved, void *prompt, uint32_t flags, _Out_ DispatcherDataBlob *output)');
+  const protect = crypt.func('int __stdcall CryptProtectData(const EverflowDataBlob *input, str16 description, const EverflowDataBlob *entropy, void *reserved, void *prompt, uint32_t flags, _Out_ EverflowDataBlob *output)');
+  const unprotect = crypt.func('int __stdcall CryptUnprotectData(const EverflowDataBlob *input, void *description, const EverflowDataBlob *entropy, void *reserved, void *prompt, uint32_t flags, _Out_ EverflowDataBlob *output)');
   const last = kernel.func('uint32_t __stdcall GetLastError()'), free = kernel.func('void *__stdcall LocalFree(void *memory)');
   native = {
     transform(input, protecting, flags) {

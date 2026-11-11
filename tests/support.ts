@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCRATCH = 'C:/Users/Antonio/AppData/Local/Temp/opencode/workdesk';
+export const SCRATCH = 'C:/Users/Antonio/AppData/Local/Temp/opencode/everflow';
 export const OLD_AT = '2026-11-04T17:01:02.123456Z';
 export const CUTOFF = '2026-11-05T20:00:00.000Z';
 

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
-import { VAULT_LIMITS, vaultRead as read, vaultSearch as search } from '../src/dispatcher/vault.ts';
+import { VAULT_LIMITS, vaultRead as read, vaultSearch as search } from '../src/core/vault.ts';
 import { scratch } from './support.ts';
 
 afterEach(() => vi.restoreAllMocks());

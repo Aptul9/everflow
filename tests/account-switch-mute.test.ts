@@ -1,11 +1,11 @@
 import { writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test } from 'vitest';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { openDb } from '../src/dispatcher/db.ts';
-import { ingest, schedule, sourceStart } from '../src/dispatcher/ingest.ts';
-import { createSourceReader, validateRuntimeConfig } from '../src/dispatcher/runtime.ts';
-import { dismiss, makeTicket, mute, MUTE_FOREVER, muteTicket, pauseInput, TicketError } from '../src/dispatcher/tickets.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { openDb } from '../src/core/db.ts';
+import { ingest, schedule, sourceStart } from '../src/core/ingest.ts';
+import { createSourceReader, validateRuntimeConfig } from '../src/core/runtime.ts';
+import { dismiss, makeTicket, mute, MUTE_FOREVER, muteTicket, pauseInput, TicketError } from '../src/core/tickets.ts';
 import { actionPost } from '../src/web/api.ts';
 import { initialize, release } from '../src/web/instance.ts';
 import { readState } from '../src/web/state.ts';
@@ -17,7 +17,7 @@ const later = (minutes: number) => new Date(Date.parse(AT) + minutes * 60_000).t
 const line = (value: unknown) => Buffer.from(JSON.stringify(value));
 
 function instance(toml = '') {
-  const files = scratch('workdesk-switch-');
+  const files = scratch('everflow-switch-');
   writeFileSync(files.config, `[db]\npath = "fixture.db"\n[tickets]\nenabled = true\n${toml}`);
   return { ...files, cfg: loadConfig(files.config) };
 }
@@ -115,7 +115,7 @@ test('page clear hides a skipped batch, keeps its messages and refuses other bat
   const current = { config: fixture.cfg, configPath: fixture.cfg._config_path, port: 12349, token: 'e'.repeat(64) };
   const post = (id: number, body: unknown) => actionPost(new Request(`http://127.0.0.1:12349/api/batch/${id}/clear`, {
     method: 'POST', body: JSON.stringify(body),
-    headers: { host: '127.0.0.1:12349', origin: 'http://127.0.0.1:12349', 'x-dispatcher-token': current.token, 'content-type': 'application/json' },
+    headers: { host: '127.0.0.1:12349', origin: 'http://127.0.0.1:12349', 'x-everflow-token': current.token, 'content-type': 'application/json' },
   }), 'batch', String(id), 'clear');
   const routed = (() => { using db = new DatabaseSync(fixture.path, { readOnly: true }); return Number(db.prepare('SELECT id FROM batch WHERE ticket IS NOT NULL ORDER BY id LIMIT 1').get()!.id); })();
   initialize(current);
@@ -139,7 +139,7 @@ test('page clear hides a dismissed or done ticket and refuses open tickets', asy
   const current = { config: fixture.cfg, configPath: fixture.cfg._config_path, port: 12350, token: 'f'.repeat(64) };
   const post = (id: number) => actionPost(new Request(`http://127.0.0.1:12350/api/ticket/${id}/clear`, {
     method: 'POST', body: '{}',
-    headers: { host: '127.0.0.1:12350', origin: 'http://127.0.0.1:12350', 'x-dispatcher-token': current.token, 'content-type': 'application/json' },
+    headers: { host: '127.0.0.1:12350', origin: 'http://127.0.0.1:12350', 'x-everflow-token': current.token, 'content-type': 'application/json' },
   }), 'ticket', String(id), 'clear');
   initialize(current);
   try {
@@ -260,9 +260,11 @@ test('a muted chat stays out of triage until the mute ends, and own-only batches
   ingest(db, message('me@example.invalid', 'own', { sender: 'oid-me', sender_is_me: true, sent_at: later(30) }));
   schedule(db, f.cfg, later(40));
   expect(db.prepare('SELECT outcome FROM batch ORDER BY id DESC').get()!.outcome).toBe('answered');
-  // Skipped batches leave the board a day after they finished
-  expect(readState(db, f.cfg, new Date(later(24 * 60 + 30))).skipped.map((batch) => batch.outcome)).toEqual(['answered']);
-  expect(readState(db, f.cfg, new Date(later(25 * 60))).skipped).toEqual([]);
+  // Skipped batches leave the board at the end of the local day they finished
+  const midnight = new Date(later(40));
+  midnight.setHours(24, 0, 0, 0);
+  expect(readState(db, f.cfg, new Date(midnight.getTime() - 60_000)).skipped.map((batch) => batch.outcome)).toContain('answered');
+  expect(readState(db, f.cfg, midnight).skipped).toEqual([]);
   ingest(db, message('me@example.invalid', 'm2', { sent_at: later(25 * 60) }));
   expect(schedule(db, f.cfg, later(25 * 60 + 10))).toHaveLength(1);
   expect(db.prepare('SELECT outcome FROM batch ORDER BY id DESC').get()!.outcome).toBe('triage');
@@ -295,7 +297,7 @@ test('page actions mute a skipped chat, dismiss with mute and unmute, rejecting 
   const current = { config: fixture.cfg, configPath: fixture.cfg._config_path, port: 12346, token: 'b'.repeat(64) };
   const post = (scope: 'ticket' | 'batch' | 'conversation', id: number, action: string, body: unknown) => actionPost(new Request(`http://127.0.0.1:12346/api/${scope}/${id}/${action}`, {
     method: 'POST', body: JSON.stringify(body),
-    headers: { host: '127.0.0.1:12346', origin: 'http://127.0.0.1:12346', 'x-dispatcher-token': current.token, 'content-type': 'application/json' },
+    headers: { host: '127.0.0.1:12346', origin: 'http://127.0.0.1:12346', 'x-everflow-token': current.token, 'content-type': 'application/json' },
   }), scope, String(id), action);
   const mutedUntil = (conversation: number) => {
     using db = new DatabaseSync(fixture.path, { readOnly: true });

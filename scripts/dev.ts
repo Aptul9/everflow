@@ -8,12 +8,12 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { loadConfig } from '../src/dispatcher/config.ts';
+import { loadConfig } from '../src/core/config.ts';
 
-const configPath = resolve(process.argv[2] ?? join(process.env.LOCALAPPDATA ?? '', 'workdesk', 'config.toml'));
+const configPath = resolve(process.argv[2] ?? join(process.env.LOCALAPPDATA ?? '', 'everflow', 'config.toml'));
 const port = Number(process.argv[3] ?? 8790);
 const config = loadConfig(configPath);
-const dir = join(tmpdir(), 'workdesk-dev');
+const dir = join(tmpdir(), 'everflow-dev');
 const snapshot = join(dir, 'preview.db');
 mkdirSync(dir, { recursive: true });
 rmSync(snapshot, { force: true });
@@ -22,9 +22,9 @@ rmSync(snapshot, { force: true });
   live.exec(`VACUUM INTO '${snapshot.replaceAll("'", "''")}'`);
 }
 config.db.path = snapshot;
-process.env.WORKDESK_DEV = '1';
+process.env.EVERFLOW_DEV = '1';
 // Same slot src/web/instance.ts reads; set directly since Node cannot strip that module's parameter properties
-(process as unknown as Record<symbol, unknown>)[Symbol.for('workdesk.web.instance')] = { config, configPath: config._config_path, port, token: randomBytes(32).toString('hex') };
+(process as unknown as Record<symbol, unknown>)[Symbol.for('everflow.web.instance')] = { config, configPath: config._config_path, port, token: randomBytes(32).toString('hex') };
 
 const next = createRequire(import.meta.url)('next') as typeof import('next').default;
 const server = createServer((request, response) => { void handle(request, response); });

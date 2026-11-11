@@ -1,8 +1,8 @@
-# Workdesk
+# Everflow
 
-TypeScript inbox collection, local ticket proposals and approved OpenChamber chats. SQLite holds the queue and processed markers. Source read state is never changed. The dispatcher has no mail or chat send transport and no channel-based approvals or alerts.
+TypeScript inbox collection, local ticket proposals and approved OpenChamber chats. SQLite holds the queue and processed markers. Source read state is never changed. Everflow has no mail or chat send transport and no channel-based approvals or alerts.
 
-Workdesk was previously named inbox-dispatcher. The rename covers the GitHub repository, the checkout, `WORKDESK_*` environment variables, named-pipe locks, OpenChamber session tags and build and scratch paths. `npm run workdesk -- --help` is the only launcher. A build made before the rename keeps its own names and paths, so an instance pinned to it keeps working until it is rebuilt. Chats created by such a build carry the old `inbox_dispatcher` session tag and are not found by later builds. No database migration is required.
+The name Everflow covers the GitHub repository, the checkout, `EVERFLOW_*` environment variables, named-pipe locks, OpenChamber session tags and build and scratch paths. `npm run everflow -- --help` is the only launcher. A build made before the last rename keeps its own names and paths, so it does not run against a renamed instance folder: rebuild instead. Chats created by such a build carry an older session tag; their session ids stay on the ticket, only the lost-create recovery lookup misses them. No database migration is required.
 
 Tickets and chats are disabled by default. Source collection has its own switches. Implementation and synthetic tests do not authorize live migration, source activation or chat activation.
 
@@ -12,9 +12,9 @@ Tickets and chats are disabled by default. Source collection has its own switche
 - MSVC C++ build tools with a Windows SDK. The recorded toolchain uses Visual Studio 2026 Build Tools. Native compilation also requires a node-gyp-compatible Python interpreter. It is build tooling only. The application, watchers, CLI and tests use TypeScript/Node.
 - Network access to the lockfile's dependency downloads during the private build. Source-specific access is separate and unnecessary for the disabled synthetic instance below.
 - For live triage, an explicit read-only knowledge-base root, model and ordered provider ids in `[triage]`. Provider routes come from `triage.provider_config_path` or the existing OpenCode JSONC settings. No provider is installed, started or selected automatically.
-- For approved chats, an already running OpenChamber server and its existing settings. An empty `opencode.url` reads `~/.config/openchamber/settings.json` for `desktopLocalPort` and `desktopUiPassword`. An explicit HTTP(S) `opencode.url` uses that server instead, with optional `WORKDESK_OPENCODE_PASSWORD`. `opencode.directory` identifies the session directory. A nonempty model uses `provider/model` form.
+- For approved chats, an already running OpenChamber server and its existing settings. An empty `opencode.url` reads `~/.config/openchamber/settings.json` for `desktopLocalPort` and `desktopUiPassword`. An explicit HTTP(S) `opencode.url` uses that server instead, with optional `EVERFLOW_OPENCODE_PASSWORD`. `opencode.directory` identifies the session directory. A nonempty model uses `provider/model` form.
 
-The dispatcher never starts, focuses, closes or restarts Outlook, Teams or providers. Google Chat has an explicit opt-in for minimized authentication bootstrap. Provider quota endpoints, provider lifecycle helpers and daemon autostart are absent. Source prerequisites are described below.
+Everflow never starts, focuses, closes or restarts Outlook, Teams or providers. Google Chat has an explicit opt-in for minimized authentication bootstrap. Provider quota endpoints, provider lifecycle helpers and daemon autostart are absent. Source prerequisites are described below.
 
 ## Build
 
@@ -28,19 +28,19 @@ This is the clean setup and production-build command. No checkout dependency ins
 
 The build supplies only named root inputs, including this README, and approved TypeScript/TSX/CSS source and the historical SQL test fixture. It excludes the default instance configuration, environment files, Git metadata, documentation trees, databases and user state. Source links, junctions and hard links are rejected. Dependency links and output traces must remain inside the stage. Project, Turbopack and tracing roots are pinned to that stage.
 
-Dependencies, npm configuration, profile, cache, node-gyp headers and temporary files are private to the stage. Build output currently lives under `C:/Users/Antonio/AppData/Local/Temp/opencode/workdesk/source-builds`, as declared in [build-artifact.ts](src/web/build-artifact.ts). The final JSON line contains `buildReceipt`, an absolute path to a completed `build-receipt.json`. A prepared stage is not a runnable artifact.
+Dependencies, npm configuration, profile, cache, node-gyp headers and temporary files are private to the stage. Build output currently lives under `C:/Users/Antonio/AppData/Local/Temp/opencode/everflow/source-builds`, as declared in [build-artifact.ts](src/web/build-artifact.ts). The final JSON line contains `buildReceipt`, an absolute path to a completed `build-receipt.json`. A prepared stage is not a runnable artifact.
 
 No checkout `dist` or `.next` is required. Do not invoke Next.js directly in the checkout. Staging is not an OS sandbox or a complete filesystem/network audit.
 
 ## Daily use
 
-`scripts/workdesk.ps1` drives one instance folder, by default `%LOCALAPPDATA%\workdesk`, which holds `config.toml`, the database and `build.txt`. `build` runs `npm run build` in this checkout and writes the new receipt path to `build.txt`; no other step selects a build. `start`, `stop` and `status` call the pinned build's CLI with that config, and `open` opens the page of the running instance. `-Instance <folder>` selects another instance folder.
+`scripts/everflow.ps1` drives one instance folder, by default `%LOCALAPPDATA%\everflow`, which holds `config.toml`, the database and `build.txt`. `build` runs `npm run build` in this checkout and writes the new receipt path to `build.txt`; no other step selects a build. `start`, `stop` and `status` call the pinned build's CLI with that config, and `open` opens the page of the running instance. `-Instance <folder>` selects another instance folder.
 
 ```powershell
-.\scripts\workdesk.ps1 build
-.\scripts\workdesk.ps1 start
-.\scripts\workdesk.ps1 open
-.\scripts\workdesk.ps1 stop
+.\scripts\everflow.ps1 build
+.\scripts\everflow.ps1 start
+.\scripts\everflow.ps1 open
+.\scripts\everflow.ps1 stop
 ```
 
 A rebuilt instance uses the new build after `stop` and `start`.
@@ -55,12 +55,12 @@ $receipt = Read-Host 'Absolute completed buildReceipt path from npm run build'
 $build = Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json
 if ($build.status -ne 'complete') { throw 'Completed build receipt required' }
 $cli = Join-Path $build.root 'dist/cli.js'
-$scratch = Join-Path $env:LOCALAPPDATA ('Temp/opencode/workdesk/manual-' + [guid]::NewGuid().ToString('N'))
+$scratch = Join-Path $env:LOCALAPPDATA ('Temp/opencode/everflow/manual-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $scratch -ErrorAction Stop | Out-Null
 $config = Join-Path $scratch 'config.toml'
 ```
 
-Both receipt and config paths passed to the CLI must be absolute. Every non-help command validates a completed artifact before opening the explicit instance config. `WORKDESK_ARTIFACT` is an alternative explicit receipt input; examples retain `--artifact` on each command. The checkout package launcher forwards to the selected compiled CLI. No default config or artifact fallback exists.
+Both receipt and config paths passed to the CLI must be absolute. Every non-help command validates a completed artifact before opening the explicit instance config. `EVERFLOW_ARTIFACT` is an alternative explicit receipt input; examples retain `--artifact` on each command. The checkout package launcher forwards to the selected compiled CLI. No default config or artifact fallback exists.
 
 ## Disabled instance
 
@@ -95,7 +95,7 @@ enabled = false
 enabled = false
 ```
 
-Only a literal TOML `true` enables tickets or chats. Missing switches, strings such as `"true"` and other values stay disabled. Configuration is loaded at startup. A changed file requires a manual restart to take effect. The old shadow, dispatch, approval, delivery and watcher-command settings are ignored by [config.ts](src/dispatcher/config.ts).
+Only a literal TOML `true` enables tickets or chats. Missing switches, strings such as `"true"` and other values stay disabled. Configuration is loaded at startup. A changed file requires a manual restart to take effect. The old shadow, dispatch, approval, delivery and watcher-command settings are ignored by [config.ts](src/core/config.ts).
 
 ## CLI help
 
@@ -123,7 +123,7 @@ Verification requires generated winax settings `clang: 0`, both LTO settings `"f
 & node (Join-Path $build.root 'scripts/setup.ts') --verify-only --log (Join-Path $scratch 'native-verify.log')
 ```
 
-`--verify-only` and `--log` are setup-script flags, not build or dispatcher flags. Without `--verify-only`, standalone setup performs an installation in its own script root. That stateful mode must not be used on a completed evidence artifact.
+`--verify-only` and `--log` are setup-script flags, not build or Everflow flags. Without `--verify-only`, standalone setup performs an installation in its own script root. That stateful mode must not be used on a completed evidence artifact.
 
 ## Manual commands
 
@@ -146,7 +146,7 @@ The daemon is manually launched through the Windows native bridge. It owns a can
 
 ## Runtime defaults
 
-These values come from the exported schema in [config.ts](src/dispatcher/config.ts), not from a live instance or the excluded root configuration:
+These values come from the exported schema in [config.ts](src/core/config.ts), not from a live instance or the excluded root configuration:
 
 ```json
 {
@@ -187,11 +187,11 @@ Approved sessions can be archived after 24 hours idle once local and remote pend
 
 ## Page and approval
 
-The page shows Needs you, Working, Waiting on them, Failed, Done today and Skipped, plus source/dependency health, Problems and muted chats. Start approves the proposal. Open chat with note records Antonio's exact instruction and approves it. Dismiss records the optional reason as triage feedback. Done closes a ticket handled by hand with an optional note; it is not triage feedback, and new linked messages within 14 days reopen it. During the trial each chat brief asks the chat to report a failing or missing tool in the turn and in `99_Inbox/workdesk-tool-issues.md` under the configured vault. These local actions enqueue work; they do not perform provider or source writes in the HTTP request.
+The page shows Needs you, Working, Waiting on them, Failed, Done today and Skipped, plus source/dependency health, Problems and muted chats. Start approves the proposal. Open chat with note records Antonio's exact instruction and approves it. Dismiss records the optional reason as triage feedback. Done closes a ticket handled by hand with an optional note; it is not triage feedback, and new linked messages within 14 days reopen it. During the trial each chat brief asks the chat to report a failing or missing tool in the turn and in `99_Inbox/everflow-tool-issues.md` under the configured vault. These local actions enqueue work; they do not perform provider or source writes in the HTTP request.
 
 Mute keeps a chat out of triage for 8 hours, 1 day, 1 week or until unmuted. It is offered on a Skipped batch and in the Dismiss dialog, where it mutes the dismissed ticket's routed conversations. New batches of a muted chat are stored as `muted` under Skipped, with no triage or forwarding; own-only batches stay `answered`. Make ticket on a muted batch ends that chat's mute. Muted chats are listed on the page with Unmute, and a timed mute ends by itself.
 
-Chat creation requires both rollout switches enabled and explicit ticket approval. Chats off disables the chat actions during review. A created session has Antonio's normal OpenChamber tools and rules, with no dispatcher deny override. Outward-facing text requires his approval in that chat before sending. The page does not approve outward text. No Teams self-chat or other channel approves or alerts on tickets.
+Chat creation requires both rollout switches enabled and explicit ticket approval. Chats off disables the chat actions during review. A created session has Antonio's normal OpenChamber tools and rules, with no Everflow deny override. Outward-facing text requires his approval in that chat before sending. The page does not approve outward text. No Teams self-chat or other channel approves or alerts on tickets.
 
 The brief identifies source messages and knowledge-base contents as untrusted data. It requires canonical files, normal shared-write approval and no desktop activation. These instructions and the page controls are not a sandbox for tools in an approved normal chat.
 
@@ -201,7 +201,7 @@ Each completed turn ends with `STATUS: <working|needs_you|waiting_them|done> | <
 
 The first explicit v2 start persists `triage_after`, defaulting to that start's UTC time. A quoted aware `[start] triage_after` can set the initial cutoff. The persisted value wins on later starts. Unbatched messages with `stored_at` strictly before the cutoff become `backlog`, regardless of their source `sent_at`. They appear under Skipped rather than generating old proposals. Make ticket converts a skipped batch into a ticket or reuses its current routed ticket. A fresh proposal is not approved for chat by that action. Dismiss reasons and Make ticket counts remain visible as feedback.
 
-`start` runs migration for its explicit instance before collection. For nonempty pre-v2 databases, [db.ts](src/dispatcher/db.ts) creates a uniquely named `.pre-v2-...db` SQLite backup and validates integrity and schema before upgrading. Source rows, cursors, numeric message identities and triage history are retained. Old work-item, draft, consent and send tables are removed from the migrated instance. Tickets begin empty. Old OpenChamber sessions are not resumed as v2 tickets.
+`start` runs migration for its explicit instance before collection. For nonempty pre-v2 databases, [db.ts](src/core/db.ts) creates a uniquely named `.pre-v2-...db` SQLite backup and validates integrity and schema before upgrading. Source rows, cursors, numeric message identities and triage history are retained. Old work-item, draft, consent and send tables are removed from the migrated instance. Tickets begin empty. Old OpenChamber sessions are not resumed as v2 tickets.
 
 Opening a v2 database adds the nullable `conversation.muted_until` column when it is missing. Existing rows keep their values, the schema version stays 2 and no backup is made for this step.
 
@@ -211,7 +211,7 @@ Held database migration, reading a held backup for acceptance, making a live cop
 
 ## Failure handling
 
-The implementation is in [jobs.ts](src/dispatcher/jobs.ts), [kb-agent.ts](src/dispatcher/kb-agent.ts) and [chat.ts](src/dispatcher/chat.ts).
+The implementation is in [jobs.ts](src/core/jobs.ts), [kb-agent.ts](src/core/kb-agent.ts) and [chat.ts](src/core/chat.ts).
 
 | Class | Examples | Policy |
 |---|---|---|
@@ -258,7 +258,7 @@ $state = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/state"
 $state.health | ConvertTo-Json -Depth 5
 ```
 
-Inspect `dependency`, `state`, `since`, `last_ok`, `last_error` and account checkpoints. Restore the named source prerequisite or provider route, then let the existing retry run. If a watcher process exited, an explicit dispatcher stop/start is required; no app restart or TLS bypass is a remedy. Structured logs are beside the selected DB as `.log` and rotated suffixes. Raw unstructured watcher stderr is not retained because it can contain credentials.
+Inspect `dependency`, `state`, `since`, `last_ok`, `last_error` and account checkpoints. Restore the named source prerequisite or provider route, then let the existing retry run. If a watcher process exited, an explicit Everflow stop/start is required; no app restart or TLS bypass is a remedy. Structured logs are beside the selected DB as `.log` and rotated suffixes. Raw unstructured watcher stderr is not retained because it can contain credentials.
 
 ## Sources
 
@@ -297,7 +297,7 @@ The original three sources remain independent. Tesco is absent from the recorded
 
 ## Local request security
 
-The server binds only `127.0.0.1`. Before Next.js routing, Host must be exactly `127.0.0.1:<port>` or `localhost:<port>`. Each server start creates a fresh action token. POST requires `x-dispatcher-token` and an Origin matching that exact local Host. Reload the page after restart or a rejected token. No CORS access is granted. Source/model text is rendered as escaped React text, never raw HTML. Assets and fonts are local.
+The server binds only `127.0.0.1`. Before Next.js routing, Host must be exactly `127.0.0.1:<port>` or `localhost:<port>`. Each server start creates a fresh action token. POST requires `x-everflow-token` and an Origin matching that exact local Host. Reload the page after restart or a rejected token. No CORS access is granted. Source/model text is rendered as escaped React text, never raw HTML. Assets and fonts are local.
 
 The Host/Origin/token controls protect local page actions. They do not constrain normal approved-chat tools or grant outward-send/shared-write approval.
 
@@ -322,20 +322,20 @@ Keep both artifact variables and the fresh Git metadata. The inline TypeScript l
 
 ```powershell
 $env:TEST_BUILD_RECEIPT = $receipt
-$env:WORKDESK_ARTIFACT = $receipt
+$env:EVERFLOW_ARTIFACT = $receipt
 $run = @'
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { isolatedEnvironment } from './scripts/build.ts';
 import { readBuildReceipt } from './src/web/build-artifact.ts';
 const artifact = readBuildReceipt(process.env.TEST_BUILD_RECEIPT);
-assert.equal(process.env.WORKDESK_ARTIFACT, process.env.TEST_BUILD_RECEIPT);
+assert.equal(process.env.EVERFLOW_ARTIFACT, process.env.TEST_BUILD_RECEIPT);
 assert(process.env.TEST_TRACKED_LEGACY_PATHS !== undefined);
 assert(Array.isArray(JSON.parse(process.env.TEST_TRACKED_LEGACY_PATHS)));
 const env = { ...isolatedEnvironment(artifact.root, process.env),
   NODE_ENV: 'test',
   TEST_BUILD_RECEIPT: process.env.TEST_BUILD_RECEIPT,
-  WORKDESK_ARTIFACT: process.env.WORKDESK_ARTIFACT,
+  EVERFLOW_ARTIFACT: process.env.EVERFLOW_ARTIFACT,
   TEST_TRACKED_LEGACY_PATHS: process.env.TEST_TRACKED_LEGACY_PATHS };
 for (const args of [
   ['node_modules/typescript/bin/tsc', '--noEmit'],
@@ -358,7 +358,7 @@ try {
 
 ## Live checks
 
-[live-checks.ts](scripts/live-checks.ts) drives acceptance on owned scratch instances. Every command requires `--opt-in`, a `--scenario` name and a `--run-root` under `C:/Users/Antonio/AppData/Local/Temp/opencode/workdesk/live-checks`. Run it with Node from the completed stage, never from the checkout.
+[live-checks.ts](scripts/live-checks.ts) drives acceptance on owned scratch instances. Every command requires `--opt-in`, a `--scenario` name and a `--run-root` under `C:/Users/Antonio/AppData/Local/Temp/opencode/everflow/live-checks`. Run it with Node from the completed stage, never from the checkout.
 
 Before any connection, spawn or file read, the guard refuses the held database, its sidecars and the relay token. It also refuses case, stream, trailing-dot and short-name spellings, traversal, paths outside the run root, link or junction components, hard-linked state and existing databases not recorded in the run manifest. The only accepted seed is `data/backups/pre-review-resume-20261104-234928.db`, copied into a fresh run. A final-component symlink among read-only inputs is resolved to its declared target, which then passes the same checks.
 

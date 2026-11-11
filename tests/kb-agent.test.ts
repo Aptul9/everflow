@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
-import * as api from '../src/dispatcher/kb-agent.ts';
-import { openDb } from '../src/dispatcher/db.ts';
-import { classify } from '../src/dispatcher/jobs.ts';
+import * as api from '../src/core/kb-agent.ts';
+import { openDb } from '../src/core/db.ts';
+import { classify } from '../src/core/jobs.ts';
 import { context, decision, kbFixture, provider, scriptedPeer, text, tools, use } from './kb-support.ts';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });

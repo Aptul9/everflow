@@ -112,17 +112,17 @@ function kernelBindings(): NativeBindings {
   const koffi = win32Ffi();
   const kernel = koffi.load('kernel32.dll');
   const nt = koffi.load('ntdll.dll');
-  const process = koffi.struct('DispatcherProcessEntry', {
+  const process = koffi.struct('EverflowProcessEntry', {
     size: 'uint32_t', usage: 'uint32_t', pid: 'uint32_t', heap: 'uintptr_t', module: 'uint32_t',
     threads: 'uint32_t', parent: 'uint32_t', priority: 'int32_t', flags: 'uint32_t', exe: koffi.array('uint16_t', 260),
   });
-  const entry = koffi.struct('DispatcherHandleEntry', { object: 'void *', pid: 'uintptr_t', handle: 'uintptr_t', access: 'uint32_t', trace: 'uint16_t', type: 'uint16_t', attributes: 'uint32_t', reserved: 'uint32_t' });
-  const startup = koffi.struct('DispatcherStartup', {
+  const entry = koffi.struct('EverflowHandleEntry', { object: 'void *', pid: 'uintptr_t', handle: 'uintptr_t', access: 'uint32_t', trace: 'uint16_t', type: 'uint16_t', attributes: 'uint32_t', reserved: 'uint32_t' });
+  const startup = koffi.struct('EverflowStartup', {
     cb: 'uint32_t', reserved: 'void *', desktop: 'void *', title: 'void *', x: 'uint32_t', y: 'uint32_t', xSize: 'uint32_t', ySize: 'uint32_t',
     xChars: 'uint32_t', yChars: 'uint32_t', fill: 'uint32_t', flags: 'uint32_t', show: 'uint16_t', reservedBytes: 'uint16_t',
     reservedPointer: 'void *', input: 'void *', output: 'void *', error: 'void *',
   });
-  const information = koffi.struct('DispatcherProcessInformation', { process: 'void *', thread: 'void *', pid: 'uint32_t', tid: 'uint32_t' });
+  const information = koffi.struct('EverflowProcessInformation', { process: 'void *', thread: 'void *', pid: 'uint32_t', tid: 'uint32_t' });
   if (koffi.sizeof('void *') !== 8 || koffi.sizeof(process) !== 568 || koffi.offsetof(process, 'exe') !== 44 || koffi.offsetof(process, 'parent') !== 32
     || koffi.sizeof(entry) !== 40 || koffi.offsetof(entry, 'pid') !== 8 || koffi.offsetof(entry, 'access') !== 24 || koffi.sizeof(startup) !== 104 || koffi.sizeof(information) !== 24) throw new NativeError('native.abi-layout');
   const declarations = [
@@ -142,7 +142,7 @@ function kernelBindings(): NativeBindings {
     'uint32_t __stdcall WaitForSingleObject(void *handle, uint32_t milliseconds)',
     'int __stdcall TerminateProcess(void *process, uint32_t exitCode)',
     'int __stdcall QueryFullProcessImageNameW(void *process, uint32_t flags, void *name, _Inout_ uint32_t *size)',
-    'int __stdcall CreateProcessW(str16 application, void *command, void *processSecurity, void *threadSecurity, int inherit, uint32_t flags, void *environment, str16 directory, const DispatcherStartup *startup, _Out_ DispatcherProcessInformation *result)',
+    'int __stdcall CreateProcessW(str16 application, void *command, void *processSecurity, void *threadSecurity, int inherit, uint32_t flags, void *environment, str16 directory, const EverflowStartup *startup, _Out_ EverflowProcessInformation *result)',
   ];
   bindings = Object.fromEntries(declarations.map((declaration) => [declaration.match(/(\w+)\(/)![1]!, kernel.func(declaration)]));
   bindings.NtQuerySystemInformation = nt.func('int32_t __stdcall NtQuerySystemInformation(uint32_t infoClass, void *buffer, uint32_t size, _Out_ uint32_t *needed)');

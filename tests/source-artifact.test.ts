@@ -6,7 +6,7 @@ import { expect, test } from 'vitest';
 import { isolatedEnvironment } from '../scripts/build.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
 
-test('compiled source modules import without opening sources, models, caches or default dispatcher configuration', () => {
+test('compiled source modules import without opening sources, models, caches or default everflow configuration', () => {
   const artifact = readBuildReceipt(process.env.TEST_BUILD_RECEIPT);
   const paths = ['outlook', 'teams', 'relay', 'gchat', 'gmail'].map((name) => pathToFileURL(join(artifact.root, 'dist/watchers', name + '.js')).href);
   const script = `for (const url of ${JSON.stringify(paths)}) await import(url); console.log(JSON.stringify({imported:5}));`;
@@ -21,8 +21,8 @@ test.each(['outlook', 'teams', 'relay', 'gchat', 'gmail'])('compiled %s entrypoi
   const artifact = readBuildReceipt(process.env.TEST_BUILD_RECEIPT);
   const directory = fs.mkdtempSync(join(artifact.root, '.private', 'source command fixture '));
   for (const part of ['watchers', 'windows']) fs.cpSync(join(artifact.root, 'dist', part), join(directory, part), { recursive: true });
-  fs.mkdirSync(join(directory, 'dispatcher'));
-  fs.copyFileSync(join(artifact.root, 'dist/dispatcher/time.js'), join(directory, 'dispatcher/time.js'));
+  fs.mkdirSync(join(directory, 'core'));
+  fs.copyFileSync(join(artifact.root, 'dist/core/time.js'), join(directory, 'core/time.js'));
   const result = spawnSync(process.execPath, ['--use-system-ca', join(directory, 'watchers', name + '.js')], {
     cwd: artifact.root, env: { ...isolatedEnvironment(artifact.root, process.env), NODE_ENV: 'test' }, encoding: 'utf8', windowsHide: true, timeout: 30000,
   });

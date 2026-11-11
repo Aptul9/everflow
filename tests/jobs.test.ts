@@ -1,8 +1,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { openDb, prepareStart } from '../src/dispatcher/db.ts';
-import * as jobs from '../src/dispatcher/jobs.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { openDb, prepareStart } from '../src/core/db.ts';
+import * as jobs from '../src/core/jobs.ts';
 import { raceClaims, raceEnqueues } from './jobs-support.ts';
 import { scratch } from './support.ts';
 

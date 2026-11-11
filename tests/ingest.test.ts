@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { openDb } from '../src/dispatcher/db.ts';
-import * as api from '../src/dispatcher/ingest.ts';
-import * as jobs from '../src/dispatcher/jobs.ts';
-import * as tickets from '../src/dispatcher/tickets.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { openDb } from '../src/core/db.ts';
+import * as api from '../src/core/ingest.ts';
+import * as jobs from '../src/core/jobs.ts';
+import * as tickets from '../src/core/tickets.ts';
 import { scratch, snapshot } from './support.ts';
 
 const { ingest, sourceStart } = api;

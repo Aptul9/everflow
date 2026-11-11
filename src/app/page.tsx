@@ -8,5 +8,5 @@ export const runtime = 'nodejs';
 export default async function OverviewPage() {
   const current = instance();
   const state = withDatabase(false, (db) => readState(db, current.config));
-  return <><meta name="dispatcher-token" content={current.token} /><TicketBoard initialState={state} initialEtag={representation(state).etag} token={current.token} initialNow={Date.now()} /></>;
+  return <><meta name="everflow-token" content={current.token} /><TicketBoard initialState={state} initialEtag={representation(state).etag} token={current.token} initialNow={Date.now()} /></>;
 }

@@ -39,7 +39,7 @@ export function canonicalDb(path: string): string {
 export function instancePaths(path: string, runId?: string) {
   const db = canonicalDb(path);
   if (runId !== undefined && !uuid.test(runId)) throw new DaemonError('daemon.run-id');
-  return { db, receipt: db + '.daemon.json', pipe: '\\\\.\\pipe\\workdesk-' + createHash('sha256').update(windowsPath(db)).digest('hex'),
+  return { db, receipt: db + '.daemon.json', pipe: '\\\\.\\pipe\\everflow-' + createHash('sha256').update(windowsPath(db)).digest('hex'),
     ready: db + `.ready-${runId ?? 'none'}.json`, stop: db + `.stop-${runId ?? 'none'}.json` };
 }
 
@@ -129,7 +129,7 @@ export async function launchDaemon(cfg: Config, buildReceipt: string, port?: num
   using kernel = createKernel();
   const launcher = kernel.processIdentity(process.pid), inJob = kernel.inJob(), breakaway = !inJob;
   const args = [join(artifact.root, 'dist', 'cli.js'), '--artifact', buildReceipt, '--config', cfg._config_path, '_run', '--run-id', runId, ...(port === undefined ? [] : ['--port', String(port)])];
-  const identity = kernel.launchIdentity({ executable: process.execPath, args, cwd: artifact.root, environment: { ...childEnvironment(), NODE_ENV: 'production', WORKDESK_ARTIFACT: buildReceipt }, breakaway });
+  const identity = kernel.launchIdentity({ executable: process.execPath, args, cwd: artifact.root, environment: { ...childEnvironment(), NODE_ENV: 'production', EVERFLOW_ARTIFACT: buildReceipt }, breakaway });
   try {
     const value = await readyFile(paths.ready, runId);
     if (value.status === 'error') throw new DaemonError(typeof value.code === 'string' ? value.code : 'daemon.startup', typeof value.reason === 'string' ? value.reason : undefined);

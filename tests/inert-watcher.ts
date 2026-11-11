@@ -6,12 +6,12 @@ import { createKernel } from '../src/windows/kernel.ts';
 import { runSource, watcherArguments } from '../src/watchers/source.ts';
 import { sshQuery } from '../src/watchers/relay.ts';
 
-const scratch = resolve('C:/Users/Antonio/AppData/Local/Temp/opencode/workdesk');
+const scratch = resolve('C:/Users/Antonio/AppData/Local/Temp/opencode/everflow');
 function explicit(value: unknown): string {
   if (typeof value !== 'string' || !isAbsolute(value) || !resolve(value).toLowerCase().startsWith(scratch.toLowerCase() + sep)) throw new Error('fixture.explicit-scratch-required');
   return value;
 }
-const configPath = explicit(process.env.WORKDESK_SOURCE_CONFIG);
+const configPath = explicit(process.env.EVERFLOW_SOURCE_CONFIG);
 const raw = parse(fs.readFileSync(configPath, 'utf8')) as any;
 const input = explicit(raw.sources.teams.fixture_input), starts = explicit(raw.sources.teams.fixture_starts), exited = explicit(raw.sources.teams.fixture_exited);
 const options = watcherArguments(process.argv.slice(2), { cache: { type: 'string' }, 'scratch-root': { type: 'string' }, profile: { type: 'string' }, 'bootstrap-cache': { type: 'string' } });

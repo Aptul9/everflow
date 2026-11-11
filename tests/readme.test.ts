@@ -8,10 +8,10 @@ import { expect, test } from 'vitest';
 import { isolatedEnvironment } from '../scripts/build.ts';
 import { nativeBuildEnv } from '../scripts/setup.ts';
 import { HELP, parseCommand } from '../src/cli.ts';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { openDb, prepareStart } from '../src/dispatcher/db.ts';
-import { backoff } from '../src/dispatcher/jobs.ts';
-import { makeTicket } from '../src/dispatcher/tickets.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { openDb, prepareStart } from '../src/core/db.ts';
+import { backoff } from '../src/core/jobs.ts';
+import { makeTicket } from '../src/core/tickets.ts';
 import { createKernel } from '../src/windows/kernel.ts';
 import type { ProcessIdentity } from '../src/windows/kernel.ts';
 import { readBuildReceipt, samePath } from '../src/web/build-artifact.ts';
@@ -87,7 +87,7 @@ test('documentation sections accept Windows checkout CRLF without changing the s
 
 test('documented defaults equal the exported config and dependency backoff, with only literal true enabling work', () => {
   const f = fixture();
-  const { loadConfig: compiledLoadConfig } = createRequire(import.meta.url)(join(f.artifact.root, 'dist/dispatcher/config.js')) as { loadConfig: typeof loadConfig };
+  const { loadConfig: compiledLoadConfig } = createRequire(import.meta.url)(join(f.artifact.root, 'dist/core/config.js')) as { loadConfig: typeof loadConfig };
   const cfg = compiledLoadConfig(f.config);
   expect(cfg).toEqual(loadConfig(f.config));
   expect(JSON.parse(block('Runtime defaults', 'json'))).toEqual({ tickets: cfg.tickets, chats: cfg.chats, web: cfg.web,
@@ -129,7 +129,7 @@ test('build and verify-only instructions match the shipped controller and execut
 
 test('documented source prerequisites construct only artifact Node commands and fail closed without required options', () => {
   const f = fixture(), cfg = loadConfig(f.config), sources = section('Sources');
-  const runtime = createRequire(import.meta.url)(join(f.artifact.root, 'dist/dispatcher/runtime.js')) as typeof import('../src/dispatcher/runtime.ts');
+  const runtime = createRequire(import.meta.url)(join(f.artifact.root, 'dist/core/runtime.js')) as typeof import('../src/core/runtime.ts');
   expect(runtime.validateRuntimeConfig(cfg, f.receipt).settings).toEqual(cfg.sources);
   expect(sources).toContain('`[sources.teams] profile`');
   expect(sources).toContain('`[sources.teamsrelay] host`');
@@ -161,10 +161,10 @@ test('documented test launcher preserves all caller metadata and selects React t
   const reactProbe = "import * as React from 'react'; console.log(JSON.stringify({ nodeEnv: process.env.NODE_ENV, act: typeof React.act }));";
   const code = `${prefix}\nconst result = spawnSync(process.execPath, ['--input-type=module-typescript', '--eval', ${JSON.stringify(reactProbe)}], { cwd: artifact.root, env, encoding: 'utf8' });
 assert.equal(result.status, 0, result.stderr);
-console.log(JSON.stringify({ react: JSON.parse(result.stdout), receipt: env.TEST_BUILD_RECEIPT, artifact: env.WORKDESK_ARTIFACT,
-  legacy: env.TEST_TRACKED_LEGACY_PATHS, root: env.WORKDESK_BUILD_ROOT }));`;
+console.log(JSON.stringify({ react: JSON.parse(result.stdout), receipt: env.TEST_BUILD_RECEIPT, artifact: env.EVERFLOW_ARTIFACT,
+  legacy: env.TEST_TRACKED_LEGACY_PATHS, root: env.EVERFLOW_BUILD_ROOT }));`;
   const result = spawnSync(process.execPath, ['--input-type=module-typescript', '--eval', code], { cwd: f.artifact.root,
-    env: { ...f.env, TEST_BUILD_RECEIPT: f.receipt, WORKDESK_ARTIFACT: f.receipt, TEST_TRACKED_LEGACY_PATHS: process.env.TEST_TRACKED_LEGACY_PATHS },
+    env: { ...f.env, TEST_BUILD_RECEIPT: f.receipt, EVERFLOW_ARTIFACT: f.receipt, TEST_TRACKED_LEGACY_PATHS: process.env.TEST_TRACKED_LEGACY_PATHS },
     encoding: 'utf8', windowsHide: true, timeout: 15000 });
   expect(result.error).toBeUndefined(); expect(result.status, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual({ react: { nodeEnv: 'test', act: 'function' }, receipt: f.receipt, artifact: f.receipt,

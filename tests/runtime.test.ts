@@ -3,17 +3,17 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { openDb, prepareStart } from '../src/dispatcher/db.ts';
-import { ingest, sourceStart } from '../src/dispatcher/ingest.ts';
-import * as jobs from '../src/dispatcher/jobs.ts';
-import { prepareTurn, sync } from '../src/dispatcher/chat.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { openDb, prepareStart } from '../src/core/db.ts';
+import { ingest, sourceStart } from '../src/core/ingest.ts';
+import * as jobs from '../src/core/jobs.ts';
+import { prepareTurn, sync } from '../src/core/chat.ts';
 import { isolatedEnvironment } from '../scripts/build.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
 import { scratch, snapshot } from './support.ts';
 
 // Missing implementation still produces assertion RED, rather than a transform/import failure.
-const path = resolve('src/dispatcher/runtime.ts');
+const path = resolve('src/core/runtime.ts');
 const runtime: Record<string, any> = existsSync(path) ? await import(pathToFileURL(path).href) : {};
 const AT = '2026-11-06T10:00:00.000000Z';
 const message = (extra = {}) => ({ source: 'teams', account: 'me@example.invalid', conversation_id: 'synthetic-chat',
@@ -146,7 +146,7 @@ test('reader failure observes owned child terminal state before propagating its 
   if (!runtime.readWatcher) return;
   const artifact = readBuildReceipt(process.env.TEST_BUILD_RECEIPT), program = join(root, 'synthetic-failed-reader.mjs');
   writeFileSync(program, `process.stdout.write(${JSON.stringify(JSON.stringify(message()) + '\n')});const timer=setInterval(()=>{},1000);
-    process.on('message',value=>{if(value?.type==='dispatcher.stop')setTimeout(()=>{clearInterval(timer);process.disconnect();},150);});`);
+    process.on('message',value=>{if(value?.type==='everflow.stop')setTimeout(()=>{clearInterval(timer);process.disconnect();},150);});`);
   const child = spawn(process.execPath, [program], { cwd: artifact.root, env: isolatedEnvironment(artifact.root, process.env), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   const exited = new Promise<void>((resolve) => child.once('close', () => resolve()));
   try {

@@ -1,5 +1,5 @@
 import { Worker } from 'node:worker_threads';
-import type { Config } from '../src/dispatcher/config.ts';
+import type { Config } from '../src/core/config.ts';
 
 type Operation = { kind: 'claim' } | { kind: 'enqueue'; key: string; ticket: number; batch_ids: number[] };
 
@@ -24,8 +24,8 @@ async function race(cfg: Config, at: string, operations: Operation[]): Promise<(
       });
       parentPort.postMessage({ ready: true });
     })().catch((error) => { throw error; });
-  `, { eval: true, workerData: { id, operation, cfg, at, db: new URL('../src/dispatcher/db.ts', import.meta.url).href,
-    jobs: new URL('../src/dispatcher/jobs.ts', import.meta.url).href } }));
+  `, { eval: true, workerData: { id, operation, cfg, at, db: new URL('../src/core/db.ts', import.meta.url).href,
+    jobs: new URL('../src/core/jobs.ts', import.meta.url).href } }));
   try {
     await Promise.all(workers.map((worker) => new Promise<void>((resolve, reject) => {
       worker.once('message', (message: { ready: boolean }) => message.ready ? resolve() : reject(new Error('Worker not ready')));
@@ -74,7 +74,7 @@ export async function raceChatOpen(path: string): Promise<string[]> {
       } catch (error) { parentPort.postMessage({ result: error.message }); }
       finally { parentPort.close(); }
     })();
-  `, { eval: true, workerData: { path, barrier, module: new URL('../src/dispatcher/db.ts', import.meta.url).href } }));
+  `, { eval: true, workerData: { path, barrier, module: new URL('../src/core/db.ts', import.meta.url).href } }));
   try {
     await Promise.all(workers.map((worker) => new Promise<void>((resolve, reject) => {
       worker.once('message', (message: { ready?: boolean; result?: string }) => message.ready ? resolve() : reject(new Error(message.result)));

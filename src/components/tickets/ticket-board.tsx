@@ -1,6 +1,6 @@
 'use client';
 
-import { Bell, BellOff, Clock, FilePlus, Inbox, Keyboard, LoaderCircle, MessagesSquare, CirclePause, RefreshCw, Search, TriangleAlert, WifiOff, X } from 'lucide-react';
+import { Bell, BellOff, ChevronDown, ChevronUp, Clock, FilePlus, Keyboard, LoaderCircle, MessagesSquare, CirclePause, RefreshCw, Search, TriangleAlert, WifiOff, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { groups } from '../../lib/web-types.ts';
 import type { Group, OverviewState, SkippedBatch, TicketCard as CardData, TriageBatch } from '../../lib/web-types.ts';
@@ -18,6 +18,8 @@ import type { Tone } from './ticket-card.tsx';
 import { useAttention, useOverview } from './use-overview.ts';
 
 const columnTone: Record<Group, Tone> = { needs_you: 'needs', working: 'working', waiting_them: 'waiting', failed: 'failed', done_today: 'done', skipped: 'skipped' };
+// Cards a column shows before Show more
+const PAGE = 8;
 const outcomes: Record<SkippedBatch['outcome'], string> = { not_on_us: 'Not on us', backlog: 'Backlog', answered: 'Answered', muted: 'Muted' };
 type Post = (key: string, path: string, input?: Record<string, string | number | null>) => Promise<unknown>;
 
@@ -151,6 +153,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
     set((previous) => { const next = new Set(previous); if (checked) next.add(id); else next.delete(id); return next; });
   const [dragging, setDragging] = useState<Dragged | null>(null);
   const [over, setOver] = useState<Group | null>(null);
+  const [limits, setLimits] = useState<Partial<Record<Group, number>>>({});
   const accepts = (group: Group) => !!dragging && dropAction(group, dragging, state.chats_enabled) !== null;
   const drop = (group: Group) => {
     const action = dragging && dropAction(group, dragging, state.chats_enabled);
@@ -199,7 +202,12 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
     const cards = state.groups[group].filter((ticket) => matches([ticket.title, ticket.client, ticket.session_title, ticket.summary, ticket.ask, ticket.proposal, ...ticket.refs.map((ref) => ref.key)].join(' ')));
     const triaging = group === 'needs_you' ? state.triaging.filter((batch) => matches([batch.title, batch.source, batch.account, ...batch.messages.map((message) => message.text)].join(' '))) : [];
     const total = (group === 'skipped' ? state.skipped.length : 0) + (group === 'needs_you' ? state.triaging.length : 0) + state.groups[group].length;
-    return { group, label, batches, triaging, cards, total, shown: batches.length + triaging.length + cards.length };
+    const shown = batches.length + triaging.length + cards.length;
+    // Each column renders its first `limit` cards in order: batches, then triage cards, then tickets
+    const limit = limits[group] ?? PAGE;
+    const visible = { batches: batches.slice(0, limit), triaging: triaging.slice(0, Math.max(0, limit - batches.length)),
+      cards: cards.slice(0, Math.max(0, limit - batches.length - triaging.length)) };
+    return { group, label, batches, triaging, cards, total, shown, limit, visible, hidden: Math.max(0, shown - limit) };
   });
 
   return <div ref={root} className="min-h-dvh">
@@ -207,9 +215,9 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
     <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur-md">
       <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 sm:px-6">
         <div className="flex min-w-0 items-center gap-2.5">
-          <span aria-hidden="true" className="grid size-8 place-items-center rounded-lg bg-primary text-primary-foreground shadow-sm"><Inbox className="size-4" /></span>
+          <img src="/icon.png" alt="" aria-hidden="true" className="size-8 rounded-lg shadow-sm" />
           <div className="leading-tight">
-            <h1 className="text-[15px] font-semibold tracking-tight">Workdesk</h1>
+            <h1 className="text-[15px] font-semibold tracking-tight">Everflow</h1>
             <p className="text-xs text-muted-foreground">Local overview · {state.day}</p>
           </div>
         </div>
@@ -300,15 +308,24 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
                 }} />}
             </div>
             <div className="flex flex-1 flex-col gap-2 px-2 pb-2">
-              {column.batches.map((batch) => <BatchCard key={batch.id} batch={batch} enabled={state.tickets_enabled} expired={expired} pending={pending} errors={errors} post={post}
+              {column.visible.batches.map((batch) => <BatchCard key={batch.id} batch={batch} enabled={state.tickets_enabled} expired={expired} pending={pending} errors={errors} post={post}
                 selected={batchSelection.has(batch.id)} onSelect={(checked) => setBatchSelection((previous) => { const next = new Set(previous); if (checked) next.add(batch.id); else next.delete(batch.id); return next; })}
                 now={now} onDrag={(active) => setDragging(active ? { kind: 'batch', id: batch.id } : null)} />)}
-              {column.triaging.map((batch) => <TriageCard key={batch.id} batch={batch} now={now} />)}
-              {column.cards.map((ticket) => <TicketCard key={ticket.id} ticket={ticket} enabled={state.tickets_enabled} chats={state.chats_enabled} chatProject={(ticket.client && state.chat_projects?.[ticket.client]) || state.chat_project} expired={expired} now={now}
+              {column.visible.triaging.map((batch) => <TriageCard key={batch.id} batch={batch} now={now} />)}
+              {column.visible.cards.map((ticket) => <TicketCard key={ticket.id} ticket={ticket} enabled={state.tickets_enabled} chats={state.chats_enabled} chatProject={(ticket.client && state.chat_projects?.[ticket.client]) || state.chat_project} expired={expired} now={now}
                 selected={clearable.has(ticket.id) ? clearSelection.has(ticket.id) : selected.has(ticket.id)}
                 onSelect={(checked) => toggle(clearable.has(ticket.id) ? setClearSelection : setSelected, ticket.id, checked)}
                 onDrag={(active) => setDragging(active ? { kind: 'ticket', ticket } : null)}
                 pending={pending} errors={errors} post={post} />)}
+              {(column.hidden > 0 || column.limit > PAGE) && <div className="flex gap-1.5">
+                {column.hidden > 0 && <Button type="button" variant="ghost" size="sm" className="h-8 min-w-0 flex-1 text-xs text-muted-foreground"
+                  aria-label={`Show ${Math.min(PAGE, column.hidden)} more in ${column.label}`}
+                  onClick={() => setLimits((previous) => ({ ...previous, [column.group]: column.limit + PAGE }))}>
+                  <ChevronDown aria-hidden="true" />Show more<span className="tabular-nums">({column.hidden})</span></Button>}
+                {column.limit > PAGE && <Button type="button" variant="ghost" size="sm" className="h-8 min-w-0 flex-1 text-xs text-muted-foreground"
+                  aria-label={`Show less in ${column.label}`} onClick={() => setLimits((previous) => ({ ...previous, [column.group]: PAGE }))}>
+                  <ChevronUp aria-hidden="true" />Show less</Button>}
+              </div>}
               {column.shown === 0 && <p className="rounded-lg border border-dashed border-foreground/10 px-3 py-6 text-center text-xs text-muted-foreground">
                 {column.total === 0 ? `No tickets in ${column.label.toLocaleLowerCase()}.` : 'No matches.'}
               </p>}

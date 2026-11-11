@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import { expect, test } from 'vitest';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { openDb } from '../src/dispatcher/db.ts';
-import { ingest, schedule, sourceStart } from '../src/dispatcher/ingest.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { openDb } from '../src/core/db.ts';
+import { ingest, schedule, sourceStart } from '../src/core/ingest.ts';
 import { createGchatState, scanGchat } from '../src/watchers/gchat.ts';
 import { createGmailState, scanGmail } from '../src/watchers/gmail.ts';
 import type { SourceRecord } from '../src/watchers/source.ts';

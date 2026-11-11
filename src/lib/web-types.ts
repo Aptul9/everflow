@@ -1,6 +1,6 @@
-import type { Lifecycle } from '../dispatcher/types.ts';
-import type { Stage, TicketRef } from '../dispatcher/tickets.ts';
-import type { ModelChoice, ModelOptions } from '../dispatcher/settings.ts';
+import type { Lifecycle } from '../core/types.ts';
+import type { Stage, TicketRef } from '../core/tickets.ts';
+import type { ModelChoice, ModelOptions } from '../core/settings.ts';
 
 export const groups = [
   ['needs_you', 'Needs you'], ['working', 'Working'], ['waiting_them', 'Waiting on them'],

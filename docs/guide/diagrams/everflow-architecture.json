@@ -2,7 +2,7 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Workdesk: sources, triage, page and chats",
+    "title": "Everflow: sources, triage, page and chats",
     "quality_profile": "showcase",
     "viewBox": [1380, 660]
   },

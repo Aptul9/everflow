@@ -1,8 +1,8 @@
 import { expect, test } from 'vitest';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { openDb } from '../src/dispatcher/db.ts';
-import { sourceStart } from '../src/dispatcher/ingest.ts';
-import { createSourceReader, sourceCommand, validateRuntimeConfig } from '../src/dispatcher/runtime.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { openDb } from '../src/core/db.ts';
+import { sourceStart } from '../src/core/ingest.ts';
+import { createSourceReader, sourceCommand, validateRuntimeConfig } from '../src/core/runtime.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
 import { scratch } from './support.ts';
 

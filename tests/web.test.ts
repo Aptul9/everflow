@@ -14,7 +14,7 @@ test('serves the dynamic Next root, compiled assets, state and newest-first deta
   const root = await http(server.port, '/');
   expect(root.status).toBe(200);
   expect(root.headers['content-type']).toContain('text/html');
-  expect(root.text).toContain('Workdesk');
+  expect(root.text).toContain('Everflow');
   expect(root.text).toContain('Review synthetic access');
   expect(root.text).not.toContain('<script>untrusted()</script>');
   token = rootToken(root.text);
@@ -70,7 +70,7 @@ test.each(['/', '/api/state', '/not-a-route', '/_next/static/not-real.js'])('rej
   for (const host of [`evil.invalid:${server.port}`, 'localhost', `localhost:${server.port + 1}`, `127.0.0.1:${server.port}.evil.invalid`, `LOCALHOST:${server.port}`]) {
     const response = await http(server.port, path, { headers: { host } });
     expect(response.status).toBe(403);
-    expect(response.text).not.toContain('Workdesk');
+    expect(response.text).not.toContain('Everflow');
   }
   expect((await http(server.port, path, { noHost: true })).status).toBe(403);
   expect((await http(server.port, path, { headers: { host: [`127.0.0.1:${server.port}`, `localhost:${server.port}`] } })).status).toBe(403);
@@ -84,8 +84,8 @@ test.each(['start', 'chat', 'discuss', 'dismiss'])('guards ticket %s with curren
   token = rootToken((await http(server.port, '/')).text);
   const headers = actionHeaders(server.port, token);
   const path = `/api/ticket/${fixture.proposal}/${action}`;
-  for (const bad of [ { ...headers, 'x-dispatcher-token': '' }, { ...headers, 'x-dispatcher-token': 'wrong' },
-    { ...headers, 'x-dispatcher-token': 'é'.repeat(token.length) }, { ...headers, origin: '' },
+  for (const bad of [ { ...headers, 'x-everflow-token': '' }, { ...headers, 'x-everflow-token': 'wrong' },
+    { ...headers, 'x-everflow-token': 'é'.repeat(token.length) }, { ...headers, origin: '' },
     { ...headers, origin: 'null' }, { ...headers, origin: `https://127.0.0.1:${server.port}` },
     { ...headers, origin: `http://localhost:${server.port}` }, { ...headers, origin: `http://127.0.0.1:${server.port}/` } ]) {
     expect((await http(server.port, path, { method: 'POST', headers: bad, body: '{}' })).status).toBe(403);
@@ -105,7 +105,7 @@ test.each(['batch', 'job'])('validates %s action guards, JSON and ids through re
   const id = scope === 'batch' ? fixture.skipped : fixture.failedJob;
   const action = scope === 'batch' ? 'ticket' : 'retry';
   const path = `/api/${scope}/${id}/${action}`;
-  for (const bad of [{ ...headers, origin: 'http://evil.invalid' }, { ...headers, 'x-dispatcher-token': 'stale' }]) {
+  for (const bad of [{ ...headers, origin: 'http://evil.invalid' }, { ...headers, 'x-everflow-token': 'stale' }]) {
     const result = await http(server.port, path, { method: 'POST', headers: bad, body: '{}' });
     expect(result.status).toBe(403);
     expect(result.headers['access-control-allow-origin']).toBeUndefined();

@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 
-export const metadata: Metadata = { title: 'Workdesk', description: 'Local ticket overview' };
+export const metadata: Metadata = { title: 'Everflow', description: 'Local ticket overview' };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return <html lang="en"><body>{children}</body></html>;

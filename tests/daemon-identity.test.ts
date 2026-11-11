@@ -6,7 +6,7 @@ import { createKernel } from '../src/windows/kernel.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
 import { scratch } from './support.ts';
 
-const path = resolve('src/dispatcher/daemon.ts');
+const path = resolve('src/core/daemon.ts');
 const daemon: Record<string, any> = fs.existsSync(path) ? await import(pathToFileURL(path).href) : {};
 
 function processApi(created: bigint, image: string) {

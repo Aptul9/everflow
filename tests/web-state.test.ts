@@ -16,7 +16,7 @@ test('import and direct route handlers fail closed without a context or default 
   expect(ticketGet(new Request('http://localhost:1234/api/ticket/1'), '1').status).toBe(503);
   expect((await actionPost(new Request('http://localhost:1234/api/ticket/1/start', { method: 'POST', body: '{}' }), 'ticket', '1', 'start')).status).toBe(503);
   const scratch = webFixture();
-  const absent = resolve(scratch.root, 'data', 'dispatcher.db');
+  const absent = resolve(scratch.root, 'data', 'everflow-v1.db');
   const script = `import {stateGet} from ${JSON.stringify(pathToFileURL(resolve('dist/web/api.js')).href)};
     const result=stateGet(new Request('http://localhost:1234/api/state')); console.log(result.status);`;
   expect(execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: scratch.root, encoding: 'utf8' }).trim()).toBe('503');
@@ -49,20 +49,21 @@ test('a missing initialized DB fails closed without creating an empty replacemen
   try {
     renameSync(fixture.path, `${fixture.path}.retained`);
     const response = await actionPost(new Request('http://127.0.0.1:12345/api/ticket/1/start', { method: 'POST',
-      headers: { host: '127.0.0.1:12345', origin: 'http://127.0.0.1:12345', 'x-dispatcher-token': current.token, 'content-type': 'application/json' }, body: '{}',
+      headers: { host: '127.0.0.1:12345', origin: 'http://127.0.0.1:12345', 'x-everflow-token': current.token, 'content-type': 'application/json' }, body: '{}',
     }), 'ticket', '1', 'start');
     expect(response.status).toBe(503);
     expect(existsSync(fixture.path)).toBe(false);
   } finally { release(current); }
 });
 
-test('finished tickets stay on the board for one day after closing, whatever the local calendar day', () => {
+test('finished tickets leave the board at the end of the local day they closed', () => {
   const fixture = webFixture();
   using db = new DatabaseSync(fixture.path);
-  db.prepare("UPDATE ticket SET closed_at='2026-11-05T08:30:00Z' WHERE id=?").run(fixture.done);
-  db.prepare("UPDATE ticket SET closed_at='2026-11-05T09:30:00Z' WHERE id=?").run(fixture.dismissed);
+  // Los Angeles: 00:30 on 11-06 (today) and 23:30 on 11-05 (yesterday); the board is read at 01:00 on 11-06
+  db.prepare("UPDATE ticket SET closed_at='2026-11-06T08:30:00Z' WHERE id=?").run(fixture.done);
+  db.prepare("UPDATE ticket SET closed_at='2026-11-06T07:30:00Z' WHERE id=?").run(fixture.dismissed);
   const script = `import {DatabaseSync} from 'node:sqlite';
-    import {loadConfig} from ${JSON.stringify(pathToFileURL(resolve('dist/dispatcher/config.js')).href)};
+    import {loadConfig} from ${JSON.stringify(pathToFileURL(resolve('dist/core/config.js')).href)};
     import {readState} from ${JSON.stringify(pathToFileURL(resolve('dist/web/state.js')).href)};
     using db=new DatabaseSync(${JSON.stringify(fixture.path)},{readOnly:true});
     const state=readState(db,loadConfig(${JSON.stringify(fixture.config)}),new Date('2026-11-06T09:00:00Z'));
@@ -71,7 +72,7 @@ test('finished tickets stay on the board for one day after closing, whatever the
   const result = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
     env: { ...process.env, TZ: 'America/Los_Angeles' }, encoding: 'utf8',
   });
-  expect(JSON.parse(result)).toEqual({ done: [], skipped: [{ id: fixture.dismissed, stage: 'Dismissed' }] });
+  expect(JSON.parse(result)).toEqual({ done: [{ id: fixture.done, stage: 'Done' }], skipped: [] });
 });
 
 test('detail orders equal-time messages, refs and timeline deterministically newest first', () => {

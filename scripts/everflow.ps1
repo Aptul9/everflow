@@ -1,10 +1,10 @@
-# Workdesk launcher, run from anywhere:
-#   .\scripts\workdesk.ps1 build    builds this checkout and pins the new build to the instance
-#   .\scripts\workdesk.ps1 start | stop | status | open
+# Everflow launcher, run from anywhere:
+#   .\scripts\everflow.ps1 build    builds this checkout and pins the new build to the instance
+#   .\scripts\everflow.ps1 start | stop | status | open
 # The instance folder holds config.toml, the database and build.txt (the pinned build receipt).
 param(
   [Parameter(Mandatory, Position = 0)][ValidateSet('build', 'start', 'stop', 'status', 'open')][string]$Command,
-  [string]$Instance = (Join-Path $env:LOCALAPPDATA 'workdesk')
+  [string]$Instance = (Join-Path $env:LOCALAPPDATA 'everflow')
 )
 $ErrorActionPreference = 'Stop'
 $config = Join-Path $Instance 'config.toml'
@@ -12,10 +12,10 @@ $pin = Join-Path $Instance 'build.txt'
 if (-not (Test-Path -LiteralPath $config)) { throw "No config.toml in $Instance" }
 
 function Invoke-Cli([string[]]$arguments) {
-  if (-not (Test-Path -LiteralPath $pin)) { throw "No pinned build: run '.\scripts\workdesk.ps1 build' first" }
+  if (-not (Test-Path -LiteralPath $pin)) { throw "No pinned build: run '.\scripts\everflow.ps1 build' first" }
   $receipt = (Get-Content -LiteralPath $pin -Raw).Trim()
   & node (Join-Path (Split-Path $receipt) 'dist/cli.js') --artifact $receipt --config $config @arguments
-  if ($LASTEXITCODE -ne 0) { throw "workdesk $($arguments[0]) failed ($LASTEXITCODE)" }
+  if ($LASTEXITCODE -ne 0) { throw "everflow $($arguments[0]) failed ($LASTEXITCODE)" }
 }
 
 switch ($Command) {
@@ -30,7 +30,7 @@ switch ($Command) {
   }
   'open' {
     $state = Invoke-Cli @('status') | ConvertFrom-Json
-    if (-not $state.running) { throw 'Workdesk is not running' }
+    if (-not $state.running) { throw 'Everflow is not running' }
     Start-Process "http://127.0.0.1:$($state.port)/"
   }
   default { Invoke-Cli @($Command) }

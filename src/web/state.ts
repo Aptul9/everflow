@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
 import { basename } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import type { Config } from '../dispatcher/config.ts';
-import { chatDirectory, clientsFor, sourceAccounts, sourceEnabled } from '../dispatcher/policy.ts';
-import { batchClients, batchMessages, batchPaused, detail, feedback, MUTE_FOREVER, pausedInputs } from '../dispatcher/tickets.ts';
-import type { Message } from '../dispatcher/tickets.ts';
-import { modelChoice, readModelOptions } from '../dispatcher/settings.ts';
-import { calendarDay, utc } from '../dispatcher/time.ts';
+import type { Config } from '../core/config.ts';
+import { chatDirectory, clientsFor, sourceAccounts, sourceEnabled } from '../core/policy.ts';
+import { batchClients, batchMessages, batchPaused, detail, feedback, MUTE_FOREVER, pausedInputs } from '../core/tickets.ts';
+import type { Message } from '../core/tickets.ts';
+import { modelChoice, readModelOptions } from '../core/settings.ts';
+import { calendarDay, utc } from '../core/time.ts';
 import type { Health, OverviewState, Reference, SkippedBatch, SourceMessage, TicketCard, TicketDetail, TriageBatch } from '../lib/web-types.ts';
 
 export { calendarDay };
@@ -82,8 +82,10 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
     .sort((a, b) => Number(b.lifecycle === 'proposed') - Number(a.lifecycle === 'proposed')
       || utc(b.last_activity_at ?? b.created_at).localeCompare(utc(a.last_activity_at ?? a.created_at)) || b.id - a.id);
   const cleared = new Set(db.prepare('SELECT id FROM ticket WHERE cleared_at IS NOT NULL').all().map((row) => Number(row.id)));
-  // Finished cards and skipped batches leave the board one day after they finished
-  const shownSince = utc(new Date(at.getTime() - 86_400_000).toISOString());
+  // Finished cards and skipped batches leave the board at the end of the local day they finished
+  const midnight = new Date(at);
+  midnight.setHours(0, 0, 0, 0);
+  const shownSince = utc(midnight.toISOString());
   for (const ticket of tickets) {
     if (ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed') {
       if (ticket.closed_at && utc(ticket.closed_at) >= shownSince && !cleared.has(ticket.id)) groups[ticket.lifecycle === 'dismissed' ? 'skipped' : 'done_today'].push(ticket);

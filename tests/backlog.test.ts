@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test } from 'vitest';
-import { migrate, openDb, prepareStart } from '../src/dispatcher/db.ts';
+import { migrate, openDb, prepareStart } from '../src/core/db.ts';
 import { CUTOFF, createV1, OLD_AT, scratch, snapshot } from './support.ts';
 
 const CUT = '2026-11-05T20:00:00.000000Z';

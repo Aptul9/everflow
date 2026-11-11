@@ -5,10 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { plainParents, readBuildReceipt, samePath } from './web/build-artifact.ts';
 
-export const HELP = `Workdesk
-Usage: npm run workdesk -- --artifact ABSOLUTE_BUILD_RECEIPT --config ABSOLUTE_CONFIG COMMAND
+export const HELP = `Everflow
+Usage: npm run everflow -- --artifact ABSOLUTE_BUILD_RECEIPT --config ABSOLUTE_CONFIG COMMAND
        node ABSOLUTE_STAGED_DIST_CLI --artifact ABSOLUTE_BUILD_RECEIPT --config ABSOLUTE_CONFIG COMMAND
-Artifact may also be supplied explicitly through WORKDESK_ARTIFACT.
+Artifact may also be supplied explicitly through EVERFLOW_ARTIFACT.
 No default configuration, checkout artifact or newest-stage fallback exists.
 
 Commands:
@@ -54,7 +54,7 @@ export interface Command {
   name: string; args: number[]; configPath?: string; buildReceipt?: string; port?: number; reason?: string; all?: boolean; runId?: string;
 }
 
-export function parseCommand(args: string[], artifactEnvironment = process.env.WORKDESK_ARTIFACT): Command {
+export function parseCommand(args: string[], artifactEnvironment = process.env.EVERFLOW_ARTIFACT): Command {
   const parsed = (() => {
     try { return parseArgs({ args, strict: true, allowPositionals: true, tokens: true, options: {
       help: { type: 'boolean', short: 'h' }, config: { type: 'string' }, artifact: { type: 'string' }, port: { type: 'string' },
@@ -106,8 +106,8 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     return child.status ?? 1;
   }
   process.chdir(artifact.root);
-  process.env.WORKDESK_ARTIFACT = command.buildReceipt!;
-  const { loadConfig } = await import('./dispatcher/config.ts');
+  process.env.EVERFLOW_ARTIFACT = command.buildReceipt!;
+  const { loadConfig } = await import('./core/config.ts');
   const cfg = loadConfig(command.configPath!);
   if (command.name === '_run') {
     try {
@@ -116,14 +116,14 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       await daemon.done;
       return 0;
     } catch (error) {
-      const { atomicJson, instancePaths } = await import('./dispatcher/daemon.ts');
+      const { atomicJson, instancePaths } = await import('./core/daemon.ts');
       atomicJson(instancePaths(cfg.db.path, command.runId!).ready, { status: 'error', run_id: command.runId, ...cliFailure(error).error });
       return 1;
     }
   }
   let result: unknown;
   if (['start', 'stop', 'status'].includes(command.name)) {
-    const { launchDaemon, readStatus, stopDaemon } = await import('./dispatcher/daemon.ts');
+    const { launchDaemon, readStatus, stopDaemon } = await import('./core/daemon.ts');
     result = command.name === 'start' ? await launchDaemon(cfg, command.buildReceipt!, command.port)
       : command.name === 'stop' ? await stopDaemon(cfg) : await readStatus(cfg);
   } else {
@@ -132,9 +132,9 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
     const write = !['ticket show', 'job list'].includes(command.name);
     using db = new DatabaseSync(cfg.db.path, { readOnly: !write, timeout: 30000 });
     if (db.prepare('PRAGMA user_version').get()!.user_version !== 2) throw Object.assign(new Error('instance.schema'), { code: 'instance.schema' });
-    const { transaction } = await import('./dispatcher/db.ts');
-    const tickets = await import('./dispatcher/tickets.ts');
-    const jobs = await import('./dispatcher/jobs.ts');
+    const { transaction } = await import('./core/db.ts');
+    const tickets = await import('./core/tickets.ts');
+    const jobs = await import('./core/jobs.ts');
     const operation = () => {
       const [one, two] = command.args;
       switch (command.name) {
@@ -152,7 +152,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       throw new CliError('cli.arguments');
     };
     // Replay owns its message/cursor/receipt transaction, including the --all rollback boundary.
-    if (command.name === 'quarantine replay') result = (await import('./dispatcher/runtime.ts')).replayQuarantine(db, command.all ? 'all' : command.args[0]!);
+    if (command.name === 'quarantine replay') result = (await import('./core/runtime.ts')).replayQuarantine(db, command.all ? 'all' : command.args[0]!);
     else if (write) result = transaction(db, operation);
     else { db.exec('BEGIN'); try { result = operation(); } finally { db.exec('ROLLBACK'); } }
   }

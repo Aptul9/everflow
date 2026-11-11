@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Config } from '../dispatcher/config.ts';
+import type { Config } from '../core/config.ts';
 
 export interface WebInstance {
   config: Config;
@@ -10,7 +10,7 @@ export interface WebInstance {
   token: string;
 }
 
-const key = Symbol.for('workdesk.web.instance');
+const key = Symbol.for('everflow.web.instance');
 const owner = process as NodeJS.Process & { [key]?: WebInstance };
 
 export class HttpError extends Error {

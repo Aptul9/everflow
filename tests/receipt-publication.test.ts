@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { join } from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { expect, test, vi } from 'vitest';
-import { atomicJson, bounded } from '../src/dispatcher/daemon.ts';
+import { atomicJson, bounded } from '../src/core/daemon.ts';
 import { failureFields } from '../src/cli.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
 import { scratch } from './support.ts';

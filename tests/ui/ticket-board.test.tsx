@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { TicketBoard } from '../../src/components/tickets/ticket-board.tsx';
-import { uiDetail, uiState } from './fixtures.ts';
+import { AT, card, uiDetail, uiState } from './fixtures.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { webFixture } from '../web-fixture.ts';
 import { readState, representation, ticketDetail } from '../../src/web/state.ts';
@@ -19,6 +19,20 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.useRealTimers(); vi.resto
 
 function board(state = uiState()) { return render(<TicketBoard initialState={state} initialEtag={'"initial"'} token="per-start-token" />); }
 function ticket(id = 1, title = 'Reset access') { return screen.getByRole('article', { name: `Ticket #${id}: ${title}` }); }
+
+test('a long column shows eight cards, then more on demand and back to eight', async () => {
+  const state = uiState();
+  for (let id = 100; id < 111; id++) state.groups.done_today.push(card(id, { title: `Closed ${id}`, lifecycle: 'done', stage: 'Done', closed_at: AT }));
+  board(state);
+  const column = screen.getByRole('region', { name: 'Done (12)' });
+  expect(within(column).getAllByRole('article')).toHaveLength(8);
+  await userEvent.click(within(column).getByRole('button', { name: 'Show 4 more in Done' }));
+  expect(within(column).getAllByRole('article')).toHaveLength(12);
+  expect(within(column).queryByRole('button', { name: /more in Done/ })).toBeNull();
+  await userEvent.click(within(column).getByRole('button', { name: 'Show less in Done' }));
+  expect(within(column).getAllByRole('article')).toHaveLength(8);
+  expect(within(screen.getByRole('region', { name: 'Needs you (2)' })).queryByRole('button', { name: /^Show/ })).toBeNull();
+});
 
 test('Google Chat recent-topic coverage is explicit on the health page', () => {
   const state = uiState();
@@ -439,7 +453,7 @@ test('Discuss dialog commits the exact question, traps focus, ignores shortcuts 
   await user.click(within(dialog).getByRole('button', { name: 'Open chat' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   expect(fetcher).toHaveBeenCalledWith('/api/ticket/1/discuss', expect.objectContaining({ method: 'POST', body: JSON.stringify({ note: 'Exact note\nSecond line jskcd/' }),
-    headers: expect.objectContaining({ 'x-dispatcher-token': 'per-start-token', 'content-type': 'application/json' }) }));
+    headers: expect.objectContaining({ 'x-everflow-token': 'per-start-token', 'content-type': 'application/json' }) }));
   expect(document.activeElement).toBe(trigger);
 });
 
@@ -752,21 +766,21 @@ test('tab title counts Needs you and Failed, and a chime plays only when the cou
   });
   const interval = vi.spyOn(globalThis, 'setInterval');
   board();
-  expect(document.title).toBe('(3) Workdesk');
+  expect(document.title).toBe('(3) Everflow');
   expect(tones).toHaveLength(0);
   const grown = uiState();
   grown.groups.needs_you.push({ ...grown.groups.needs_you[0]!, id: 9, title: 'Fresh ask' });
   fetcher.mockImplementation(async () => Response.json(grown, { headers: { etag: '"grown"' } }));
   const tick = interval.mock.calls.find(([, delay]) => delay === 10_000)![0] as () => void;
   await act(async () => tick());
-  await waitFor(() => expect(document.title).toBe('(4) Workdesk'));
+  await waitFor(() => expect(document.title).toBe('(4) Everflow'));
   expect(tones).toEqual([880, 1320]);
   const cleared = uiState();
   cleared.groups.needs_you = [];
   cleared.groups.failed = [];
   fetcher.mockImplementation(async () => Response.json(cleared, { headers: { etag: '"cleared"' } }));
   await act(async () => tick());
-  await waitFor(() => expect(document.title).toBe('Workdesk'));
+  await waitFor(() => expect(document.title).toBe('Everflow'));
   expect(tones).toHaveLength(2);
 });
 

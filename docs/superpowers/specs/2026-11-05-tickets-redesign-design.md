@@ -1,14 +1,14 @@
-# Inbox dispatcher v2: tickets, approval, chats
+# Everflow v2: tickets, approval, chats
 
 Status: approved on 2026-11-05. Stack amendment approved later the same day: all TypeScript, including watchers and CLI; Next.js, Tailwind and shadcn UI. No Python runtime or Python subprocess wrappers. Implementation plan is being revised to this amendment; all other behavioral decisions remain.
 
 ## Context
 
-Version 1 (branch `feat/outlook-shadow-pipeline`, commit `697da99`) watches Outlook, Teams and the Teams relay, triages each quiet conversation batch with a small model, groups conversations into work items and opens one opencode session per work item at triage time. Drafts are approved in the session or in the Teams self-chat and sent by the dispatcher. Sending was never enabled.
+Version 1 (branch `feat/outlook-shadow-pipeline`, commit `697da99`) watches Outlook, Teams and the Teams relay, triages each quiet conversation batch with a small model, groups conversations into work items and opens one opencode session per work item at triage time. Drafts are approved in the session or in the Teams self-chat and sent by Everflow. Sending was never enabled.
 
-On 2026-11-04 a v1 session wrote a row into a client-synced workbook copy outside its canonical workflow. The write was restored after approval on 2026-11-05. Mail-send gates did not cover file writes, and shell access is not a sandbox (vault note `inbox-dispatcher`, section Traps).
+On 2026-11-04 a v1 session wrote a row into a client-synced workbook copy outside its canonical workflow. The write was restored after approval on 2026-11-05. Mail-send gates did not cover file writes, and shell access is not a sandbox (vault note `everflow`, section Traps).
 
-Target load is about 100 tickets per day across clients. On 2026-11-05 at 20:28 the Meridian quota stood at 60% of the five-hour window and 88% of the seven-day window on profile `notarify`, and at 44% of the seven-day window on profile `everbright`, before any dispatcher load.
+Target load is about 100 tickets per day across clients. On 2026-11-05 at 20:28 the Meridian quota stood at 60% of the five-hour window and 88% of the seven-day window on profile `notarify`, and at 44% of the seven-day window on profile `everbright`, before any Everflow load.
 
 ## Decisions
 
@@ -19,7 +19,7 @@ Target load is about 100 tickets per day across clients. On 2026-11-05 at 20:28 
 | Chat permissions | After approval the chat is a normal OpenChamber chat with Antonio's tools and rules, without a deny list |
 | Approval point | Overview page on localhost: Start, Open chat with a note (question or change), Dismiss. Every answer other than Dismiss creates a chat |
 | Channels | No Teams, WhatsApp or similar channel for approvals or alerts |
-| Processed marker | The dispatcher database is the queue and the processed marker for every source. Source read state is never changed |
+| Processed marker | Everflow database is the queue and the processed marker for every source. Source read state is never changed |
 | Approach | Evolve v1 in place with an own job layer on SQLite. DBOS rejected: its SQLite backend is positioned for prototyping and testing, waits inside versioned workflows conflict with long ticket lifetimes, and it adds `dbos` plus six dependencies |
 | Implementation | TypeScript throughout the daemon, source watchers, CLI and tests. No Python runtime or Python subprocess wrappers |
 | Page technology | Next.js App Router, React, Tailwind CSS and shadcn/ui. Local build and bundled assets; no external browser resources |
@@ -37,7 +37,7 @@ Target load is about 100 tickets per day across clients. On 2026-11-05 at 20:28 
 
 - Start without approval. A later version may allow it per rule; the data model keeps room for it.
 - Notifications outside the page.
-- Dispatcher writes to external trackers.
+- Everflow writes to external trackers.
 - Google Chat watcher, still blocked on OAuth.
 
 ## 1. Architecture
@@ -54,15 +54,15 @@ Target load is about 100 tickets per day across clients. On 2026-11-05 at 20:28 
 | Module | Status | Role |
 |---|---|---|
 | `src/watchers/*.ts`, `src/windows/*.ts` | port | Read-only sources and native Windows bridges; no desktop launch/restart fallback and no Python bridge |
-| `src/dispatcher/db.ts` | new | SQLite schema v2 and migration preserving cursors, conversations and messages |
-| `src/dispatcher/ingest.ts`, `src/cli.ts`, `src/dispatcher/runtime.ts` | new | Ingest/batching semantics, manual detached start/stop, `ticket show/merge/relink/close`, `job list/retry/park`, `quarantine replay` |
-| `src/dispatcher/opencode.ts` | new | Typed OpenCode transport, tag lookup, structured turn errors and stage rename; no deny list |
-| `src/dispatcher/jobs.ts` | new | `enqueue(kind, key, payload)`, leases, attempts, backoff, parking, per-ticket ordering, concurrency and dependency health |
-| `src/dispatcher/kb-agent.ts` | new | Small-model read-only vault tool loop and validated structured decision |
-| `src/dispatcher/tickets.ts` | new | Ticket lifecycle, timeline, references, computed stage and ordered linking rules |
-| `src/dispatcher/chat.ts` | new | Approved chat creation, briefs/forwards, collection, STATUS, recovery, sync and archive |
+| `src/core/db.ts` | new | SQLite schema v2 and migration preserving cursors, conversations and messages |
+| `src/core/ingest.ts`, `src/cli.ts`, `src/core/runtime.ts` | new | Ingest/batching semantics, manual detached start/stop, `ticket show/merge/relink/close`, `job list/retry/park`, `quarantine replay` |
+| `src/core/opencode.ts` | new | Typed OpenCode transport, tag lookup, structured turn errors and stage rename; no deny list |
+| `src/core/jobs.ts` | new | `enqueue(kind, key, payload)`, leases, attempts, backoff, parking, per-ticket ordering, concurrency and dependency health |
+| `src/core/kb-agent.ts` | new | Small-model read-only vault tool loop and validated structured decision |
+| `src/core/tickets.ts` | new | Ticket lifecycle, timeline, references, computed stage and ordered linking rules |
+| `src/core/chat.ts` | new | Approved chat creation, briefs/forwards, collection, STATUS, recovery, sync and archive |
 | `src/app`, `src/components`, `src/server.ts` | new | Next.js route handlers and React overview using Tailwind/shadcn; localhost server lifecycle |
-| `src/dispatcher/vault.ts`, `src/dispatcher/config.ts` | new | Read-only vault tools, TOML configuration and shared typed contracts |
+| `src/core/vault.ts`, `src/core/config.ts` | new | Read-only vault tools, TOML configuration and shared typed contracts |
 | `dispatcher/*.py`, Python runtime/tests/requirements, draft/consent/send tables, `draft` and `reply` CLI, DRAFT parsing | delete after port coverage | No Python in the final application. Chats send on their own after Antonio's yes in chat |
 
 ### Trust boundaries
@@ -159,7 +159,7 @@ The first turn carries the ticket id, title, client, summary, ask and proposal, 
 
 - Every unit of work is a `job` row committed before it runs. Its local effects commit in the same transaction as its completion.
 - Calls to OpenCode carry an identity committed beforehand: the session tag for `start_chat`, the `prompt_id` for turns. A retry checks that identity before calling again.
-- The dispatcher performs no outside write. Chats send on their own after Antonio's yes, so retrying a job never sends anything twice.
+- Everflow performs no outside write. Chats send on their own after Antonio's yes, so retrying a job never sends anything twice.
 - Every failure is visible: on its ticket (stage Failed and a timeline entry), in the Problems list, or in the health strip of the page.
 - The README section Failure handling mirrors this section with the remedy commands.
 
@@ -211,12 +211,12 @@ Triage tries the providers of `[triage] providers` in order and moves to the nex
 | Teams | Same; checkpoint requires every known account | Cursor holds for the account that failed | Never changed: marking read sends Seen to the sender |
 | Teams relay | Fixed replay floor and deduplication | Snapshot read again at the next poll | Not writable |
 
-A watcher line that fails validation goes to the `quarantine` table instead of being dropped. `dispatcher quarantine replay` re-ingests it after a fix.
+A watcher line that fails validation goes to the `quarantine` table instead of being dropped. `Everflow quarantine replay` re-ingests it after a fix.
 
 ### Supervision and logs
 
 - `npm run inbox -- start` launches the built Node daemon detached from the calling process tree. Antonio starts and stops it; there is no automatic restart. `npm run inbox -- stop` stops it gracefully. Tests always pass an explicit scratch config.
-- The daemon writes a heartbeat to `health` every 10 s. The page shows it; an open tab shows "dispatcher unreachable since HH:MM" when requests fail.
+- The daemon writes a heartbeat to `health` every 10 s. The page shows it; an open tab shows "Everflow unreachable since HH:MM" when requests fail.
 - Watcher stderr is read through a pipe and logged with a timestamp and the source name. Error lines update the source's health.
 - Log rotation at 10 MB, 5 files.
 
@@ -252,7 +252,7 @@ A watcher line that fails validation goes to the `quarantine` table instead of b
 - Active card: stage, last `STATUS:` line, references, and the session title to find it in OpenChamber.
 - Ticket detail: timeline, newest first.
 - Keyboard: `j` and `k` move, `s` Start, `c` note and Open chat, `d` Dismiss, `/` search.
-- Refresh: `/api/state` every 10 s with `If-None-Match`. On failure the page keeps the last state and shows "dispatcher unreachable since HH:MM".
+- Refresh: `/api/state` every 10 s with `If-None-Match`. On failure the page keeps the last state and shows "Everflow unreachable since HH:MM".
 - Message text is third-party content and is always rendered through React's text escaping, never as HTML. Application code never uses `dangerouslySetInnerHTML` or raw DOM HTML insertion for source/model content.
 
 ### Out of scope
@@ -292,7 +292,7 @@ Port the source/runtime contracts of `test_outlook.py`, `test_relay_store.py`, `
 | Check | Method | Passes when |
 |---|---|---|
 | Detached start | An inert Node launch probe before code; actual scratch `npm run inbox -- start` after CLI exists. Inspect parent chain and `IsProcessInJob` | Node process is outside OpenChamber's process tree and job object; final command-level proof is recorded separately |
-| Session tag lookup | Create a session with `metadata.inbox_dispatcher.ticket`, then list sessions through the API | The tag comes back and identifies the session |
+| Session tag lookup | Create a session with `metadata.everflow.ticket`, then list sessions through the API | The tag comes back and identifies the session |
 | Title rename | `PATCH /api/session/{id}` with a title after the first turn | The title stays; OpenChamber's session-title plugin does not overwrite it |
 | Instructions in API sessions | First turn of an API-created session asks which instruction files are loaded | The session carries the same instructions as a session opened in OpenChamber |
 | Failed turn detail | A turn that fails on a refused provider | The timeline shows an error with a status or type, enough to classify it |

@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, createCipheriv } from 'node:crypto';
 import { expect, test, vi } from 'vitest';
-import { openDb } from '../src/dispatcher/db.ts';
-import { ingest, sourceStart } from '../src/dispatcher/ingest.ts';
+import { openDb } from '../src/core/db.ts';
+import { ingest, sourceStart } from '../src/core/ingest.ts';
 import { createKernel, NativeError } from '../src/windows/kernel.ts';
 import { createDpapi } from '../src/windows/dpapi.ts';
 import { liveTeamsAccounts, protectedTeamsCache, TeamsAuth } from '../src/watchers/teams-auth.ts';
@@ -24,8 +24,8 @@ test('synthetic encrypted Cookies/WAL and DPAPI Local State traverse actual auth
   const dpapi = createDpapi();
   fs.writeFileSync(join(root, 'Local State'), JSON.stringify({ os_crypt: { encrypted_key: Buffer.concat([Buffer.from('DPAPI'), dpapi.protect(key)]).toString('base64') } }));
   const path = join(network, 'Cookies'), writer = new DatabaseSync(path);
-  const cachePath = join(root, 'dispatcher-cache', 'tokens.bin');
-  using db = openDb(join(root, 'dispatcher-fixture.db'));
+  const cachePath = join(root, 'everflow-cache', 'tokens.bin');
+  using db = openDb(join(root, 'everflow-fixture.db'));
   sourceStart(db, { start: { lookback_minutes: 0 } }, 'teams', since);
   const native = createKernel();
   // A regression must fail here, never enumerate or duplicate a live application's handles.

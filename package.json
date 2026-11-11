@@ -1,5 +1,5 @@
 {
-  "name": "workdesk",
+  "name": "everflow",
   "version": "2.0.0",
   "private": true,
   "type": "module",
@@ -9,7 +9,7 @@
   "scripts": {
     "setup": "node scripts/setup.ts",
     "build": "node scripts/build.ts",
-    "workdesk": "node src/cli.ts",
+    "everflow": "node src/cli.ts",
     "test": "vitest",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json"
   },

@@ -61,11 +61,11 @@ export async function http(port: number, path: string, options: { method?: strin
 }
 
 export function rootToken(text: string): string {
-  const token = /<meta name="dispatcher-token" content="([^"]+)"/.exec(text)?.[1];
+  const token = /<meta name="everflow-token" content="([^"]+)"/.exec(text)?.[1];
   if (!token) throw new Error('Dynamic root has no current action token');
   return token;
 }
 
 export function actionHeaders(port: number, token: string) {
-  return { 'content-type': 'application/json', origin: `http://127.0.0.1:${port}`, 'x-dispatcher-token': token };
+  return { 'content-type': 'application/json', origin: `http://127.0.0.1:${port}`, 'x-everflow-token': token };
 }

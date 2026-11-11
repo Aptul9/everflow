@@ -1,11 +1,11 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import * as api from '../src/dispatcher/kb-agent.ts';
-import { openDb } from '../src/dispatcher/db.ts';
-import { ingest, schedule } from '../src/dispatcher/ingest.ts';
-import * as jobs from '../src/dispatcher/jobs.ts';
-import type { Config } from '../src/dispatcher/config.ts';
-import * as tickets from '../src/dispatcher/tickets.ts';
+import * as api from '../src/core/kb-agent.ts';
+import { openDb } from '../src/core/db.ts';
+import { ingest, schedule } from '../src/core/ingest.ts';
+import * as jobs from '../src/core/jobs.ts';
+import type { Config } from '../src/core/config.ts';
+import * as tickets from '../src/core/tickets.ts';
 import { decision, kbFixture, provider, scriptedPeer, text, tools, use } from './kb-support.ts';
 import { snapshot } from './support.ts';
 

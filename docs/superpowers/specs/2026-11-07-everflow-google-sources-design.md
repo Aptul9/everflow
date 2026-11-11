@@ -1,8 +1,8 @@
-# Workdesk Google sources
+# Everflow Google sources
 
 ## Approved scope
 
-Product name: Workdesk. Owner approved name and scope through the local choice form on 2026-11-07. Product, package, CLI help, page and current documentation adopt that name. Checkout, GitHub repository, instance directories, database names, named-pipe namespace and existing environment variables remain compatible. No live restart, migration or default-branch merge.
+Product name: Everflow. Owner approved name and scope through the local choice form on 2026-11-07. Product, package, CLI help, page and current documentation adopt that name. Checkout, GitHub repository, instance directories, database names, named-pipe namespace and existing environment variables remain compatible. No live restart, migration or default-branch merge.
 
 ## Sources
 

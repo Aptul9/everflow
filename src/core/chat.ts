@@ -144,7 +144,7 @@ function quoteMessages(db: DatabaseSync, messages: readonly Message[]): string {
   }).join('\n\n');
 }
 
-function closeCommand(cfg: Config, ticket: number, buildReceipt = process.env.WORKDESK_ARTIFACT): string {
+function closeCommand(cfg: Config, ticket: number, buildReceipt = process.env.EVERFLOW_ARTIFACT): string {
   const artifact = readBuildReceipt(buildReceipt);
   const quoted = (value: string) => `'${value.replaceAll("'", "''")}'`;
   return `& ${quoted(process.execPath)} ${quoted(join(artifact.root, 'dist/cli.js'))} --artifact ${quoted(buildReceipt!)} --config ${quoted(cfg._config_path)} ticket close ${ticket}`;
@@ -152,7 +152,7 @@ function closeCommand(cfg: Config, ticket: number, buildReceipt = process.env.WO
 
 function instructions(cfg: Config, ticket: number, buildReceipt?: string): string {
   return `${contract}\nUse canonical files and Antonio's normal shared-file approval workflow. This brief grants no shared write or outside-send approval.
-Workdesk is in trial. When a tool, MCP server, command or access you need fails or is missing, state the tool and the exact error in this turn, append one line "- <UTC time> #${ticket} <tool> | <exact error>" to ${join(cfg.vault.path, '99_Inbox', 'workdesk-tool-issues.md')}, then continue with what works.
+Everflow is in trial. When a tool, MCP server, command or access you need fails or is missing, state the tool and the exact error in this turn, append one line "- <UTC time> #${ticket} <tool> | <exact error>" to ${join(cfg.vault.path, '99_Inbox', 'everflow-tool-issues.md')}, then continue with what works.
 Ticket corrections (absolute command; never fall back to a default config):
 ${closeCommand(cfg, ticket, buildReceipt)}
 For relink or merge, keep the same executable, CLI, --artifact and --config. Use ticket relink CONVERSATION_ID TARGET_ID or ticket merge SOURCE_ID TARGET_ID with the actual internal ids.`;

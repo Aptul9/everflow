@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { openDb } from '../src/dispatcher/db.ts';
-import * as jobs from '../src/dispatcher/jobs.ts';
-import * as chat from '../src/dispatcher/chat.ts';
-import { close, merge, route } from '../src/dispatcher/tickets.ts';
-import { connect } from '../src/dispatcher/opencode.ts';
+import { openDb } from '../src/core/db.ts';
+import * as jobs from '../src/core/jobs.ts';
+import * as chat from '../src/core/chat.ts';
+import { close, merge, route } from '../src/core/tickets.ts';
+import { connect } from '../src/core/opencode.ts';
 import { AT, addBatch, chatFixture, claimed, proposed, row } from './chat-support.ts';
 import { remoteSession, scriptedPeer, PEER_AT } from './opencode-support.ts';
 import { snapshot } from './support.ts';
 
-beforeEach(() => { vi.stubEnv('WORKDESK_OPENCODE_PASSWORD', ''); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(AT)); });
+beforeEach(() => { vi.stubEnv('EVERFLOW_OPENCODE_PASSWORD', ''); vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date(AT)); });
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); });
 
 test('lost create response reconciles durable tag across DB/client restart without another create', async () => {
@@ -483,7 +483,7 @@ test.each(['unreachable', 'duplicate'] as const)('start %s lookup never falls th
   if (mode === 'unreachable') peer.state.hook = (_call, response) => { peer.json(response, {}, 503); return true; };
   else {
     for (const id of ['ses_duplicate_1', 'ses_duplicate_2']) peer.sessions.set(id, remoteSession(id, cfg.opencode.directory,
-      { workdesk: { store_id: store, ticket } }));
+      { everflow: { store_id: store, ticket } }));
   }
   chat.approve(cfg, db, ticket, '');
   const job = claimed(db, cfg);

@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import { expect, test } from 'vitest';
 import { isolatedEnvironment } from '../scripts/build.ts';
-import { openDb } from '../src/dispatcher/db.ts';
+import { openDb } from '../src/core/db.ts';
 import { createKernel } from '../src/windows/kernel.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
 import { http } from './web-support.ts';

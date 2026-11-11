@@ -1,7 +1,7 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { expect, test } from 'vitest';
-import { clientsFor, loadConfig, readJsonc } from '../src/dispatcher/config.ts';
+import { clientsFor, loadConfig, readJsonc } from '../src/core/config.ts';
 import { scratch } from './support.ts';
 
 function configFile(text = '') {

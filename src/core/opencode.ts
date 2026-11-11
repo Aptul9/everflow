@@ -159,7 +159,7 @@ function loadSettings(options: TransportOptions) {
 // Constructing the client starts no service, opens no connection and subscribes to no events.
 export function connect(cfg: Config, options: TransportOptions = {}) {
   let url = cfg.opencode.url;
-  let password = options.password ?? process.env.WORKDESK_OPENCODE_PASSWORD ?? '';
+  let password = options.password ?? process.env.EVERFLOW_OPENCODE_PASSWORD ?? '';
   const openchamber = !url;
   if (openchamber) {
     const settings = loadSettings(options);
@@ -192,7 +192,7 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
       const [providerID, ...model] = selected.split('/');
       if (selected && (!providerID || !model.join('/'))) throw new TypeError('OpenCode model must be provider/model');
       return client.session.create({ title, location: { directory },
-        metadata: { workdesk: { store_id: store, ticket } },
+        metadata: { everflow: { store_id: store, ticket } },
         ...(selected ? { model: { providerID: providerID!, id: model.join('/'), ...(choice?.effort ? { variant: choice.effort } : {}) } } : {}) }, request(signal));
     },
     async models(signal?: AbortSignal) {
@@ -208,7 +208,7 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
           const page = await client.session.list({ directory, archived, limit: 100,
             ...(cursor ? { cursor } : { order: 'desc' }) }, request(signal));
           for (const session of page.data) {
-            const tag = session.metadata?.workdesk;
+            const tag = session.metadata?.everflow;
             if (tag && typeof tag === 'object' && !Array.isArray(tag) && tag.store_id === store && tag.ticket === ticket
               && directoryKey(session.location.directory) === directoryKey(directory)) matches.add(session.id);
           }

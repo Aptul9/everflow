@@ -1,24 +1,24 @@
-# Workdesk: from message to ticket and chat
+# Everflow: from message to ticket and chat
 
-How Workdesk collects mail and chat messages, proposes tickets on a local page, and runs an approved ticket in an OpenChamber chat.
+How Everflow collects mail and chat messages, proposes tickets on a local page, and runs an approved ticket in an OpenChamber chat.
 
 ## Overview
 
-Workdesk reads Outlook, Teams, the Teams relay, Google Chat through gweb and Gmail through gws. It groups new messages by conversation and asks a small model whether the group needs work. When it does, a ticket proposal appears on a local page. Nothing else happens until Start is pressed on that ticket.
+Everflow reads Outlook, Teams, the Teams relay, Google Chat through gweb and Gmail through gws. It groups new messages by conversation and asks a small model whether the group needs work. When it does, a ticket proposal appears on a local page. Nothing else happens until Start is pressed on that ticket.
 
-Start opens one OpenChamber chat for the ticket and sends it a brief. The chat works under the normal rules of the assistant, and ends every turn with a STATUS line. The dispatcher reads that line back onto the ticket and into the chat title.
+Start opens one OpenChamber chat for the ticket and sends it a brief. The chat works under the normal rules of the assistant, and ends every turn with a STATUS line. Everflow reads that line back onto the ticket and into the chat title.
 
-The dispatcher never sends anything. It has no mail or chat send transport, writes no read receipts, sends no auto-replies and changes no read state at the source. It never starts, focuses or closes Outlook, Teams or providers. Google Chat can optionally bootstrap authentication from its saved Chrome profile, minimized and without prompts. Outward-facing text is approved inside the chat, never on the page.
+Everflow never sends anything. It has no mail or chat send transport, writes no read receipts, sends no auto-replies and changes no read state at the source. It never starts, focuses or closes Outlook, Teams or providers. Google Chat can optionally bootstrap authentication from its saved Chrome profile, minimized and without prompts. Outward-facing text is approved inside the chat, never on the page.
 
 ## How the parts connect
 
-![Workdesk: Outlook, Gmail, Teams, Google Chat and relay watchers write messages to SQLite; triage reads the Vault and writes proposals; the local page approves work; jobs send input to OpenChamber; the collector stores the report](diagrams/workdesk-architecture.png)
+![Everflow: Outlook, Gmail, Teams, Google Chat and relay watchers write messages to SQLite; triage reads the Vault and writes proposals; the local page approves work; jobs send input to OpenChamber; the collector stores the report](diagrams/everflow-architecture.png)
 
 Each watcher is a child process that prints one JSON line per message. The daemon stores the lines in SQLite, and every later step runs as a job from the queue in the same database. The page reads and writes the same database through its own local server.
 
 ## One message, from arrival to report
 
-![One Teams message over time: Teams watcher, SQLite and job queue, triage, Vault, local page, OpenChamber chat and collector](diagrams/workdesk-at-a-glance.png)
+![One Teams message over time: Teams watcher, SQLite and job queue, triage, Vault, local page, OpenChamber chat and collector](diagrams/everflow-at-a-glance.png)
 
 Time runs from top to bottom in four phases. A message waits without a batch until its conversation has been quiet for the window of its source, then all new messages of that conversation become one batch. The chat phase starts only after Start.
 
@@ -31,7 +31,7 @@ Time runs from top to bottom in four phases. A message waits without a batch unt
 | New messages | Opus, same chat | `chat.ts` lines 180 to 186 | Only the new batches, plus own replies not yet sent to the chat |
 | Recovery | Opus, same chat | `chat.ts` lines 465 to 472 | The error, the original request quoted, and own replies since then |
 
-The files are in `src/dispatcher/`. Triage runs `claude-haiku-5-5` through the provider `meridian-everbright`, and through `meridian-notarify` when the first is unavailable. Its input is built in `kb-agent.ts` lines 323 to 327 and `tickets.ts` lines 116 to 122 and 306 to 314, and the Vault is reached only through the tools `vault_search` and `vault_read`. Triage calls Meridian directly, without OpenChamber, so it does not load the normal instructions; the `[vault] guide` text in `config.toml` tells it how the Vault is laid out. Search covers the whole Vault, numbered folders first, and a note matches when it contains every word of the query. The chats run `meridian-everbright/claude-opus-5-5` through OpenChamber.
+The files are in `src/core/`. Triage runs `claude-haiku-5-5` through the provider `meridian-everbright`, and through `meridian-notarify` when the first is unavailable. Its input is built in `kb-agent.ts` lines 323 to 327 and `tickets.ts` lines 116 to 122 and 306 to 314, and the Vault is reached only through the tools `vault_search` and `vault_read`. Triage calls Meridian directly, without OpenChamber, so it does not load the normal instructions; the `[vault] guide` text in `config.toml` tells it how the Vault is laid out. Search covers the whole Vault, numbered folders first, and a note matches when it contains every word of the query. The chats run `meridian-everbright/claude-opus-5-5` through OpenChamber.
 
 Triage decides on the new messages, the ones that arrived in that conversation since the last batch. With them it gets the latest 40 earlier messages of the same conversation, oldest first, each with its send time, sender, whether it is an own reply, and text cut at 2,000 characters. It also gets the current time, so it can tell an old request from a new one and see whether a later own reply already answered it. `[triage] history_messages` in `config.toml` sets the count, from 0 to 100. The chat brief is the step that sees the whole stored history of the ticket.
 
@@ -58,7 +58,7 @@ Triage returns one JSON decision: `new`, `update` or `skip`, with title, client,
 
 ## Timings
 
-All values are the defaults in `src/dispatcher/config.ts`; the running instance does not change them.
+All values are the defaults in `src/core/config.ts`; the running instance does not change them.
 
 | What | Value |
 |---|---|
@@ -85,7 +85,7 @@ All values are the defaults in `src/dispatcher/config.ts`; the running instance 
 - The last line of every turn must read `STATUS: <working|needs_you|waiting_them|done> | <one line>`. The brief defines each value. `done` closes the ticket. `blocked` is no longer offered but is still parsed as `Needs you`, for sessions opened before the change. A turn without a valid STATUS line parks its job.
 - Dismiss closes a ticket with an optional reason. The reasons are passed to every later triage. The same dialog can mute the ticket's chat.
 - Done closes a ticket that was handled by hand, with an optional note. It is not a Dismiss and is not passed to triage as negative feedback. New messages in its conversation within 14 days reopen it.
-- During the trial every chat brief asks the chat to report a failing or missing tool in the turn and to append one line to `99_Inbox/workdesk-tool-issues.md` in the Vault.
+- During the trial every chat brief asks the chat to report a failing or missing tool in the turn and to append one line to `99_Inbox/everflow-tool-issues.md` in the Vault.
 - Mute keeps a chat out of triage for 8 hours, 1 day, 1 week or until unmuted, from a Skipped batch or from Dismiss. Its new messages land under Skipped as `Muted`. Muted chats are listed on the page with Unmute.
 - Make ticket turns a skipped, backlog or muted batch into a ticket, or adds it to the ticket the conversation already belongs to. It does not approve the ticket. On a muted batch it also ends the mute.
 - `accounts = [...]` under a source keeps only those receiving accounts; messages of the others are dropped before storage and the page shows them as `off`. No list means every account. The list is read at start.
@@ -98,9 +98,9 @@ All values are the defaults in `src/dispatcher/config.ts`; the running instance 
 
 ## Running it
 
-The trial instance lives in `%LOCALAPPDATA%\workdesk`, with its own database. The older weekend instance in `%LOCALAPPDATA%\inbox-dispatcher-v2` is retained and stays stopped. Environment variables are named `WORKDESK_*`. `npm run workdesk` is the only launcher.
+The trial instance lives in `%LOCALAPPDATA%\everflow`, with its own database. The older weekend instance in `%LOCALAPPDATA%\everflow-weekend` is retained and stays stopped. Environment variables are named `EVERFLOW_*`. `npm run everflow` is the only launcher.
 
-Everything runs through `scripts\workdesk.ps1 <command>` in the repository.
+Everything runs through `scripts\everflow.ps1 <command>` in the repository.
 
 | Command or file | Use |
 |---|---|
@@ -111,9 +111,9 @@ Everything runs through `scripts\workdesk.ps1 <command>` in the repository.
 | `open` | Opens the page of the running instance |
 | `config.toml` | The instance's explicitly selected settings, independent of the repository example |
 
-- There is no autostart, service or scheduled task. After a crash or a reboot the dispatcher stays down until `scripts\workdesk.ps1 start` runs again.
-- OpenChamber has to be running. The dispatcher reads its port and password from `~/.config/openchamber/settings.json`.
-- The data is `workdesk.db` in the same folder. The log is `workdesk.db.log`, rotated at 10,485,760 bytes with 5 files kept. The Teams token cache and profile snapshots are in `workdesk.db.sources`.
+- There is no autostart, service or scheduled task. After a crash or a reboot Everflow stays down until `scripts\everflow.ps1 start` runs again.
+- OpenChamber has to be running. Everflow reads its port and password from `~/.config/openchamber/settings.json`.
+- The data is `everflow.db` in the same folder. The log is `everflow.db.log`, rotated at 10,485,760 bytes with 5 files kept. The Teams token cache and profile snapshots are in `everflow.db.sources`.
 - The page listens on `127.0.0.1` only, and its buttons need the token of the current server start. After a restart the page has to be reloaded.
 - The `config.toml` in the repository has every switch off and is not the running configuration.
 

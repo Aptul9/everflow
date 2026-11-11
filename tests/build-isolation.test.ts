@@ -103,12 +103,12 @@ test('child environment drops inherited application state and scopes native cach
   const tree = createBuildTree(source);
   const env = isolatedEnvironment(tree.root, {
     PATH: ['C:/synthetic/toolchain', 'C:/synthetic/.venv/Scripts', 'C:/synthetic/node_modules/.bin'].join(delimiter), SystemRoot: 'C:/Windows', USERPROFILE: 'C:/synthetic-user', APPDATA: 'C:/synthetic-state',
-    NODE_OPTIONS: '--import=synthetic-preload', WORKDESK_OPENCODE_PASSWORD: 'synthetic-secret', TEST_INSTANCE_CONFIG: 'synthetic-config',
+    NODE_OPTIONS: '--import=synthetic-preload', EVERFLOW_OPENCODE_PASSWORD: 'synthetic-secret', TEST_INSTANCE_CONFIG: 'synthetic-config',
     OBSIDIAN_VAULT: 'synthetic-vault', npm_config_userconfig: 'synthetic-user-npmrc',
   });
   expect(env.NODE_OPTIONS).toBeUndefined();
   expect(env.PATH).toBe('C:/synthetic/toolchain');
-  expect(env.WORKDESK_OPENCODE_PASSWORD).toBeUndefined();
+  expect(env.EVERFLOW_OPENCODE_PASSWORD).toBeUndefined();
   expect(env.TEST_INSTANCE_CONFIG).toBeUndefined();
   expect(env.OBSIDIAN_VAULT).toBeUndefined();
   expect(env.USERPROFILE).toContain(tree.root);
@@ -123,7 +123,7 @@ test('child environment drops inherited application state and scopes native cach
 });
 
 test('installed native headers resolve inside the staged node-gyp cache', () => {
-  const root = process.env.WORKDESK_BUILD_ROOT!;
+  const root = process.env.EVERFLOW_BUILD_ROOT!;
   expect(root).toBeTruthy();
   const config = JSON.parse(fs.readFileSync(join(root, 'node_modules/winax/build/config.gypi'), 'utf8').replace(/^#.*$/gm, '')) as { variables: { nodedir: string } };
   expect(config.variables.nodedir.toLowerCase()).toBe(join(root, '.private', 'node-gyp', process.versions.node).toLowerCase());

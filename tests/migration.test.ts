@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import sqlite, { DatabaseSync } from 'node:sqlite';
 import { setImmediate } from 'node:timers/promises';
 import { afterEach, expect, test, vi } from 'vitest';
-import { migrate, openDb } from '../src/dispatcher/db.ts';
-import { ingest } from '../src/dispatcher/ingest.ts';
+import { migrate, openDb } from '../src/core/db.ts';
+import { ingest } from '../src/core/ingest.ts';
 import { createV1, OLD_AT, scratch, snapshot } from './support.ts';
 
 const retained = ['cursor', 'conversation', 'person', 'message', 'triage_log'] as const;

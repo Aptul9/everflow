@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadConfig } from '../src/dispatcher/config.ts';
+import { loadConfig } from '../src/core/config.ts';
 import { scratch } from './support.ts';
 
 export function kbFixture() {
