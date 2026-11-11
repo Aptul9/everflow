@@ -81,7 +81,7 @@ All values are the defaults in `src/dispatcher/config.ts`; the running instance 
 ## Rules
 
 - Start approves a proposal. Open chat with note approves it too, and the note becomes the instruction quoted in the brief. Both need tickets and chats switched on.
-- Approval creates one chat named `[Working] #<id> <title>`. After each turn the chat is renamed `[<stage>] #<id> <title>`, with the stage `Needs you`, `Working`, `Waiting on them`, `Idle`, `Done` or `Failed`.
+- Approval creates one chat named `[Working] #<id> <title>`, in the folder of the ticket's client (`[clients.<name>] directory`), or in `[opencode] directory` when the ticket has no client or the client has no folder. After each turn the chat is renamed `[<stage>] #<id> <title>`, with the stage `Needs you`, `Working`, `Waiting on them`, `Idle`, `Done` or `Failed`.
 - The last line of every turn must read `STATUS: <working|needs_you|waiting_them|done> | <one line>`. The brief defines each value. `done` closes the ticket. `blocked` is no longer offered but is still parsed as `Needs you`, for sessions opened before the change. A turn without a valid STATUS line parks its job.
 - Dismiss closes a ticket with an optional reason. The reasons are passed to every later triage. The same dialog can mute the ticket's chat.
 - Done closes a ticket that was handled by hand, with an optional note. It is not a Dismiss and is not passed to triage as negative feedback. New messages in its conversation within 14 days reopen it.
