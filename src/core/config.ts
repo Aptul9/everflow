@@ -52,6 +52,7 @@ const configSchema = z.looseObject({
   windows: z.looseObject({
     outlook: positive.min(300).default(300), teams: positive.min(120).default(120), teamsrelay: positive.min(120).default(120),
     gchat: positive.min(120).default(120), gmail: positive.min(300).default(300), oemail: positive.min(120).default(180),
+    slack: positive.min(120).default(120),
   }).catchall(nonnegative).prefault({}),
   web: z.object({ port: positive.max(65535).default(8789) }).prefault({}),
   jobs,

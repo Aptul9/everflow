@@ -8,7 +8,7 @@ import { createKernel, NativeError, spawnedIdentity } from '../windows/kernel.ts
 import type { ProcessIdentity } from '../windows/kernel.ts';
 import type { ChildProcess, Serializable } from 'node:child_process';
 
-export type Source = 'outlook' | 'teams' | 'teamsrelay' | 'gchat' | 'gmail' | 'oemail';
+export type Source = 'outlook' | 'teams' | 'teamsrelay' | 'gchat' | 'gmail' | 'oemail' | 'slack';
 export interface SourceMessage {
   source: Source;
   account: string;
