@@ -8,7 +8,7 @@ import type { Config } from './config.ts';
 import { openDb, transaction } from './db.ts';
 import { backoff, classify, complete, defer, fail, healthError, healthOk, owns } from './jobs.ts';
 import type { Job } from './jobs.ts';
-import { modelChoice } from './settings.ts';
+import { modelChoice, triageRoute } from './settings.ts';
 import { applyDecision, assessmentPayload, batchMessages, conversationHistory, feedback, modelDecisionSchema, route, ticketRecord, TicketError } from './tickets.ts';
 import type { Decision, Route, Ticket } from './tickets.ts';
 import { utc } from './time.ts';
@@ -77,23 +77,6 @@ const routeSchema = z.looseObject({
   settings: z.looseObject({ baseURL: z.url().refine((value) => /^https?:\/\//i.test(value), 'HTTP(S) baseURL required'), apiKey: z.string().optional() }),
   headers: z.record(z.string(), z.string()).default({}),
 });
-const modelsSchema = z.object({ data: z.array(z.looseObject({ id: z.string().min(1), display_name: z.string().optional(),
-  capabilities: z.looseObject({ effort: z.record(z.string(), z.unknown()).optional() }).optional() })) });
-
-// Models the first triage route serves, with the effort levels each one supports, for the page picker
-export async function triageModels(cfg: Config, fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<{ id: string; name: string; efforts: string[] }[]> {
-  const id = cfg.triage.providers[0];
-  if (!id) return [];
-  const providers = z.object({ providers: z.record(z.string(), z.unknown()) })
-    .parse(readJsonc(cfg.triage.provider_config_path ?? join(homedir(), '.config/opencode/opencode.jsonc'))).providers;
-  const route = routeSchema.parse(providers[id]);
-  const response = await fetcher(route.settings.baseURL.replace(/\/$/, '') + '/models', { redirect: 'error', signal: signal ?? AbortSignal.timeout(10_000),
-    headers: { 'anthropic-version': '2023-06-01', 'x-api-key': route.settings.apiKey ?? '', ...route.headers } });
-  if (!response.ok) throw Object.assign(new Error(`Provider ${id} HTTP ${response.status}`), { status: response.status });
-  return modelsSchema.parse(await response.json()).data.map((model) => ({ id: model.id, name: model.display_name ?? model.id,
-    efforts: Object.entries(model.capabilities?.effort ?? {}).filter(([key, value]) => key !== 'supported' && (value as { supported?: boolean })?.supported === true).map(([key]) => key) }));
-}
-
 // Thinking blocks are kept verbatim so the tool turn can be echoed back with its signature; they never carry the decision.
 const blockSchema = z.union([
   z.looseObject({ type: z.literal('text'), text: z.string() }),
@@ -193,12 +176,13 @@ export async function assess(cfg: Config, context: AssessmentContext, candidates
   if (!Number.isSafeInteger(cfg.triage.tool_limit) || cfg.triage.tool_limit < 1 || cfg.triage.tool_limit > 8
     || !Number.isSafeInteger(cfg.triage.timeout_seconds) || cfg.triage.timeout_seconds < 1 || cfg.triage.timeout_seconds > 120) throw new RangeError('Invalid assessment budget');
   check();
-  const ids = [...new Set(cfg.triage.providers)];
-  if (!ids.length) throw Object.assign(new Error('No configured triage provider route'), { type: 'provider.no-route' });
+  if (!cfg.triage.providers.length) throw Object.assign(new Error('No configured triage provider route'), { type: 'provider.no-route' });
   const providers = options.providers ?? z.object({ providers: z.record(z.string(), z.unknown()) })
     .parse(readJsonc(options.providerConfigPath ?? join(homedir(), '.config/opencode/opencode.jsonc'))).providers;
   const db = options.db ?? openDb(cfg.db.path);
   const choice = modelChoice(db, cfg, 'triage');
+  // The chosen account goes first; a limited one is skipped until its retry time, so the others take over on their own
+  const { routes: ids, model } = triageRoute(cfg, choice.model);
   const fetcher = options.fetch ?? fetch;
   let current: AssessmentInput = { context, candidates, mode };
   let messages: ModelMessage[] | null = null;
@@ -236,7 +220,7 @@ export async function assess(cfg: Config, context: AssessmentContext, candidates
         const response = await fetcher(route.settings.baseURL.replace(/\/$/, '') + '/messages', {
           method: 'POST', redirect: 'error', headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01',
             'x-api-key': route.settings.apiKey ?? '', ...route.headers },
-          body: JSON.stringify({ model: choice.model, max_tokens: 2_200, ...(choice.effort ? { output_config: { effort: choice.effort } } : {}),
+          body: JSON.stringify({ model, max_tokens: 2_200, ...(choice.effort ? { output_config: { effort: choice.effort } } : {}),
             system: systemPrompt(cfg), messages, tools: readTools,
             tool_choice: { type: calls < cfg.triage.tool_limit ? 'auto' : 'none' } }), signal: requestSignal,
         });

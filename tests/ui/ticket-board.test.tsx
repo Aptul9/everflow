@@ -290,12 +290,12 @@ test('each live source account row has a pause switch; paused rows say what wait
   expect(within(card).getByRole('status').textContent).toBe('Held: me@npo.invalid paused');
 });
 
-test('triage fails over on its own and picks only its effort, chat picks model and effort; stale option lists ask the daemon once', async () => {
+test('triage and chat pick model and effort the same way, triage only among its own accounts; stale option lists ask the daemon once', async () => {
   const state = uiState();
   state.health.push({ dependency: 'provider:first', scope: 'provider', state: 'failing', since: null, last_ok: null, last_error: 'down' });
-  state.models.options = { at: null, error: 'triage: Provider first HTTP 503', requested_at: null,
-    triage: [{ id: 'claude-opus-4-8', name: 'Opus 4.8', efforts: [] }, { id: 'claude-haiku-5-5', name: 'Haiku 5.5', efforts: [] }, { id: 'claude-opus-5-5', name: 'Opus 5.5', efforts: [] }],
-    chat: [{ id: 'meridian-auto/claude-opus-5-5', name: 'Opus auto', efforts: ['high', 'max'] }, { id: 'meridian-roar/claude-sonnet-5-5', name: 'Sonnet roar', efforts: ['low'] }],
+  state.models.options = { at: null, error: 'Model list: OpenCode HTTP 503', requested_at: null,
+    chat: [{ id: 'meridian-auto/claude-opus-5-5', name: 'Opus auto', efforts: ['high', 'max'] }, { id: 'meridian-roar/claude-sonnet-5-5', name: 'Sonnet roar', efforts: ['low'] },
+      { id: 'first/claude-haiku-5-5', name: 'Haiku 5.5 #2', efforts: ['none', 'low'] }, { id: 'second/claude-opus-5-5', name: 'Opus 5.5 #1', efforts: ['high'] }],
     accounts: { first: 'Claude #2 (everbright)', 'meridian-auto': 'Claude auto (pool)', 'meridian-roar': 'Claude #3 (roar)' } };
   state.models.triage_routes = ['first', 'second'];
   state.models.chat = { model: 'meridian-auto/claude-opus-5-5', effort: 'max', default_model: 'meridian-auto/claude-opus-5-5', overridden: true };
@@ -303,13 +303,23 @@ test('triage fails over on its own and picks only its effort, chat picks model a
   const health = screen.getByRole('region', { name: 'Health' });
   await waitFor(() => expect(fetcher.mock.calls.some(([path, init]) => path === '/api/setting' && String(init?.body) === '{"refresh":true}')).toBe(true));
   const triage = health.querySelector<HTMLElement>('[data-node="triage"]')!;
-  // Triage fails over on its own: accounts in failover order with their health, nothing to pick but the effort
   expect(within(triage).getByText('Accounts, automatic failover')).toBeTruthy();
   expect(within(triage).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['Claude #2 (everbright)failingdown', 'secondnot used yet']);
-  expect(within(triage).queryByRole('radio')).toBeNull();
-  expect(within(triage).queryByRole('button', { name: 'Triage model' })).toBeNull();
-  expect(within(triage).getByRole('button', { name: 'Triage effort' }).textContent).toBe('Effortdefault');
-  expect(within(triage).getByRole('alert').textContent).toBe('triage: Provider first HTTP 503');
+  expect(within(triage).getByRole('button', { name: 'Triage model' }).textContent).toBe('Haiku 5.5 #2');
+  expect(within(triage).getByText(/^Account:/).textContent).toBe('Account: Claude #2 (everbright)');
+  expect(within(triage).getByRole('alert').textContent).toBe('Model list: OpenCode HTTP 503');
+  // Only the triage accounts' models, under their account like the chat list; Meridian has no `none` effort
+  fireEvent.click(within(triage).getByRole('button', { name: 'Triage model' }));
+  const triageModels = await screen.findByRole('listbox', { name: 'Triage model' });
+  expect(within(triageModels).getAllByRole('option').map((option) => option.textContent)).toEqual(['Haiku 5.5 #2defaultclaude-haiku-5-5', 'Opus 5.5 #1claude-opus-5-5']);
+  expect(within(triageModels).getAllByRole('presentation').map((group) => group.textContent)).toEqual(['Claude #2 (everbright)', 'second']);
+  fireEvent.keyDown(triageModels, { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('listbox', { name: 'Triage model' })).toBeNull());
+  fireEvent.click(within(triage).getByRole('button', { name: 'Triage effort' }));
+  const triageEfforts = await screen.findByRole('listbox', { name: 'Triage effort' });
+  expect(within(triageEfforts).getAllByRole('option').map((option) => option.textContent)).toEqual(["Default effortmodel's own", 'low']);
+  fireEvent.keyDown(triageEfforts, { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('listbox', { name: 'Triage effort' })).toBeNull());
   const chat = health.querySelector<HTMLElement>('[data-node="openchamber"]')!;
   expect(within(chat).getByRole('button', { name: 'Chat model' }).textContent).toBe('Opus auto');
   expect(within(chat).getByText(/^Account:/).textContent).toBe('Account: Claude auto (pool)');
@@ -332,6 +342,11 @@ test('triage fails over on its own and picks only its effort, chat picks model a
   fireEvent.keyDown(search, { key: 'Enter' });
   await waitFor(() => expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').map(([, init]) => JSON.parse(String(init!.body)))).toEqual([
     { key: 'chat.model', value: 'meridian-roar/claude-sonnet-5-5' }, { key: 'chat.effort', value: '' }]));
+  fetcher.mockClear();
+  fireEvent.click(within(triage).getByRole('button', { name: 'Triage model' }));
+  fireEvent.click(within(await screen.findByRole('listbox', { name: 'Triage model' })).getByRole('option', { name: /^Opus 5\.5 #1/ }));
+  await waitFor(() => expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').map(([, init]) => JSON.parse(String(init!.body))))
+    .toEqual([{ key: 'triage.model', value: 'second/claude-opus-5-5' }]));
 });
 
 test('a batch in triage shows at the top of Needs you before its ticket exists', async () => {

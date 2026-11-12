@@ -83,8 +83,8 @@ function Picker(props: { label: string; value: string; items: PickItem[]; onPick
   </Popover>;
 }
 
-// Model and effort the next new ticket chat starts with, effort only for the next triage call; empty picks the config default.
-// A chat model runs on the account of its provider; triage runs the config model and fails over between its accounts on its own.
+// Model and effort the next triage call or the next new ticket chat starts with; empty picks the config default.
+// A model runs on the account of its provider; triage tries that account first and fails over to the others on its own.
 function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options: ModelOption[]; accounts: Record<string, string>;
   disabled: boolean; post: PausePost; error?: string | undefined }) {
   const { scope, choice } = props;
@@ -102,16 +102,16 @@ function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options:
   return <div className="mt-2 border-t pt-2">
     <p className="mb-1 text-[11px] text-muted-foreground">{scope === 'triage' ? 'Next triage call' : 'Next new ticket chat'}</p>
     <div className="grid min-w-0 gap-1.5">
-      {scope === 'chat' && <Picker label="Chat model" value={choice.model} items={models} disabled={props.disabled} search="Search models"
+      <Picker label={`${what} model`} value={choice.model} items={models} disabled={props.disabled} search="Search models"
         onPick={(model) => {
           const next = list.find((option) => option.id === model)?.efforts ?? [];
           void (async () => {
-            await save('chat.model', model === choice.default_model ? '' : model);
-            if (choice.effort && next.length && !next.includes(choice.effort)) await save('chat.effort', '');
+            await save(`${scope}.model`, model === choice.default_model ? '' : model);
+            if (choice.effort && next.length && !next.includes(choice.effort)) await save(`${scope}.effort`, '');
           })().catch(() => {});
         }}>
         <span className="truncate" title={choice.model}>{current.name}</span>
-      </Picker>}
+      </Picker>
       {provider && <p className="-mt-0.5 px-0.5 text-[11px] leading-snug text-muted-foreground">
         Account: <span className="text-foreground/80">{name(provider)}</span></p>}
       <Picker label={`${what} effort`} value={choice.effort ?? ''} disabled={props.disabled}
@@ -276,8 +276,10 @@ export function Pipeline({ state, expired = false, pending = new Set(), errors =
     asked.current = true;
     void post('setting:refresh', '/api/setting', { refresh: true }).catch(() => {});
   }, [shown, expired, state.tickets_enabled, options.at, options.requested_at, post]);
-  const pickerError = (scope: 'triage' | 'chat') => errors[`setting:${scope}.model`] ?? errors[`setting:${scope}.effort`]
-    ?? options.error?.split('; ').find((part) => part.startsWith(`${scope}:`));
+  const pickerError = (scope: 'triage' | 'chat') => errors[`setting:${scope}.model`] ?? errors[`setting:${scope}.effort`] ?? options.error ?? undefined;
+  // Triage offers the chat models of its own accounts; Meridian takes only the shared effort levels
+  const triageOptions = options.chat.filter((option) => state.models.triage_routes.includes(option.id.slice(0, option.id.indexOf('/'))))
+    .map((option) => ({ ...option, efforts: option.efforts.filter((effort) => EFFORTS.includes(effort)) }));
   const pickerDisabled = expired || !state.tickets_enabled || [...pending].some((key) => key.startsWith('setting:'));
   const paused = accounts.filter((item) => item.paused);
   const toggle = (source: string, item: Health) => {
@@ -385,7 +387,7 @@ export function Pipeline({ state, expired = false, pending = new Set(), errors =
           ]}>
           <TriageAccounts routes={state.models.triage_routes} health={providers} names={options.accounts} />
           <Agents agents={state.agents} kind="triage" />
-          <ModelPicker scope="triage" choice={state.models.triage} options={options.triage} accounts={options.accounts} disabled={pickerDisabled} post={post} error={pickerError('triage')} />
+          <ModelPicker scope="triage" choice={state.models.triage} options={triageOptions} accounts={options.accounts} disabled={pickerDisabled} post={post} error={pickerError('triage')} />
         </Node>
       </Stage>
 
