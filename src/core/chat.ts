@@ -701,7 +701,8 @@ export async function sync(cfg: Config, db: DatabaseSync, job: Job, options: Cha
     if (!owns(db, job, now())) return;
     const owners = sessionTickets(db, job);
     const payload = currentJob(db, job).payload;
-    if (job.ticket === null && (owners.length || payload.pending_report || payload.pending_reports || payload.sync_errors)) {
+    const dismissed = () => db.prepare("SELECT 1 FROM ticket WHERE approved_at IS NOT NULL AND session_id IS NOT NULL AND lifecycle='dismissed'").get() !== undefined;
+    if (job.ticket === null && (owners.length || payload.pending_report || payload.pending_reports || payload.sync_errors || dismissed())) {
       await globalSync(cfg, db, job, options.peer ?? connect(cfg), options);
       return;
     }
@@ -715,9 +716,17 @@ export async function sync(cfg: Config, db: DatabaseSync, job: Job, options: Cha
         const snapshot = ticketRow(db, owner.id);
         const baseline = { report_message_id: snapshot.report_message_id, report_at: snapshot.report_at };
         const result = await peer.latestReport(owner.session_id!, options.signal);
-        if (result && !await finishReport(cfg, db, job, { ticket: owner.id, session_id: owner.session_id!, turn: null, result, status: parseStatus(result.text), title: '', baseline }, { ...options, peer }, false)) return;
+        let status: PendingReport['status'] | undefined, invalid: unknown;
+        // A reply without a valid STATUS still fails this sync, after the title is aligned
+        try { if (result) status = parseStatus(result.text); } catch (error) { invalid = error; }
+        if (result && status && !await finishReport(cfg, db, job, { ticket: owner.id, session_id: owner.session_id!, turn: null, result, status, title: '', baseline }, { ...options, peer }, false)) return;
         if (!await alignTitle(db, job, owner.id, peer, options)) return;
+        if (invalid) throw invalid;
       }
+    } else if (job.ticket !== null) {
+      // Dismissed: no reports to read, only the title to align
+      const owner = ticketRow(db, job.ticket);
+      if (owner.lifecycle === 'dismissed' && owner.approved_at && owner.session_id && !await alignTitle(db, job, owner.id, options.peer ?? connect(cfg), options)) return;
     }
     if (job.ticket === null) defer(db, job, after(now(), cfg.jobs.sync_seconds), undefined, now);
     else complete(db, job, () => {
