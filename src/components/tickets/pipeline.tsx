@@ -83,8 +83,8 @@ function Picker(props: { label: string; value: string; items: PickItem[]; onPick
   </Popover>;
 }
 
-// Model and effort the next triage call or the next new ticket chat starts with; empty picks the config default.
-// A chat model runs on the account of its provider; triage picks its account apart, in TriageAccounts.
+// Model and effort the next new ticket chat starts with, effort only for the next triage call; empty picks the config default.
+// A chat model runs on the account of its provider; triage runs the config model and fails over between its accounts on its own.
 function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options: ModelOption[]; accounts: Record<string, string>;
   disabled: boolean; post: PausePost; error?: string | undefined }) {
   const { scope, choice } = props;
@@ -98,23 +98,20 @@ function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options:
   const provider = split(choice.model).provider;
   const models = list.map((option) => ({ value: option.id, label: option.name, detail: split(option.id).model,
     group: split(option.id).provider && name(split(option.id).provider!), ...(option.id === choice.default_model ? { tag: 'default' } : {}) }));
-  // Meridian lists models in no useful order; newest first within each family
-  if (scope === 'triage') models.sort((a, b) => b.value.localeCompare(a.value, 'en', { numeric: true }));
   const what = scope === 'triage' ? 'Triage' : 'Chat';
   return <div className="mt-2 border-t pt-2">
     <p className="mb-1 text-[11px] text-muted-foreground">{scope === 'triage' ? 'Next triage call' : 'Next new ticket chat'}</p>
     <div className="grid min-w-0 gap-1.5">
-      <Picker label={`${what} model`} value={choice.model} items={models} disabled={props.disabled} search="Search models"
+      {scope === 'chat' && <Picker label="Chat model" value={choice.model} items={models} disabled={props.disabled} search="Search models"
         onPick={(model) => {
           const next = list.find((option) => option.id === model)?.efforts ?? [];
           void (async () => {
-            await save(`${scope}.model`, model === choice.default_model ? '' : model);
-            if (choice.effort && next.length && !next.includes(choice.effort)) await save(`${scope}.effort`, '');
+            await save('chat.model', model === choice.default_model ? '' : model);
+            if (choice.effort && next.length && !next.includes(choice.effort)) await save('chat.effort', '');
           })().catch(() => {});
         }}>
-        {scope === 'triage' && <span className="text-muted-foreground">Model</span>}
         <span className="truncate" title={choice.model}>{current.name}</span>
-      </Picker>
+      </Picker>}
       {provider && <p className="-mt-0.5 px-0.5 text-[11px] leading-snug text-muted-foreground">
         Account: <span className="text-foreground/80">{name(provider)}</span></p>}
       <Picker label={`${what} effort`} value={choice.effort ?? ''} disabled={props.disabled}
@@ -177,32 +174,16 @@ function Row({ name, item, toggle }: { name: string; item: Health; toggle?: { di
   </li>;
 }
 
-// Triage accounts in the order they are tried, each with its health; the selected one goes first, the others take over when it is limited
-function TriageAccounts(props: { routes: string[]; health: Health[]; names: Record<string, string>; chosen: string | undefined; disabled: boolean; post: PausePost }) {
-  const first = props.routes[0];
-  if (!first) return <p className="mt-1.5 text-xs text-muted-foreground">No providers configured.</p>;
-  const chosen = props.chosen ?? first;
-  return <fieldset className="mt-1.5 min-w-0" disabled={props.disabled}>
-    <legend className="mb-1 text-[11px] text-muted-foreground">Account</legend>
-    <div className="grid gap-1">
-      {props.routes.map((id) => {
-        const item = props.health.find((entry) => entry.dependency === `provider:${id}`);
-        const state = item?.state ?? 'unknown';
-        const on = id === chosen;
-        return <label key={id} className={cn('block min-w-0 cursor-pointer rounded-md border px-2 py-1.5 text-xs transition-colors',
-          on ? 'border-primary/40 bg-primary/5' : 'border-transparent hover:bg-muted')}>
-          <span className="flex min-w-0 items-center gap-2">
-            <input type="radio" name="triage-account" value={id} checked={on} className="size-3.5 shrink-0 accent-primary"
-              onChange={() => { void props.post('setting:triage.account', '/api/setting', { key: 'triage.account', value: id === first ? '' : id }).catch(() => {}); }} />
-            <span className={cn('min-w-0 truncate', on && 'font-semibold')}>{props.names[id] ?? id}</span>
-          </span>
-          <span className="mt-0.5 flex items-center gap-1.5 pl-5.5 text-[11px] text-muted-foreground"><Dot state={state} />{label(state)}</span>
-          {item?.last_error && <span className="mt-0.5 block pl-5.5 text-[11px] leading-snug text-destructive">{item.last_error}</span>}
-        </label>;
-      })}
-    </div>
-    {props.routes.length > 1 && <p className="mt-1 text-[11px] leading-snug text-muted-foreground">Selected first, others as fallback.</p>}
-  </fieldset>;
+// Triage accounts in the order they are tried; a limited one is skipped until its retry time, so triage fails over on its own
+function TriageAccounts(props: { routes: string[]; health: Health[]; names: Record<string, string> }) {
+  if (!props.routes.length) return <p className="mt-1.5 text-xs text-muted-foreground">No providers configured.</p>;
+  return <div className="mt-1.5 min-w-0">
+    <p className="text-[11px] text-muted-foreground">{props.routes.length > 1 ? 'Accounts, automatic failover' : 'Account'}</p>
+    <ul className="divide-y divide-border/60">
+      {props.routes.map((id) => <Row key={id} name={props.names[id] ?? id} item={props.health.find((entry) => entry.dependency === `provider:${id}`)
+        ?? { dependency: `provider:${id}`, scope: 'provider', state: 'unknown', since: null, last_ok: null, last_error: null }} />)}
+    </ul>
+  </div>;
 }
 
 function Issue({ href, children }: { href: string; children: React.ReactNode }) {
@@ -402,8 +383,7 @@ export function Pipeline({ state, expired = false, pending = new Set(), errors =
             state.problems.triage.length > 0 && <Issue key="invalid" href={`#problem-triage-${state.problems.triage[0]!.id}`}>{state.problems.triage.length} invalid</Issue>,
             triageJobs.length > 0 && <Issue key="parked" href={`#problem-job-${triageJobs[0]!.id}`}>{triageJobs.length} parked</Issue>,
           ]}>
-          <TriageAccounts routes={state.models.triage_routes} health={providers} names={options.accounts} chosen={state.models.triage.account}
-            disabled={pickerDisabled} post={post} />
+          <TriageAccounts routes={state.models.triage_routes} health={providers} names={options.accounts} />
           <Agents agents={state.agents} kind="triage" />
           <ModelPicker scope="triage" choice={state.models.triage} options={options.triage} accounts={options.accounts} disabled={pickerDisabled} post={post} error={pickerError('triage')} />
         </Node>
