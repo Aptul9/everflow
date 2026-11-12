@@ -115,23 +115,66 @@ test.each(['proposed', 'active'])('an existing %s route wins and keeps context l
   expect(db.prepare("SELECT COUNT(*) AS n FROM timeline WHERE kind='message' AND ticket=?").get(primary)?.n).toBe(1);
 });
 
-test.each(['2026-11-05T00:00:00Z', '2026-11-04T00:00:00Z'])('a done route closed at %s reopens the same approved ticket and session', (closedAt) => {
-  using db = openDb(fixture().path);
+test.each(['2026-11-05T00:00:00Z', '2026-11-04T00:00:00Z'])('new input in the chat of a ticket closed at %s goes to triage; only a reopen decision reopens the same session', (closedAt) => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
   const id = batch(db);
-  const owner = ticket(db, { lifecycle: 'done', session_id: 'keep-this-session', approved_at: OLD, closed_at: closedAt, report: 'done' });
+  const owner = ticket(db, { lifecycle: 'done', session_id: 'keep-this-session', approved_at: OLD, closed_at: closedAt, report: 'done', client: 'acme' });
   link(db, owner, conversation(db, id));
-  expect(api.route?.(db, id, AT)).toMatchObject({ ticket: owner, mode: 'forward' });
+  expect(api.route?.(db, id, AT)).toMatchObject({ ticket: owner, mode: 'reopen', candidates: [owner] });
+  expect(db.prepare('SELECT lifecycle,report FROM ticket WHERE id=?').get(owner)).toEqual({ lifecycle: 'done', report: 'done' });
+  expect(JSON.parse(String(offer(db, cfg, id).payload))).toMatchObject({ mode: 'reopen', ticket: owner, candidate_ids: [owner] });
+  expect(api.applyDecision(db, id, decision({ action: 'update', ticket: owner, reason: 'New ask on the same deploy' }))).toBe(owner);
   expect(db.prepare('SELECT lifecycle,session_id,approved_at,report FROM ticket WHERE id=?').get(owner))
     .toEqual({ lifecycle: 'active', session_id: 'keep-this-session', approved_at: OLD, report: null });
+  expect(db.prepare('SELECT ticket,state,outcome FROM batch WHERE id=?').get(id)).toEqual({ ticket: owner, state: 'pending', outcome: 'routed' });
+  expect(db.prepare("SELECT actor,body FROM timeline WHERE ticket=? AND kind='status'").get(owner)).toEqual({ actor: 'agent', body: 'Reopened by triage' });
 });
 
 test('reopening a manually closed unapproved proposal cannot manufacture approval', () => {
-  using db = openDb(fixture().path);
+  const { path, cfg } = fixture();
+  using db = openDb(path);
   const id = batch(db);
-  const owner = ticket(db, { lifecycle: 'done', closed_at: '2026-11-05T00:00:00Z' });
+  const owner = ticket(db, { lifecycle: 'done', closed_at: '2026-11-05T00:00:00Z', client: 'acme' });
   link(db, owner, conversation(db, id));
-  expect(api.route?.(db, id, AT)).toMatchObject({ ticket: owner, mode: 'update' });
-  expect(db.prepare('SELECT lifecycle,approved_at,session_id FROM ticket WHERE id=?').get(owner)).toEqual({ lifecycle: 'proposed', approved_at: null, session_id: null });
+  expect(api.route?.(db, id, AT)).toMatchObject({ ticket: owner, mode: 'reopen' });
+  offer(db, cfg, id);
+  expect(api.applyDecision(db, id, decision({ action: 'update', ticket: owner }))).toBe(owner);
+  expect(db.prepare('SELECT lifecycle,approved_at,session_id,proposal FROM ticket WHERE id=?').get(owner)).toEqual({ lifecycle: 'proposed', approved_at: null, session_id: null, proposal: 'Inspect logs' });
+  expect(db.prepare('SELECT outcome FROM batch WHERE id=?').get(id)!.outcome).toBe('proposed');
+});
+
+test('chatter in the chat of a closed ticket is skipped and the ticket stays closed; the next message is judged again', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const thanks = batch(db, { conversation_id: 'chat', text: 'grazie' });
+  const owner = ticket(db, { lifecycle: 'done', session_id: 'kept', approved_at: OLD, closed_at: '2026-11-05T12:00:00Z', report: 'done', client: 'acme',
+    summary: 'Install Rancher on the lab cluster' });
+  link(db, owner, conversation(db, thanks));
+  db.prepare("INSERT INTO timeline(ticket,at,kind,actor,body,event_key) VALUES (?,?,'status','you','done myself','close:1')").run(owner, '2026-11-05T12:00:00Z');
+  const scope = JSON.parse(String(offer(db, cfg, thanks).payload));
+  expect(scope).toMatchObject({ mode: 'reopen', ticket: owner });
+  expect(api.ticketRecord(db, owner)).toMatchObject({ id: owner, summary: 'Install Rancher on the lab cluster', closed_at: '2026-11-05T12:00:00Z',
+    closed_by: 'you', closing_note: 'done myself', timeline: [{ kind: 'status', actor: 'you', body: 'done myself' }] });
+  expect(api.applyDecision(db, thanks, decision({ on_us: false, action: 'skip', title: '', reason: 'Only thanks' }))).toBeNull();
+  expect(db.prepare('SELECT lifecycle,report FROM ticket WHERE id=?').get(owner)).toEqual({ lifecycle: 'done', report: 'done' });
+  expect(db.prepare('SELECT state,outcome,ticket FROM batch WHERE id=?').get(thanks)).toEqual({ state: 'done', outcome: 'not_on_us', ticket: null });
+  expect(db.prepare('SELECT kind FROM ticket_conversation WHERE ticket=?').get(owner)!.kind).toBe('primary');
+  const next = batch(db, { conversation_id: 'chat', message_id: 'later', text: 'one more thing' });
+  expect(api.route(db, next, AT)).toMatchObject({ ticket: owner, mode: 'reopen' });
+});
+
+test('a different request in the chat of a closed ticket becomes a new ticket and takes the chat; the old one keeps it as context', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const input = batch(db, { conversation_id: 'chat', text: 'Can you also open the firewall for the backup?' });
+  const owner = ticket(db, { lifecycle: 'done', session_id: 'kept', approved_at: OLD, closed_at: '2026-11-05T12:00:00Z', report: 'done', client: 'acme' });
+  link(db, owner, conversation(db, input));
+  offer(db, cfg, input);
+  const created = api.applyDecision(db, input, decision({ title: 'Firewall for backup' }))!;
+  expect(created).not.toBe(owner);
+  expect(db.prepare('SELECT lifecycle FROM ticket WHERE id=?').get(owner)!.lifecycle).toBe('done');
+  expect(db.prepare('SELECT ticket,kind FROM ticket_conversation ORDER BY ticket').all()).toEqual([{ ticket: owner, kind: 'context' }, { ticket: created, kind: 'primary' }]);
 });
 
 test.each([
@@ -372,7 +415,7 @@ function chatTicket(db: DatabaseSync, input: number) {
   return owner;
 }
 
-test('a same-day close keeps input its chat never saw: the ticket reopens and forwards it', () => {
+test('a same-day close keeps input its chat never saw: triage judges it against the closed ticket, and a reopen forwards it', () => {
   const { path, cfg } = fixture();
   using db = openDb(path);
   const seen = batch(db, { conversation_id: 'chat' });
@@ -386,9 +429,17 @@ test('a same-day close keeps input its chat never saw: the ticket reopens and fo
   expect(api.route(db, missed, '2026-11-06T09:03:00Z')).toMatchObject({ ticket: owner, mode: 'forward' });
   api.close(db, owner, 'Chat closed it', '2026-11-06T09:05:00Z');
   expect(db.prepare('SELECT state,outcome FROM batch WHERE id=?').get(missed)).toEqual({ state: 'pending', outcome: 'routed' });
-  const scheduled = ingestApi.schedule(db, cfg, '2026-11-06T09:06:00Z');
-  expect(scheduled).toHaveLength(1);
+  vi.setSystemTime(new Date('2026-11-06T09:06:00Z'));
+  const triage = ingestApi.schedule(db, cfg, '2026-11-06T09:06:00Z');
+  expect(triage).toHaveLength(1);
+  expect(JSON.parse(String(db.prepare('SELECT payload FROM job WHERE id=?').get(triage[0]!)!.payload))).toMatchObject({ mode: 'reopen', ticket: owner, batch: missed });
+  expect(db.prepare('SELECT lifecycle FROM ticket WHERE id=?').get(owner)!.lifecycle).toBe('done');
+  db.prepare("UPDATE ticket SET client='acme' WHERE id=?").run(owner);
+  api.applyDecision(db, missed, decision({ action: 'update', ticket: owner }));
+  db.prepare("UPDATE job SET state='done' WHERE id=?").run(triage[0]!);
   expect(db.prepare('SELECT lifecycle FROM ticket WHERE id=?').get(owner)!.lifecycle).toBe('active');
+  const scheduled = ingestApi.schedule(db, cfg, '2026-11-06T09:07:00Z');
+  expect(scheduled).toHaveLength(1);
   expect(JSON.parse(String(db.prepare('SELECT payload FROM job WHERE id=?').get(scheduled[0]!)!.payload)).batch_ids).toEqual([missed]);
 });
 

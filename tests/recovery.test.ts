@@ -2,9 +2,9 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { openDb } from '../src/core/db.ts';
 import * as jobs from '../src/core/jobs.ts';
 import * as chat from '../src/core/chat.ts';
-import { close, merge, route } from '../src/core/tickets.ts';
+import { close, merge } from '../src/core/tickets.ts';
 import { connect } from '../src/core/opencode.ts';
-import { AT, addBatch, chatFixture, claimed, proposed, row } from './chat-support.ts';
+import { AT, addBatch, chatFixture, claimed, proposed, reopenByTriage, row } from './chat-support.ts';
 import { remoteSession, scriptedPeer, PEER_AT } from './opencode-support.ts';
 import { snapshot } from './support.ts';
 
@@ -506,7 +506,7 @@ test('old input completing after manual close cannot close a ticket reopened for
   close(db, ticket, 'Manual close marker');
   vi.setSystemTime(new Date('2026-11-06T00:02:00Z'));
   const newer = addBatch(db, ticket, { conversation: 'conversation-1', text: 'New input after closure' });
-  expect(route(db, newer).mode).toBe('forward');
+  reopenByTriage(db, cfg, newer, ticket);
   jobs.enqueue(db, 'forward', 'new-input-after-close', { batch_ids: [newer] }, ticket);
   peer.finish(String(old.session_id), String(old.prompt_id), 'STATUS: done | Old request finally completed', 'succeeded', undefined, PEER_AT + 180000);
   vi.setSystemTime(new Date('2026-11-06T00:04:00Z'));

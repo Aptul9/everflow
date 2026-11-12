@@ -4,7 +4,7 @@ import { loadConfig } from '../src/core/config.ts';
 import { prepareStart } from '../src/core/db.ts';
 import { ingest } from '../src/core/ingest.ts';
 import * as jobs from '../src/core/jobs.ts';
-import { attachBatch } from '../src/core/tickets.ts';
+import { applyDecision, assessmentPayload, attachBatch, route } from '../src/core/tickets.ts';
 import { scratch } from './support.ts';
 
 export const AT = '2026-11-06T00:00:00.000000Z';
@@ -48,6 +48,16 @@ export function addBatch(db: DatabaseSync, owner: number, options: { own?: boole
   }
   attachBatch(db, batch, owner, AT);
   return batch;
+}
+
+// New input in the chat of a closed ticket goes to triage; this is triage deciding to reopen it.
+export function reopenByTriage(db: DatabaseSync, cfg: ReturnType<typeof loadConfig>, batch: number, ticket: number): void {
+  const routed = route(db, batch);
+  expect(routed).toMatchObject({ ticket, mode: 'reopen' });
+  const job = jobs.enqueue(db, 'triage', `triage:batch:${batch}`, assessmentPayload(db, cfg, batch, routed), ticket);
+  applyDecision(db, batch, { on_us: true, reason: 'Same request needs more work', action: 'update', ticket, title: 'Reopened', client: null,
+    summary: '', ask: '', proposal: '', kb_notes: [], confidence: 0.9 });
+  db.prepare("UPDATE job SET state='done' WHERE id=?").run(job);
 }
 
 export function claimed(db: DatabaseSync, cfg: ReturnType<typeof loadConfig>, run = 'phase5-run') {
