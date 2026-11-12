@@ -109,14 +109,22 @@ function interval(messages: readonly SessionMessageInfo[], target?: string): Tur
   let latestWorkAt: number | null = null;
   let completed: number | null = null;
   let idle: number | null = null;
+  let supersededAt: number | null = null;
   for (const message of messages) {
     if (message.type === 'user') {
       if (outcome === 'succeeded' && lastAssistant !== assistant) outcome = null;
+      // A later input the session already worked on ends the target turn even though it never went idle (a steer in the chat)
+      if (target === message.id && outcome === null && supersededAt !== null) {
+        return { state: 'terminal', prompt_id: message.id, prompt_at: message.time.created, text: '', outcome: 'interrupted',
+          error: { type: 'session.superseded', message: 'A later input took over the session before this turn finished' },
+          assistant_id: lastAssistant, completed_at: supersededAt };
+      }
       if (target === message.id || target === undefined && outcome === 'succeeded' && assistant !== null) {
         return { state: outcome === null ? 'running' : 'terminal', prompt_id: message.id, prompt_at: message.time.created, text: texts.reverse().join('\n'),
           outcome, error, assistant_id: outcome === 'failed' || outcome === 'interrupted' ? lastAssistant ?? assistant : assistant,
           completed_at: outcome === null ? null : outcome === 'succeeded' ? completed ?? idle : idle ?? completed };
       }
+      supersededAt = lastAssistant !== null || idle !== null ? message.time.created : null;
       texts = []; outcome = null; error = null; assistant = null; lastAssistant = null; latestWorkAt = null; completed = null; idle = null;
     } else if (message.type === 'idle' && outcome === null && (latestWorkAt === null || message.time.created >= latestWorkAt)) {
       outcome = message.outcome;

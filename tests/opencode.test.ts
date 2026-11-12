@@ -320,6 +320,22 @@ test('an older idle boundary cannot terminate newer streaming work or supply its
   expect(await api.latestReport('ses_1')).toBeNull();
 });
 
+test('a turn cut short by a later input the session worked on is terminal and interrupted, not running forever', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg } = config(peer.url);
+  peer.sessions.set('ses_1', remoteSession('ses_1', cfg.opencode.directory));
+  const later = user('msg_later');
+  if (later.type !== 'user') throw new Error('Expected user fixture');
+  later.time = { created: PEER_AT + 700 };
+  peer.messages.set('ses_1', [user('msg_target'), answer('asst_cut', 'Half an answer', false), later]);
+  const api = transport.connect(cfg);
+  // Not worked on yet: the target may still finish
+  expect(await api.turnDetail('ses_1', 'msg_target')).toMatchObject({ state: 'running', outcome: null });
+  peer.messages.get('ses_1')!.push(answer('asst_later', 'STATUS: needs_you | Later'), { id: 'idle_later', type: 'idle', time: { created: PEER_AT + 900 }, outcome: 'succeeded' });
+  expect(await api.turnDetail('ses_1', 'msg_target')).toMatchObject({ state: 'terminal', outcome: 'interrupted', text: '',
+    error: { type: 'session.superseded' }, assistant_id: 'asst_cut', completed_at: PEER_AT + 700 });
+});
+
 test.each(['short-json', 'password-type', 'port-type', 'validation-getter', 'read-failure', 'missing-file'] as const)(
   'I3 settings boundary replaces %s diagnostics without raw input/cause in thrown or durable errors', async (mode) => {
     await using peer = await scriptedPeer();
