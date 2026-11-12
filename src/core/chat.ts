@@ -411,10 +411,10 @@ function finishBatches(db: DatabaseSync, turn: Turn, result: Completion, outcome
   for (const batch of turn.batch_ids) db.prepare("UPDATE batch SET state='done',outcome=?,done_at=? WHERE id=?").run(outcome, at, batch);
 }
 
-function tailJob(cfg: Config, db: DatabaseSync, job: Job, pending: PendingReport, now: () => string): void {
+function tailJob(cfg: Config, db: DatabaseSync, job: Job, ticket: number, now: () => string): void {
   const current = currentJob(db, job);
   const tail = ids(current.payload.pending_batch_ids);
-  const owner = ticketRow(db, pending.ticket);
+  const owner = ticketRow(db, ticket);
   const eligible = tail.filter((batch) => {
     if (owner.lifecycle === 'dismissed' || owner.merged_into !== null) return false;
     if (owner.lifecycle === 'done') return route(db, batch, now(), cfg.jobs.reopen_days).mode === 'forward';
@@ -465,7 +465,7 @@ async function finishReport(cfg: Config, db: DatabaseSync, job: Job, pending: Pe
     db.prepare('UPDATE ticket SET session_title=? WHERE id=?').run(actual.title ?? pending.title, owner.id);
     if (collector && pending.turn !== null) {
       finishBatches(db, turnRow(db, pending.turn), pending.result, 'forwarded');
-      tailJob(cfg, db, job, pending, now);
+      tailJob(cfg, db, job, pending.ticket, now);
     } else {
       const payload = { ...currentJob(db, job).payload };
       if (global) {
@@ -554,6 +554,15 @@ export async function collect(cfg: Config, db: DatabaseSync, job: Job, options: 
     }
     if (result.state === 'absent') result = { ...result, state: 'terminal', outcome: 'lost', completed_at: Date.parse(now()),
       error: { type: 'session.input-lost', message: 'Admitted input absent from complete reachable history and inbox' } };
+    // The input reached the chat and a later turn carries on from it: nothing to resend, its report comes with sync
+    if (result.error?.type === 'session.superseded') {
+      complete(db, job, () => {
+        finishBatches(db, turn, result, 'forwarded');
+        tailJob(cfg, db, job, owner.id, now);
+        timeline(db, turn.ticket, now(), 'chat', `Input ${turn.prompt_id} superseded by a later input`, `superseded:turn:${turn.id}`);
+      }, now);
+      return;
+    }
     if (result.outcome !== 'succeeded') { recovery(cfg, db, job, turn, result, options); return; }
     let status: PendingReport['status'];
     try { status = parseStatus(result.text); completionAt(result); }

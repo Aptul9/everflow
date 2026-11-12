@@ -457,6 +457,28 @@ test('correction command is literal PowerShell quoting for absolute executable/r
   expect(command).toContain(`--config '${cfg._config_path.replaceAll("'", "''")}'`);
 });
 
+test('collector closes a turn that a later chat input took over before it went idle, without resending it', async () => {
+  const f = await admittedFixture();
+  await using peer = f.peer;
+  using db = f.db;
+  const session = String(f.turn.session_id), prompt = String(f.turn.prompt_id);
+  if (peer.admissions.has(prompt)) peer.deliver(session, prompt);
+  peer.messages.get(session)!.push({ id: 'asst_cut', type: 'assistant', time: { created: PEER_AT + 500 }, agent: 'build',
+    model: { providerID: 'synthetic', id: 'synthetic' }, content: [{ type: 'text', text: 'Half an answer' }] });
+  const job = claimed(db, f.cfg);
+  await chat.collect(f.cfg, db, job);
+  expect(row(db, 'job', job.id).state).toBe('queued');
+  await connect(f.cfg).prompt(session, 'msg_steer', 'Direct input');
+  peer.finish(session, 'msg_steer', 'STATUS: needs_you | Took over', 'succeeded', undefined, PEER_AT + 2000);
+  vi.setSystemTime(new Date('2026-11-06T00:05:00Z'));
+  await chat.collect(f.cfg, db, claimed(db, f.cfg));
+  expect(row(db, 'job', job.id).state).toBe('done');
+  expect(row(db, 'turn', Number(f.turn.id))).toMatchObject({ state: 'done', outcome: 'interrupted' });
+  expect(row(db, 'batch', f.batch)).toMatchObject({ state: 'done', outcome: 'forwarded' });
+  expect(db.prepare("SELECT COUNT(*) AS n FROM turn WHERE kind='recovery'").get()!.n).toBe(0);
+  expect(peer.calls.filter((call) => call.url.pathname.endsWith('/prompt'))).toHaveLength(2);
+});
+
 test('same-millisecond newer direct completion replaces report by identity without fabricating poll-time activity', async () => {
   const f = await admittedFixture();
   await using peer = f.peer;
