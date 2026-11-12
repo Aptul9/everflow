@@ -4,7 +4,7 @@ import { approve } from '../core/approval.ts';
 import { transaction } from '../core/db.ts';
 import { retry } from '../core/jobs.ts';
 import { requestModelOptions, saveSetting } from '../core/settings.ts';
-import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, muteBatch, muteTicket, pauseInput, TicketError } from '../core/tickets.ts';
+import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, MUTE_MAX_MINUTES, muteBatch, muteTicket, pauseInput, TicketError } from '../core/tickets.ts';
 import { HttpError, instance, withDatabase } from './instance.ts';
 import type { WebInstance } from './instance.ts';
 import { readState, representation, ticketDetail } from './state.ts';
@@ -13,10 +13,15 @@ export const MAX_BODY_BYTES = 32_768;
 const empty = z.strictObject({});
 const note = z.strictObject({ note: z.string().max(8_000).refine((value) => value.trim().length > 0, 'Note is required') });
 const question = z.strictObject({ note: z.string().max(8_000).optional() });
-// null mutes until unmuted
+// null mutes until unmuted. Hours are still taken from a page served by an older build.
+const minutes = z.number().int().min(1).max(MUTE_MAX_MINUTES).nullable();
 const hours = z.number().int().min(1).max(8_760).nullable();
-const reason = z.strictObject({ reason: z.string().max(2_000).optional(), mute_hours: hours.optional() });
-const muteFor = z.strictObject({ hours });
+const reason = z.strictObject({ reason: z.string().max(2_000).optional(), mute_minutes: minutes.optional(), mute_hours: hours.optional() })
+  .refine((input) => input.mute_minutes === undefined || input.mute_hours === undefined, 'Mute in minutes or hours, not both');
+const muteFor = z.strictObject({ minutes: minutes.optional(), hours: hours.optional() })
+  .refine((input) => (input.minutes === undefined) !== (input.hours === undefined), 'Mute minutes required');
+const inMinutes = (value: number | null | undefined, legacyHours: number | null | undefined) =>
+  value !== undefined ? value : legacyHours === undefined ? undefined : legacyHours === null ? null : legacyHours * 60;
 
 export function allowedHost(host: string | undefined | null, port: number): boolean {
   return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
@@ -128,7 +133,7 @@ export async function actionPost(request: Request, scope: 'ticket' | 'batch' | '
     guardPost(request.headers, current);
     const value = validId(id);
     const schema = scope === 'ticket' && action === 'chat' ? note : scope === 'ticket' && action === 'discuss' ? question : scope === 'ticket' && ['dismiss', 'close'].includes(action) ? reason : scope === 'batch' && action === 'mute' ? muteFor : empty;
-    const input = await body(request, schema) as { note?: string; reason?: string; mute_hours?: number | null; hours?: number | null };
+    const input = await body(request, schema) as { note?: string; reason?: string; mute_minutes?: number | null; mute_hours?: number | null; minutes?: number | null; hours?: number | null };
     if (!current.config.tickets.enabled) throw new HttpError(409, 'tickets.disabled', 'Tickets disabled');
     if (scope === 'ticket' && ['start', 'chat', 'discuss'].includes(action) && !current.config.chats.enabled) throw new HttpError(409, 'chats.disabled', 'Chats off');
     const result = withDatabase(true, (db) => transaction(db, () => {
@@ -137,13 +142,14 @@ export async function actionPost(request: Request, scope: 'ticket' | 'batch' | '
       if (scope === 'ticket' && action === 'discuss') return { ticket: approve(current.config, db, value, input.note ?? '', true) };
       if (scope === 'ticket' && action === 'dismiss') {
         dismiss(db, value, input.reason ?? '');
-        if (input.mute_hours !== undefined) muteTicket(db, value, input.mute_hours);
+        const muted = inMinutes(input.mute_minutes, input.mute_hours);
+        if (muted !== undefined) muteTicket(db, value, muted);
         return { ticket: value };
       }
       if (scope === 'ticket' && action === 'close') return { ticket: close(db, value, input.reason ?? '') };
       if (scope === 'ticket' && action === 'clear') return { ticket: clearTicket(db, value) };
       if (scope === 'batch' && action === 'ticket') return { ticket: makeTicket(db, value) };
-      if (scope === 'batch' && action === 'mute') return { conversation: muteBatch(db, value, input.hours!) };
+      if (scope === 'batch' && action === 'mute') return { conversation: muteBatch(db, value, inMinutes(input.minutes, input.hours)!) };
       if (scope === 'batch' && action === 'clear') return { batch: clearBatch(db, value) };
       if (scope === 'conversation' && action === 'unmute') return { conversation: mute(db, value, 0) };
       if (scope === 'job' && action === 'retry') {
