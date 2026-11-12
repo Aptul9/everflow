@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { createOeMailState, nextPath, oeCommand, scanOeMail } from '../src/watchers/oemail.ts';
+import { createOeMailState, nextPath, oeCommand, parseOeOutput, scanOeMail } from '../src/watchers/oemail.ts';
 import type { OeCall, OeRequest } from '../src/watchers/oemail.ts';
 import type { SourceRecord } from '../src/watchers/source.ts';
 
@@ -71,6 +71,11 @@ test('next links become gateway paths; the remote command carries requests only 
   expect(nextPath('https://outlook.office.com/api/v2.0/me/MailFolders/Inbox/messages?%24skip=50')).toBe('me/MailFolders/Inbox/messages?%24skip=50');
   expect(() => nextPath('https://example.invalid/other')).toThrow('oemail.pagination');
   const command = oeCommand([{ path: '/api/communication/read', body: { account: MSC, path: "x'; rm -rf /" } }]);
-  expect(command).toMatch(/^docker exec -i oe-copilot-agent node --input-type=module -e "await import\('data:text\/javascript;base64,[A-Za-z0-9+/=]+'\)"$/);
+  expect(command).toMatch(/^bash -c "\$\(printf %s '[A-Za-z0-9+/=]+' \| base64 -d\)"$/);
+  expect(command).not.toContain('rm -rf /');
+  // one line per request: status and base64 body; anything else is a shape error
+  expect(parseOeOutput(`200 ${Buffer.from('{"a":1}').toString('base64')}\n404 \n`, 2)).toEqual([{ status: 200, body: '{"a":1}' }, { status: 404, body: '' }]);
+  expect(() => parseOeOutput('200 e30=\n', 2)).toThrow('oemail.response-shape');
+  expect(() => parseOeOutput('ok {}\n', 1)).toThrow('oemail.response-shape');
   expect(() => createOeMailState({ accounts: [], since: NOW })).toThrow('oemail.account-required');
 });
