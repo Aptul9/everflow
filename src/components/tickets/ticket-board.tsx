@@ -215,7 +215,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
     <header className="sticky top-0 z-30 border-b bg-background/85 backdrop-blur-md">
       <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 sm:px-6">
         <div className="flex min-w-0 items-center gap-2.5">
-          <img src="/icon.png" alt="" aria-hidden="true" className="size-9 object-contain" />
+          <img src="/apple-icon.png" alt="" aria-hidden="true" className="size-9 object-contain" />
           <div className="leading-tight">
             <h1 className="text-[15px] font-semibold tracking-tight">Everflow</h1>
             <p className="text-xs text-muted-foreground">Local overview · {state.day}</p>
