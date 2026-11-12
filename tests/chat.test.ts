@@ -471,6 +471,47 @@ test('same-millisecond newer direct completion replaces report by identity witho
     report_message_id: 'asst_msg_same_time', report_at: '2026-11-06T00:00:01.000000Z', last_activity_at: '2026-11-06T00:00:01.000000Z' });
 });
 
+test('sync renames the session after page actions, a reopen and a reply without STATUS, so the title always shows the stage', async () => {
+  const f = await admittedFixture();
+  await using peer = f.peer;
+  using db = f.db;
+  const session = String(f.turn.session_id);
+  const title = () => peer.sessions.get(session)!.title;
+  const sync = async (key: string) => { jobs.enqueue(db, 'sync', key, {}); await chat.sync(f.cfg, db, claimed(db, f.cfg)); };
+  peer.finish(session, String(f.turn.prompt_id), 'STATUS: waiting_them | Reply pending', 'succeeded', undefined, PEER_AT + 1000);
+  await chat.collect(f.cfg, db, claimed(db, f.cfg));
+  expect(title()).toBe(`[Waiting on them] #${f.ticket} Synthetic ticket`);
+  // A turn that ends without a valid STATUS keeps the report and fails the ticket's sync, but the title still follows the stage
+  db.prepare("UPDATE ticket SET report='needs_you' WHERE id=?").run(f.ticket);
+  await connect(f.cfg).prompt(session, 'msg_no_status', 'Direct input');
+  peer.finish(session, 'msg_no_status', 'Done, no status line', 'succeeded', undefined, PEER_AT + 2000);
+  vi.setSystemTime(new Date('2026-11-06T00:05:00Z'));
+  await sync('no-status');
+  expect(title()).toBe(`[Needs you] #${f.ticket} Synthetic ticket`);
+  expect(row(db, 'ticket', f.ticket).report).toBe('needs_you');
+  // Done from the page
+  close(db, f.ticket, 'Handled by hand');
+  vi.setSystemTime(new Date('2026-11-06T01:00:00Z'));
+  await sync('after-close');
+  expect(title()).toBe(`[Done] #${f.ticket} Synthetic ticket`);
+  expect(row(db, 'ticket', f.ticket).session_title).toBe(title());
+  // A closed ticket whose stored title already matches is not read again
+  const reads = peer.calls.filter((call) => call.method === 'GET' && call.url.pathname === `/api/session/${session}`).length;
+  vi.setSystemTime(new Date('2026-11-06T02:00:00Z'));
+  await sync('closed-unchanged');
+  expect(peer.calls.filter((call) => call.method === 'GET' && call.url.pathname === `/api/session/${session}`).length).toBe(reads);
+  // Reopened by triage: active again with no report yet
+  db.prepare("UPDATE ticket SET lifecycle='active',report=NULL WHERE id=?").run(f.ticket);
+  vi.setSystemTime(new Date('2026-11-06T03:00:00Z'));
+  await sync('after-reopen');
+  expect(title()).toBe(`[Idle] #${f.ticket} Synthetic ticket`);
+  // Dismissed tickets are no longer synced for reports, but their title still follows
+  dismiss(db, f.ticket, 'Not mine');
+  vi.setSystemTime(new Date('2026-11-06T04:00:00Z'));
+  await sync('after-dismiss');
+  expect(title()).toBe(`[Dismissed] #${f.ticket} Synthetic ticket`);
+});
+
 test('unchanged sync cannot heal a later execution dependency failure', async () => {
   const f = await admittedFixture();
   await using peer = f.peer;

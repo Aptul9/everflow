@@ -580,6 +580,24 @@ async function markRunning(db: DatabaseSync, job: Job, ticket: number, session: 
   }, now) ?? false;
 }
 
+// The session title follows the ticket's stage whatever changed it: a report, a page action, a reopen, a turn running in the session.
+// Closed tickets compare with the title last written, open ones with the session itself.
+async function alignTitle(db: DatabaseSync, job: Job, ticket: number, peer: Peer, options: ChatOptions): Promise<boolean> {
+  const now = clock(options);
+  const owner = ticketRow(db, ticket);
+  if (!owner.session_id) return true;
+  // A collector or input in flight writes the title itself with its report
+  if (db.prepare("SELECT 1 FROM job WHERE ticket=? AND state='running' AND kind IN ('collect','start_chat','forward') AND id<>?").get(ticket, job.id)) return true;
+  const title = `[${stage(db, ticket)}] #${ticket} ${owner.title}`;
+  if ((owner.lifecycle === 'done' || owner.lifecycle === 'dismissed') && owner.session_title === title) return true;
+  if ((await peer.get(owner.session_id, options.signal)).title !== title) {
+    if (!owns(db, job, now())) return false;
+    await peer.rename(owner.session_id, title, options.signal);
+    if ((await peer.get(owner.session_id, options.signal)).title !== title) throw Object.assign(new Error('OpenCode title PATCH was not observed'), { status: 503 });
+  }
+  return fenced(db, job, () => { db.prepare('UPDATE ticket SET session_title=? WHERE id=?').run(title, ticket); return true; }, now) ?? false;
+}
+
 function sessionTickets(db: DatabaseSync, job: Job): Ticket[] {
   return db.prepare(`SELECT * FROM ticket WHERE approved_at IS NOT NULL AND session_id IS NOT NULL AND lifecycle<>'dismissed'
     ${job.ticket === null ? '' : 'AND id=?'} ORDER BY id`).all(...(job.ticket === null ? [] : [job.ticket])) as unknown as Ticket[];
@@ -629,25 +647,34 @@ async function globalSync(cfg: Config, db: DatabaseSync, job: Job, peer: Peer, o
   }, now);
   if (!migrated) return;
   const reports = currentJob(db, job).payload.pending_reports as Record<string, PendingReport> | undefined ?? {};
-  const tickets = [...new Set([...sessionTickets(db, job).map((owner) => owner.id), ...Object.keys(reports).map(Number), ...Object.keys(syncFailures(db, job)).map(Number)])].sort((a, b) => a - b);
+  // Dismissed tickets only get their title aligned
+  const dismissed = db.prepare("SELECT id FROM ticket WHERE approved_at IS NOT NULL AND session_id IS NOT NULL AND lifecycle='dismissed'").all().map((row) => Number(row.id));
+  const tickets = [...new Set([...sessionTickets(db, job).map((owner) => owner.id), ...dismissed, ...Object.keys(reports).map(Number), ...Object.keys(syncFailures(db, job)).map(Number)])].sort((a, b) => a - b);
   const failures: unknown[] = [];
   for (const ticket of tickets) {
     if (!owns(db, job, now())) return;
     const previous = syncFailures(db, job)[String(ticket)];
     if (previous && utc(previous.next_at) > now()) continue;
+    let invalid: unknown;
     try {
       const owner = ticketRow(db, ticket);
       const pending = (currentJob(db, job).payload.pending_reports as Record<string, PendingReport> | undefined)?.[String(ticket)];
       if (!owner.approved_at || !owner.session_id || pending && pending.session_id !== owner.session_id) throw jobError('Sync has no approved matching session target');
-      if (!await markRunning(db, job, ticket, owner.session_id, peer, options)) return;
       if (pending) {
+        if (!await markRunning(db, job, ticket, owner.session_id, peer, options)) return;
         if (!await finishReport(cfg, db, job, pending, { ...options, peer }, false)) return;
-      } else {
+      } else if (owner.lifecycle !== 'dismissed') {
+        if (!await markRunning(db, job, ticket, owner.session_id, peer, options)) return;
         const baseline = { report_message_id: owner.report_message_id, report_at: owner.report_at };
         const result = await peer.latestReport(owner.session_id, options.signal);
-        if (result && !await finishReport(cfg, db, job, { ticket, session_id: owner.session_id, turn: null, result,
-          status: parseStatus(result.text), title: '', baseline }, { ...options, peer }, false)) return;
+        let status: PendingReport['status'] | undefined;
+        // A reply without a valid STATUS still fails this ticket's sync, after its title is aligned
+        try { if (result) status = parseStatus(result.text); } catch (error) { invalid = error; }
+        if (result && status && !await finishReport(cfg, db, job, { ticket, session_id: owner.session_id, turn: null, result,
+          status, title: '', baseline }, { ...options, peer }, false)) return;
       }
+      if (!await alignTitle(db, job, ticket, peer, options)) return;
+      if (invalid) throw invalid;
       if (!syncTicketResult(cfg, db, job, ticket, null, options)) return;
     } catch (error) {
       if (!owns(db, job, now())) return;
@@ -688,9 +715,8 @@ export async function sync(cfg: Config, db: DatabaseSync, job: Job, options: Cha
         const snapshot = ticketRow(db, owner.id);
         const baseline = { report_message_id: snapshot.report_message_id, report_at: snapshot.report_at };
         const result = await peer.latestReport(owner.session_id!, options.signal);
-        if (!result) continue;
-        const status = parseStatus(result.text);
-        if (!await finishReport(cfg, db, job, { ticket: owner.id, session_id: owner.session_id!, turn: null, result, status, title: '', baseline }, { ...options, peer }, false)) return;
+        if (result && !await finishReport(cfg, db, job, { ticket: owner.id, session_id: owner.session_id!, turn: null, result, status: parseStatus(result.text), title: '', baseline }, { ...options, peer }, false)) return;
+        if (!await alignTitle(db, job, owner.id, peer, options)) return;
       }
     }
     if (job.ticket === null) defer(db, job, after(now(), cfg.jobs.sync_seconds), undefined, now);
