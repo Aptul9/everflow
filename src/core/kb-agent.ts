@@ -8,7 +8,7 @@ import type { Config } from './config.ts';
 import { openDb, transaction } from './db.ts';
 import { backoff, classify, complete, defer, fail, healthError, healthOk, owns } from './jobs.ts';
 import type { Job } from './jobs.ts';
-import { modelChoice, triageRoutes } from './settings.ts';
+import { modelChoice } from './settings.ts';
 import { applyDecision, assessmentPayload, batchMessages, conversationHistory, feedback, modelDecisionSchema, route, ticketRecord, TicketError } from './tickets.ts';
 import type { Decision, Route, Ticket } from './tickets.ts';
 import { utc } from './time.ts';
@@ -193,13 +193,12 @@ export async function assess(cfg: Config, context: AssessmentContext, candidates
   if (!Number.isSafeInteger(cfg.triage.tool_limit) || cfg.triage.tool_limit < 1 || cfg.triage.tool_limit > 8
     || !Number.isSafeInteger(cfg.triage.timeout_seconds) || cfg.triage.timeout_seconds < 1 || cfg.triage.timeout_seconds > 120) throw new RangeError('Invalid assessment budget');
   check();
-  let ids = [...new Set(cfg.triage.providers)];
+  const ids = [...new Set(cfg.triage.providers)];
   if (!ids.length) throw Object.assign(new Error('No configured triage provider route'), { type: 'provider.no-route' });
   const providers = options.providers ?? z.object({ providers: z.record(z.string(), z.unknown()) })
     .parse(readJsonc(options.providerConfigPath ?? join(homedir(), '.config/opencode/opencode.jsonc'))).providers;
   const db = options.db ?? openDb(cfg.db.path);
   const choice = modelChoice(db, cfg, 'triage');
-  ids = triageRoutes(cfg, choice);
   const fetcher = options.fetch ?? fetch;
   let current: AssessmentInput = { context, candidates, mode };
   let messages: ModelMessage[] | null = null;
