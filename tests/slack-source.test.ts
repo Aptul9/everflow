@@ -11,14 +11,16 @@ function slack(overrides: Partial<Record<string, (params: Record<string, string>
   const sessions: SlackRequest[][] = [];
   const answers: Record<string, (params: Record<string, string>) => unknown> = {
     'auth.test': () => ({ ok: true, user_id: 'UME', team_id: 'TTEAM' }),
-    'client.counts': () => ({ ok: true, channels: [{ id: 'C1', latest: T2 }, { id: 'COLD', latest: OLD }, { id: 'CTH', latest: PARENT, updated: UPDATED }], mpims: [], ims: [{ id: 'D1', latest: T1 }, { id: 'D0', latest: '0000000000.000000' }] }),
+    'client.counts': () => ({ ok: true, channels: [{ id: 'C1', latest: T2 }, { id: 'COLD', latest: OLD }, { id: 'CTH', latest: PARENT, updated: UPDATED }, { id: 'CNOISE', latest: T2 }], mpims: [{ id: 'G1', latest: T2 }], ims: [{ id: 'D1', latest: T1 }, { id: 'D0', latest: '0000000000.000000' }] }),
     'subscriptions.thread.getView': () => ({ ok: true, threads: [{ root_msg: { channel: 'COLD', ts: OLD, latest_reply: REPLY } }] }),
     'conversations.history': (p) => ({ ok: true, messages: p.channel === 'C1'
       ? [{ ts: T2, user: 'UOTHER', text: 'hi <@UME> see <https://x.invalid|doc> &amp; <#C2|ops> <!subteam^S1> <!date^1794441600^{date_long}|Thursday> <slack://user?id=U9|@Mia>', files: [{ name: 'log.txt', size: 12 }] }, { ts: T1, subtype: 'channel_join', user: 'UNEW', text: 'joined' }]
       : p.channel === 'CTH' ? [{ ts: PARENT, user: 'UOTHER', text: 'parent', reply_count: 2, latest_reply: REPLY }]
+      : p.channel === 'CNOISE' ? [{ ts: T2, user: 'UOTHER', text: 'standup moved to 10' }]
+      : p.channel === 'G1' ? [{ ts: T2, user: 'UOTHER', text: 'group hello' }]
       : [{ ts: T1, user: 'UME', text: 'own note' }] }),
-    'conversations.replies': (p) => ({ ok: true, messages: [{ ts: p.ts, user: 'UOTHER', text: 'old root' }, { ts: REPLY, thread_ts: p.ts, user: 'UOTHER', text: 'late reply' }] }),
-    'conversations.info': (p) => ({ ok: true, channel: p.channel!.startsWith('D') ? { id: p.channel, is_im: true, user: 'UOTHER' } : { id: p.channel, name: p.channel === 'C1' ? 'support' : 'archive' } }),
+    'conversations.replies': (p) => ({ ok: true, messages: [{ ts: p.ts, user: 'UOTHER', text: 'old root' }, { ts: REPLY, thread_ts: p.ts, user: 'UOTHER', text: p.channel === 'CTH' ? 'late reply for <@UME>' : 'late reply' }] }),
+    'conversations.info': (p) => ({ ok: true, channel: p.channel!.startsWith('D') ? { id: p.channel, is_im: true, user: 'UOTHER' } : p.channel === 'G1' ? { id: p.channel, is_mpim: true, name: 'mpdm-me--other-1' } : { id: p.channel, name: p.channel === 'C1' ? 'support' : 'archive' } }),
     'users.info': (p) => ({ ok: true, user: { id: p.user, real_name: p.user === 'UME' ? 'Me' : 'Other Person', profile: p.user === 'UOTHER' ? { email: 'Other@Example.invalid' } : {} } }),
     ...overrides,
   };
@@ -26,21 +28,22 @@ function slack(overrides: Partial<Record<string, (params: Record<string, string>
   return { sessions, call };
 }
 
-test('Slack reads only conversations and threads newer than the floor, resolves names and flags mentions', async () => {
+test('Slack reads DMs and group DMs whole, channels only for threads that tag the user, that he wrote in or follows, newer than the floor', async () => {
   const { sessions, call } = slack();
   const records: SourceRecord[] = [], state = createSlackState({ account, selfId: 'UME', workspace: 'TTEAM', since });
   await scanSlack(call, state, (record) => records.push(record), () => now);
   const methods = sessions.map((session) => session.map((r) => `${r.method} ${r.params?.channel ?? ''}`.trim()));
   expect(methods[0]).toEqual(['auth.test', 'client.counts', 'subscriptions.thread.getView']);
-  expect(methods[1]).toEqual(['conversations.history C1', 'conversations.history CTH', 'conversations.history D1']);
+  expect(methods[1]).toEqual(['conversations.history C1', 'conversations.history CTH', 'conversations.history CNOISE', 'conversations.history G1', 'conversations.history D1']);
   expect(methods[2]).toEqual(['conversations.replies COLD', 'conversations.replies CTH']);
   expect(sessions[1]![0]!.params!.oldest).toBe(at('2026-11-04T08:58:00Z'));
   expect(records.filter((r) => 'message_id' in r)).toMatchObject([
     { source: 'slack', conversation_id: 'D1', conversation_title: 'Other Person', message_id: 'D1/' + T1, sender_is_me: true, text: 'own note' },
     { source: 'slack', conversation_id: 'C1', conversation_title: '#support', sender: 'other@example.invalid', sender_name: 'Other Person', sender_is_me: false,
       text: 'hi @Me see doc (https://x.invalid) & #ops @group Thursday @Mia', attachments: [{ name: 'log.txt', size: 12 }], ref: { channel: 'C1', ts: T2, mentions_me: true, workspace: 'TTEAM' } },
+    { source: 'slack', conversation_id: 'G1', conversation_title: 'mpdm-me--other-1', text: 'group hello' },
     { source: 'slack', conversation_id: 'COLD', conversation_title: '#archive', text: 'late reply', ref: { thread_ts: OLD } },
-    { source: 'slack', conversation_id: 'CTH', text: 'late reply', ref: { thread_ts: PARENT } },
+    { source: 'slack', conversation_id: 'CTH', text: 'late reply for @Me', ref: { thread_ts: PARENT, mentions_me: true } },
   ]);
   expect(records.at(-1)).toEqual({ source: 'slack', accounts: [account], checkpoint: '2026-11-07T10:00:00.000Z' });
   expect(state.floor).toBe('2026-11-07T10:00:00.000Z');
