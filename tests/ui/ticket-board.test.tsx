@@ -795,6 +795,26 @@ test('403 action displays reload notice and never retries stale approval', async
   expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(calls);
 });
 
+test('an action refused after a server restart is sent once more with the token of the page as served now', async () => {
+  const next = 'a'.repeat(64), used: string[] = [];
+  fetcher.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === 'POST') {
+      const token = new Headers(init.headers).get('x-everflow-token')!;
+      used.push(token);
+      return token === next ? Response.json({ ticket: 1 }) : Response.json({ error: { message: 'Action token or Origin rejected.' } }, { status: 403 });
+    }
+    if (String(input) === '/') return new Response(`<html><head><meta name="everflow-token" content="${next}"/></head></html>`);
+    return new Response(null, { status: 304 });
+  });
+  board();
+  await userEvent.click(within(ticket()).getByRole('button', { name: 'Start' }));
+  expect(await screen.findByText('Local action saved.')).toBeTruthy();
+  expect(used).toEqual(['per-start-token', next]);
+  expect(screen.queryByRole('button', { name: 'Reload page' })).toBeNull();
+  await userEvent.click(within(ticket()).getByRole('button', { name: 'Start' }));
+  await waitFor(() => expect(used).toEqual(['per-start-token', next, next]));
+});
+
 test('only submitting action disabled, then unmount aborts work and clears polling', async () => {
   let signal: AbortSignal | undefined;
   fetcher.mockImplementation((_url, init: RequestInit) => { signal = init.signal as AbortSignal; return new Promise(() => {}); });

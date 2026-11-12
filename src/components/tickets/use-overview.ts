@@ -19,6 +19,7 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
   const stale = useRef(false);
   const controllers = useRef(new Set<AbortController>());
   const submitting = useRef(new Set<string>());
+  const action = useRef(token);
 
   const refresh = useCallback(async () => {
     if (polling.current || !mounted.current) return;
@@ -81,8 +82,15 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
     setPending(new Set(submitting.current));
     setErrors((previous) => { const next = { ...previous }; delete next[key]; return next; });
     try {
-      const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-everflow-token': token },
+      const send = () => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-everflow-token': action.current },
         body: JSON.stringify(input), signal: controller.signal, credentials: 'same-origin', mode: 'same-origin', redirect: 'error' });
+      let response = await send();
+      // Every server start issues a new token, so a page left open across a restart holds the old one. The guard rejects
+      // before any change, so the action is sent once more with the token of the page as served now.
+      if (response.status === 403) {
+        const used = action.current, next = await currentToken(controller.signal);
+        if (next && next !== used) { action.current = next; response = await send(); }
+      }
       if (response.status === 403) { stale.current = true; if (mounted.current) setExpired(true); }
       if (!response.ok) {
         const failure = await response.json().catch(() => null) as { error?: { message?: unknown } } | null;
@@ -102,9 +110,18 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
       submitting.current.delete(key);
       if (mounted.current) setPending(new Set(submitting.current));
     }
-  }, [refresh, token]);
+  }, [refresh]);
 
   return { state, now, unreachable, expired, pending, errors, notice, post, refresh };
+}
+
+// The token in the page the server renders now; only same-origin script can read it.
+async function currentToken(signal: AbortSignal): Promise<string | null> {
+  try {
+    const response = await fetch('/', { signal, cache: 'no-store', credentials: 'same-origin', mode: 'same-origin', redirect: 'error' });
+    if (!response.ok) return null;
+    return /<meta[^>]*\sname="everflow-token"[^>]*\scontent="([0-9a-f]{64})"/.exec(await response.text())?.[1] ?? null;
+  } catch { return null; }
 }
 
 // Tab title carries the count of tickets waiting on Antonio; a chime plays when it grows.
