@@ -1,6 +1,6 @@
 import { expect, test } from 'vitest';
 import { createGchatState, scanOeGchat } from '../src/watchers/gchat.ts';
-import { createGmailState, scanOeGmail } from '../src/watchers/gmail.ts';
+import { createGmailState, scanOeGmail, scanOeGmails } from '../src/watchers/gmail.ts';
 import { oeGoogleRead } from '../src/watchers/oe-google.ts';
 import type { OeRequest } from '../src/watchers/oemail.ts';
 import type { SourceRecord } from '../src/watchers/source.ts';
@@ -107,6 +107,29 @@ test('Gmail through the OE agent never checkpoints another account, a refused re
     await expect(scanOeGmail(oeGoogleRead(call, 'gmail', account, 50), state, (record) => records.push(record), () => now)).rejects.toThrow(code);
     expect(records.some((record) => 'checkpoint' in record)).toBe(false);
     expect(state.floor).toBe('2026-11-07T09:00:00.000Z');
+  }
+});
+
+test('several Gmail mailboxes through the OE agent share one checkpoint, written only once every mailbox is read', async () => {
+  const other = 'other@example.invalid';
+  for (const failing of [undefined, other]) {
+    const { call } = agent((_, body) => {
+      if (body.account === failing) return { status: 502, body: '{"errore":"x"}' };
+      if (body.path === 'profile') return ok({ emailAddress: body.account });
+      if (body.path.startsWith('messages?')) return ok({ messages: [{ id: body.account === account ? 'a1' : 'o1', threadId: 'thread' }] });
+      return ok(mail(/^messages\/([^?]+)/.exec(body.path)![1]!));
+    });
+    const records: SourceRecord[] = [];
+    const mailboxes = [account, other].map((name) => ({ read: oeGoogleRead(call, 'gmail', name, 50), state: createGmailState({ account: name, since }) }));
+    const work = scanOeGmails(mailboxes, (record) => records.push(record), () => now);
+    if (failing) {
+      await expect(work).rejects.toThrow('oemail.http');
+      expect(records.some((record) => 'checkpoint' in record)).toBe(false);
+    } else {
+      await work;
+      expect(records.filter((record) => 'message_id' in record).map((record) => [(record as any).account, (record as any).message_id])).toEqual([[account, 'a1'], [other, 'o1']]);
+      expect(records.filter((record) => 'checkpoint' in record)).toEqual([{ source: 'gmail', accounts: [account, other], checkpoint: '2026-11-07T10:00:00.000Z' }]);
+    }
   }
 });
 

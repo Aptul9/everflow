@@ -10,7 +10,7 @@ export class IngestError extends TypeError {
   readonly code = 'source.invalid-record';
 }
 
-const sourceSchema = z.enum(['outlook', 'teams', 'teamsrelay', 'gchat', 'gmail', 'oemail']);
+const sourceSchema = z.enum(['outlook', 'teams', 'teamsrelay', 'gchat', 'gmail', 'oemail', 'slack']);
 const idSchema = z.string().refine((value) => value.trim().length > 0, 'must be a nonempty string');
 const accountSchema = idSchema.refine((value) => value !== '*', 'must name a receiving account');
 const timestamp = z.string().superRefine((value, context) => {

@@ -132,13 +132,25 @@ export async function scanOeGmail(read: OeGoogleRead, state: ReturnType<typeof c
   state.floor = started;
 }
 
+// Several agent mailboxes in one source: each scanned as above, one checkpoint for all of them once every one is read.
+export async function scanOeGmails(mailboxes: { read: OeGoogleRead; state: ReturnType<typeof createGmailState> }[], emit: Emit, now = () => new Date().toISOString(), signal?: AbortSignal): Promise<void> {
+  const started = sourceStamp(now());
+  for (const { read, state } of mailboxes) await scanOeGmail(read, state, (record) => { if (!('checkpoint' in record)) emit(record); }, () => started, signal);
+  emit({ source: 'gmail', accounts: mailboxes.map(({ state }) => state.account).sort(), checkpoint: started });
+}
+
 export async function gmailMain(args = process.argv.slice(2)): Promise<number> {
-  const options = watcherArguments(args, { account: { type: 'string' }, executable: { type: 'string' }, host: { type: 'string' } });
-  const state = createGmailState({ account: requiredOption(options.values, 'account'), since: options.since, expectedAccounts: options.expectedAccounts });
+  const options = watcherArguments(args, { account: { type: 'string', multiple: true }, executable: { type: 'string' }, host: { type: 'string' } });
+  const accounts = accountNames(options.values.account ?? []);
   if (options.values.host !== undefined) {
-    const read = oeGoogleRead(sshOeCall(requiredOption(options.values, 'host'), 'gmail'), 'gmail', state.account, 50);
-    return runSource('gmail', options, (signal) => scanOeGmail(read, state, writeRecord, undefined, signal));
+    // The agent can hold several Gmail grants: --account once per mailbox.
+    if (!accounts.length || options.expectedAccounts.some((name) => !accounts.includes(name))) throw new SourceError('gmail', 'gmail.account-mismatch');
+    const call = sshOeCall(requiredOption(options.values, 'host'), 'gmail');
+    const mailboxes = accounts.map((account) => ({ read: oeGoogleRead(call, 'gmail', account, 50), state: createGmailState({ account, since: options.since }) }));
+    return runSource('gmail', options, (signal) => scanOeGmails(mailboxes, writeRecord, undefined, signal));
   }
+  if (accounts.length !== 1) throw new TypeError('source.option-required');
+  const state = createGmailState({ account: accounts[0]!, since: options.since, expectedAccounts: options.expectedAccounts });
   const executable = options.values.executable ?? 'gws';
   return runSource('gmail', options, (signal) => scanGmail((args, stop) => cliJson('gmail', executable, args, stop), state, writeRecord, undefined, signal));
 }
