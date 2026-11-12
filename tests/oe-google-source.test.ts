@@ -19,6 +19,7 @@ const conversations = [
   { id: 'old', kind: 'dm', name: 'Quiet', unread: 0, last: '2026-11-01T09:00:00Z' },
   { id: 'never', kind: 'space', name: 'Empty', unread: 0, last: '1970-01-01T00:00:00.000Z' },
 ];
+const unnamedGroup = { group: { group_type: 'ROOM' } };
 const message = (id: string, from = 'other', extra: Record<string, unknown> = {}) => ({ id, thread: 'topic', from_id: from, from, time: '2026-11-07T09:30:00Z', text: 'see https://x.invalid/a',
   reply: false, edited: false, deleted: false, attachments: [], items: [], reactions: [], ...extra });
 
@@ -27,6 +28,7 @@ test('Chat through the OE agent reads only active conversations, batched, with g
     expect(path).toBe('/api/communication/gchat/read');
     expect(body.account).toBe(account);
     if (body.action === 'list') return ok({ self_id: 'self', conversations, coverage: 'recent-conversations' });
+    if (body.action === 'group') return ok(unnamedGroup);
     return ok({ self_id: 'self', coverage: 'recent-topics', messages: [
       message('one', 'other', { attachments: [{ token: 't', name: 'error.txt', mime_type: 'text/plain' }],
         items: [{ url: { url: 'https://x.invalid/a' } }, { url: { url: 'https://jira.invalid/T-1' } }, { id: 'doc1', title: 'Plan', mimetype: 'application/vnd.google-apps.document' }] }),
@@ -37,6 +39,7 @@ test('Chat through the OE agent reads only active conversations, batched, with g
   await scanOeGchat(oeGoogleRead(call, 'gchat', account, 8), state, (record) => records.push(record), () => now);
   expect(sessions.map((session) => session.map((request) => request.body))).toEqual([
     [{ action: 'list', account }],
+    [{ action: 'group', conversation: 'space', kind: 'space', account }],
     [{ action: 'read', conversation: 'space', kind: 'space', topics: 50, account }],
   ]);
   expect(records.filter((record) => 'message_id' in record)).toMatchObject([
@@ -50,6 +53,41 @@ test('Chat through the OE agent reads only active conversations, batched, with g
   expect(records.slice(before).filter((record) => 'message_id' in record)).toEqual([]);
 });
 
+test('Chat keeps DMs, group chats and listed spaces whole, named spaces only for threads with a mention or own message, and never reads app DMs', async () => {
+  const last = '2026-11-07T09:50:00Z';
+  const listed = [
+    { id: 'dm', kind: 'dm', name: 'Alberto', unread: 0, last }, { id: 'bot', kind: 'dm', name: 'Google Drive', unread: 0, last },
+    { id: 'group', kind: 'space', name: 'group', unread: 0, last }, { id: 'big', kind: 'space', name: 'TechCare Support', unread: 0, last },
+    { id: 'mine', kind: 'space', name: 'TMIT - Agente AI Area Vendita', unread: 0, last },
+  ];
+  const groups: Record<string, unknown> = { dm: { group: { group_type: 'HUMAN_DM' } }, bot: { group: { group_type: 'BOT_DM' } }, group: { group: { group_type: 'ROOM' } },
+    big: { group: { group_type: 'ROOM', name: 'TechCare Support' } }, mine: { group: { group_type: 'ROOM', name: 'TMIT - Agente AI Area Vendita' } } };
+  const at = (minute: number) => `2026-11-07T09:${String(minute).padStart(2, '0')}:00Z`;
+  const reads: Record<string, unknown[]> = {
+    dm: [message('d1', 'alberto', { time: at(10), text: 'ciao' }), message('d0', 'self', { from: 'ANTONIO MARITATO', time: at(11), text: 'ok' })],
+    group: [message('g1', 'martina', { time: at(12), text: 'chi fa il frontend?' })],
+    big: [message('b1', 'frederic', { thread: 't-noise', time: at(13), text: 'CodeQL KO on another repo' }),
+      message('b2', 'frederic', { thread: 't-tag', time: at(14), text: 'Hi @Antonio Maritato can you check the pooler?' }),
+      message('b3', 'letizia', { thread: 't-tag', time: at(15), text: 'same issue here' }),
+      message('b4', 'alex', { thread: 't-mine', time: at(16), text: 'and the cron?' }), message('b5', 'self', { from: 'ANTONIO MARITATO', thread: 't-mine', time: at(17), text: 'moved to 07:00' })],
+    mine: [message('m1', 'giovanni', { thread: 't-any', time: at(18), text: 'nuova build in UAT' })],
+  };
+  const { sessions, call } = agent((_, body) => {
+    if (body.action === 'list') return ok({ self_id: 'self', conversations: listed });
+    if (body.action === 'group') return ok(groups[body.conversation]);
+    return ok({ self_id: 'self', messages: reads[body.conversation] });
+  });
+  const records: SourceRecord[] = [], state = createGchatState({ account, selfId: 'self', since, fullSpaces: ['tmit - agente ai area vendita'] });
+  await scanOeGchat(oeGoogleRead(call, 'gchat', account, 8), state, (record) => records.push(record), () => now);
+  expect(sessions.flat().filter((r) => (r.body as any).action === 'read').map((r) => (r.body as any).conversation)).toEqual(['dm', 'group', 'big', 'mine']);
+  const kept = records.filter((record) => 'message_id' in record) as any[];
+  expect(kept.map((record) => record.message_id)).toEqual(['dm/d1', 'dm/d0', 'group/g1', 'big/b2', 'big/b3', 'big/b4', 'big/b5', 'mine/m1']);
+  expect(kept.filter((record) => record.ref.mentions_me).map((record) => record.message_id)).toEqual(['big/b2']);
+  const groupCalls = sessions.flat().filter((r) => (r.body as any).action === 'group').length;
+  await scanOeGchat(oeGoogleRead(call, 'gchat', account, 8), state, () => {}, () => now);
+  expect(sessions.flat().filter((r) => (r.body as any).action === 'group').length).toBe(groupCalls);
+});
+
 test('Chat through the OE agent fails closed on another identity, a refused read or a malformed answer', async () => {
   const cases: [string, (path: string, body: any) => { status: number; body: string }][] = [
     ['gchat.account-mismatch', (_, body) => ok(body.action === 'list' ? { self_id: 'other', conversations } : { self_id: 'other', messages: [] })],
@@ -60,7 +98,7 @@ test('Chat through the OE agent fails closed on another identity, a refused read
   ];
   for (const [code, answer] of cases) {
     const records: SourceRecord[] = [];
-    const { call } = agent(answer);
+    const { call } = agent((path, body) => body.action === 'group' && code !== 'oemail.response-json' ? ok(unnamedGroup) : answer(path, body));
     await expect(scanOeGchat(oeGoogleRead(call, 'gchat', account, 8), createGchatState({ account, selfId: 'self', since }), (record) => records.push(record), () => now)).rejects.toThrow(code);
     expect(records.some((record) => 'checkpoint' in record)).toBe(false);
   }

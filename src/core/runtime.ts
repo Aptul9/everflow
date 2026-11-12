@@ -35,7 +35,8 @@ const sourceSchema = z.looseObject({
   entrypoint: z.string().min(1).optional(), poll_seconds: z.number().int().positive().max(86400).optional(),
   profile: z.string().min(1).optional(), bootstrap_cache: z.string().min(1).optional(),
   host: z.string().min(1).optional(), data_dir: z.string().min(1).optional(), owner: z.string().min(1).optional(),
-  account: z.email().optional(), self_id: z.string().min(1).regex(/^\S+$/).optional(), workspace: z.string().regex(/^T[A-Z0-9]+$/).optional(), store: z.string().min(1).optional(), executable: z.string().min(1).optional(), topics: z.number().int().min(1).max(1000).optional(),
+  account: z.email().optional(), self_id: z.string().min(1).regex(/^\S+$/).optional(), workspace: z.string().regex(/^T[A-Z0-9]+$/).optional(), store: z.string().min(1).optional(),
+  full_spaces: z.array(z.string().trim().min(1).refine((value) => !/[\r\n\0]/.test(value))).optional(), self_name: z.string().trim().min(1).optional(), executable: z.string().min(1).optional(), topics: z.number().int().min(1).max(1000).optional(),
   browser_refresh: z.preprocess((value) => value === true, z.boolean()).optional(),
   accounts: z.array(z.string().trim().min(1).refine((value) => value !== '*' && !/[\r\n\0]/.test(value))).optional(),
 });
@@ -98,6 +99,8 @@ export function sourceCommand(cfg: Config, db: DatabaseSync, source: Source, bui
       args.push('--self-id', value.self_id!);
       if (value.topics !== undefined) args.push('--topics', String(value.topics));
       if (value.browser_refresh === true) args.push('--browser-refresh');
+      for (const space of value.full_spaces ?? []) args.push('--full-space', space);
+      if (value.self_name) args.push('--self-name', value.self_name);
     }
   }
   return { source, executable: process.execPath, args, cwd: artifact.root,
