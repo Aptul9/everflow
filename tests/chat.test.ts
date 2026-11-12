@@ -6,6 +6,7 @@ import * as chat from '../src/core/chat.ts';
 import { connect } from '../src/core/opencode.ts';
 import { close, dismiss, ownContext, route, stage } from '../src/core/tickets.ts';
 import { ingest, schedule } from '../src/core/ingest.ts';
+import { scheduleMaintenance } from '../src/core/runtime.ts';
 import { AT, addBatch, chatFixture, claimed, proposed, reopenByTriage, row } from './chat-support.ts';
 import { remoteSession, scriptedPeer, PEER_AT } from './opencode-support.ts';
 import { snapshot } from './support.ts';
@@ -471,13 +472,13 @@ test('same-millisecond newer direct completion replaces report by identity witho
     report_message_id: 'asst_msg_same_time', report_at: '2026-11-06T00:00:01.000000Z', last_activity_at: '2026-11-06T00:00:01.000000Z' });
 });
 
-test('sync renames the session after page actions, a reopen and a reply without STATUS, so the title always shows the stage', async () => {
+test.each(['global', 'ticket'] as const)('%s sync renames the session after page actions, a reopen and a reply without STATUS, so the title always shows the stage', async (scope) => {
   const f = await admittedFixture();
   await using peer = f.peer;
   using db = f.db;
   const session = String(f.turn.session_id);
   const title = () => peer.sessions.get(session)!.title;
-  const sync = async (key: string) => { jobs.enqueue(db, 'sync', key, {}); await chat.sync(f.cfg, db, claimed(db, f.cfg)); };
+  const sync = async (key: string) => { jobs.enqueue(db, 'sync', key, {}, scope === 'ticket' ? f.ticket : undefined); await chat.sync(f.cfg, db, claimed(db, f.cfg)); };
   peer.finish(session, String(f.turn.prompt_id), 'STATUS: waiting_them | Reply pending', 'succeeded', undefined, PEER_AT + 1000);
   await chat.collect(f.cfg, db, claimed(db, f.cfg));
   expect(title()).toBe(`[Waiting on them] #${f.ticket} Synthetic ticket`);
@@ -508,8 +509,18 @@ test('sync renames the session after page actions, a reopen and a reply without 
   // Dismissed tickets are no longer synced for reports, but their title still follows
   dismiss(db, f.ticket, 'Not mine');
   vi.setSystemTime(new Date('2026-11-06T04:00:00Z'));
+  // The scheduler gives a dismissed ticket a sync only while its title is stale
+  const queuedSync = () => db.prepare("SELECT COUNT(*) AS n FROM job WHERE kind='sync' AND ticket=? AND state='queued'").get(f.ticket)!.n;
+  db.prepare("UPDATE job SET state='done' WHERE kind='sync' AND state='queued'").run();
+  scheduleMaintenance(db, f.cfg);
+  expect(queuedSync()).toBe(1);
+  db.prepare("UPDATE job SET state='done' WHERE state='queued'").run();
   await sync('after-dismiss');
   expect(title()).toBe(`[Dismissed] #${f.ticket} Synthetic ticket`);
+  db.prepare("UPDATE job SET state='done' WHERE kind='sync' AND state='queued'").run();
+  vi.setSystemTime(new Date('2026-11-07T04:00:00Z'));
+  scheduleMaintenance(db, f.cfg);
+  expect(queuedSync()).toBe(0);
 });
 
 test('unchanged sync cannot heal a later execution dependency failure', async () => {

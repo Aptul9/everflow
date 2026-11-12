@@ -283,10 +283,12 @@ export function replayQuarantine(db: DatabaseSync, selection: number | 'all', at
 export function scheduleMaintenance(db: DatabaseSync, cfg: Config, at?: string): void {
   transaction(db, () => {
     const now = utc(at), day = now.slice(0, 10);
-    for (const row of db.prepare("SELECT id FROM ticket WHERE approved_at IS NOT NULL AND session_id IS NOT NULL AND lifecycle<>'dismissed' ORDER BY id").all()) {
+    // A dismissed ticket gets a sync only until its session title says so
+    for (const row of db.prepare(`SELECT id,lifecycle FROM ticket WHERE approved_at IS NOT NULL AND session_id IS NOT NULL
+      AND (lifecycle<>'dismissed' OR COALESCE(session_title,'') NOT LIKE '[Dismissed]%') ORDER BY id`).all()) {
       const ticket = Number(row.id);
       if (hasPendingInput(db, ticket)) continue;
-      for (const kind of ['sync', 'archive'] as const) {
+      for (const kind of row.lifecycle === 'dismissed' ? ['sync'] as const : ['sync', 'archive'] as const) {
         if (db.prepare("SELECT 1 FROM job WHERE kind=? AND ticket=? AND state IN ('queued','running')").get(kind, ticket)) continue;
         const latest = db.prepare("SELECT next_at FROM job WHERE kind=? AND ticket=? AND state='done' ORDER BY updated_at DESC,id DESC LIMIT 1").get(kind, ticket);
         if (latest && utc(String(latest.next_at)) > now) continue;
