@@ -28,10 +28,10 @@ export function uiState(): OverviewState {
     ],
     triaging: [],
     agents: [],
-    models: { triage: { model: 'claude-haiku-5-5', effort: null, default_model: 'claude-haiku-5-5', overridden: false },
+    models: { triage: { model: 'first/claude-haiku-5-5', effort: null, default_model: 'first/claude-haiku-5-5', overridden: false },
       chat: { model: 'meridian-auto/claude-opus-5-5', effort: null, default_model: 'meridian-auto/claude-opus-5-5', overridden: false },
       // Fresh lists, so the page does not ask the daemon for new ones in unrelated tests
-      options: { triage: [], chat: [], accounts: {}, at: new Date(Date.now() + 86_400_000).toISOString(), error: null, requested_at: null },
+      options: { chat: [], accounts: {}, at: new Date(Date.now() + 86_400_000).toISOString(), error: null, requested_at: null },
       triage_routes: ['first'] },
     chat_project: 'Vault',
     muted: [],
