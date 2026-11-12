@@ -262,7 +262,7 @@ export function TicketCard(props: {
         onConfirm={(reason) => post(keys.close, `/api/ticket/${ticket.id}/close`, { reason })} />
       <ActionDialog label="Dismiss" display="Dismiss" title={`Dismiss ticket #${ticket.id}`} confirm="Confirm dismiss" shortcut="d" action="dismiss" mute="optional"
         size="sm" icon={<X aria-hidden="true" />} className="h-9 min-w-0 sm:h-8" disabled={props.expired || props.pending.has(keys.dismiss)}
-        onConfirm={(reason, mute) => post(keys.dismiss, `/api/ticket/${ticket.id}/dismiss`, mute === undefined ? { reason } : { reason, mute_hours: mute })} />
+        onConfirm={(reason, mute) => post(keys.dismiss, `/api/ticket/${ticket.id}/dismiss`, mute === undefined ? { reason } : { reason, mute_minutes: mute })} />
     </div>}
     <div className="flex flex-wrap items-center gap-1 border-t px-2 py-1">
       <Toggle expanded={messagesOpen} controls={messagesId} onClick={() => setMessagesOpen(!messagesOpen)} icon={<MessagesSquare aria-hidden="true" />}>Messages ({ticket.messages.length})</Toggle>

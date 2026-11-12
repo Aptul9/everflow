@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { TicketBoard } from '../../src/components/tickets/ticket-board.tsx';
+import { muteMinutes } from '../../src/components/tickets/action-dialog.tsx';
 import { AT, card, uiDetail, uiState } from './fixtures.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { webFixture } from '../web-fixture.ts';
@@ -545,18 +546,37 @@ test('skipped chat Mute, dismiss with mute, muted list Unmute and switched-off a
 
   await userEvent.click(screen.getByRole('button', { name: 'Mute chat of batch #10' }));
   const mute = screen.getByRole('dialog', { name: 'Mute Skipped source' });
-  expect((within(mute).getByRole('combobox', { name: 'Mute for' }) as HTMLSelectElement).value).toBe('24');
-  await userEvent.selectOptions(within(mute).getByRole('combobox', { name: 'Mute for' }), '168');
+  const group = within(mute).getByRole('group', { name: 'Mute for' });
+  expect((within(group).getByRole('radio', { name: '1 h' }) as HTMLInputElement).checked).toBe(true);
+  expect(within(group).queryByRole('radio', { name: "Don't mute" })).toBeNull();
+  expect(within(group).getByText(/^Muted until /)).toBeTruthy();
+  await userEvent.click(within(group).getByRole('radio', { name: '30 min' }));
   await userEvent.click(within(mute).getByRole('button', { name: 'Mute chat' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(fetcher).toHaveBeenCalledWith('/api/batch/10/mute', expect.objectContaining({ method: 'POST', body: JSON.stringify({ hours: 168 }) }));
+  expect(fetcher).toHaveBeenCalledWith('/api/batch/10/mute', expect.objectContaining({ method: 'POST', body: JSON.stringify({ minutes: 30 }) }));
+
+  await userEvent.click(screen.getByRole('button', { name: 'Mute chat of batch #10' }));
+  const custom = screen.getByRole('dialog', { name: 'Mute Skipped source' });
+  await userEvent.click(within(custom).getByRole('radio', { name: 'Custom' }));
+  const amount = within(custom).getByRole('spinbutton', { name: 'Duration' });
+  await userEvent.clear(amount);
+  await userEvent.type(amount, '0');
+  expect(within(custom).getByText('Enter a whole number, up to one year.')).toBeTruthy();
+  expect((within(custom).getByRole('button', { name: 'Mute chat' }) as HTMLButtonElement).disabled).toBe(true);
+  await userEvent.clear(amount);
+  await userEvent.type(amount, '3');
+  await userEvent.selectOptions(within(custom).getByRole('combobox', { name: 'Unit' }), 'hours');
+  await userEvent.click(within(custom).getByRole('button', { name: 'Mute chat' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  expect(fetcher).toHaveBeenCalledWith('/api/batch/10/mute', expect.objectContaining({ method: 'POST', body: JSON.stringify({ minutes: 180 }) }));
 
   await userEvent.click(within(ticket()).getByRole('button', { name: 'Dismiss' }));
   const dismiss = screen.getByRole('dialog', { name: 'Dismiss ticket #1' });
-  await userEvent.selectOptions(within(dismiss).getByRole('combobox', { name: 'Mute this chat' }), 'always');
+  expect((within(dismiss).getByRole('radio', { name: "Don't mute" }) as HTMLInputElement).checked).toBe(true);
+  await userEvent.click(within(dismiss).getByRole('radio', { name: 'Until unmuted' }));
   await userEvent.click(within(dismiss).getByRole('button', { name: 'Confirm dismiss' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(fetcher).toHaveBeenCalledWith('/api/ticket/1/dismiss', expect.objectContaining({ method: 'POST', body: JSON.stringify({ reason: '', mute_hours: null }) }));
+  expect(fetcher).toHaveBeenCalledWith('/api/ticket/1/dismiss', expect.objectContaining({ method: 'POST', body: JSON.stringify({ reason: '', mute_minutes: null }) }));
 
   const muted = screen.getByRole('region', { name: 'Muted chats (1)' });
   expect(muted.textContent).toContain('until unmuted');
@@ -793,6 +813,16 @@ test('403 action displays reload notice and never retries stale approval', async
   const calls = fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').length;
   await userEvent.click(within(ticket()).getByRole('button', { name: 'Start' }));
   expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(calls);
+});
+
+test('mute choices turn into minutes: presets, tomorrow 9:00 local, custom units, and out-of-range custom values', () => {
+  const now = new Date(2026, 10, 12, 22, 30);
+  expect(muteMinutes('', '', 'minutes', now)).toBeUndefined();
+  expect(muteMinutes('always', '', 'minutes', now)).toBeNull();
+  expect(muteMinutes('120', '', 'minutes', now)).toBe(120);
+  expect(muteMinutes('tomorrow', '', 'minutes', now)).toBe(630);
+  expect(muteMinutes('custom', '2', 'days', now)).toBe(2_880);
+  for (const amount of ['', '0', '1.5', '-3', '366']) expect(muteMinutes('custom', amount, 'days', now)).toBeNaN();
 });
 
 test('an action refused after a server restart is sent once more with the token of the page as served now', async () => {

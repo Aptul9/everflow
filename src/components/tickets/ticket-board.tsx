@@ -74,7 +74,7 @@ function BatchCard(props: { batch: SkippedBatch; enabled: boolean; expired: bool
         <span aria-hidden="true" className="hidden @[10.5rem]:inline @[13rem]:hidden">Ticket</span></Button>
       {batch.outcome !== 'muted' && <ActionDialog label={`Mute chat of batch #${batch.id}`} display={null} title={`Mute ${batch.title ?? 'this chat'}`} confirm="Mute chat" mute="only" size="icon-sm"
         icon={<BellOff aria-hidden="true" />} className="h-9 w-9 sm:h-8 sm:w-8" disabled={props.expired || props.pending.has(muteKey)}
-        onConfirm={(_value, hours) => props.post(muteKey, `/api/batch/${batch.id}/mute`, { hours: hours ?? null })} />}
+        onConfirm={(_value, minutes) => props.post(muteKey, `/api/batch/${batch.id}/mute`, { minutes: minutes ?? null })} />}
       <Button type="button" variant="outline" size="icon-sm" className="h-9 w-9 sm:h-8 sm:w-8" aria-label={`Clear batch #${batch.id}`} title="Clear from the board (messages are kept)"
         disabled={props.expired || props.pending.has(clearKey)} onClick={() => { void props.post(clearKey, `/api/batch/${batch.id}/clear`).catch(() => {}); }}><X aria-hidden="true" /></Button>
     </div>}
@@ -277,7 +277,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
             <ActionDialog label={`Dismiss selected (${chosen.length})`} title={`Dismiss ${chosen.length} selected tickets`} confirm="Confirm dismiss" size="sm" className="h-9 sm:h-8" mute="optional"
               disabled={chosen.length === 0 || expired} onConfirm={async (reason, mute) => {
                 const results = await Promise.all(chosen.map(async (id) => {
-                  try { await post(`ticket:${id}:dismiss`, `/api/ticket/${id}/dismiss`, mute === undefined ? { reason } : { reason, mute_hours: mute }); return id; } catch { return null; }
+                  try { await post(`ticket:${id}:dismiss`, `/api/ticket/${id}/dismiss`, mute === undefined ? { reason } : { reason, mute_minutes: mute }); return id; } catch { return null; }
                 }));
                 setSelected((previous) => new Set([...previous].filter((id) => !results.includes(id))));
               }} />

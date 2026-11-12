@@ -249,7 +249,7 @@ test('a muted chat stays out of triage until the mute ends, and own-only batches
   using db = openDb(f.path);
   ingest(db, message('me@example.invalid', 'm1'));
   const conversation = Number(db.prepare('SELECT id FROM conversation').get()!.id);
-  mute(db, conversation, 24, AT);
+  mute(db, conversation, 1_440, AT);
   expect(schedule(db, f.cfg, later(10))).toEqual([]);
   expect(db.prepare('SELECT state,outcome FROM batch').get()).toMatchObject({ state: 'done', outcome: 'muted' });
   expect(db.prepare("SELECT COUNT(*) AS n FROM job WHERE kind='triage'").get()!.n).toBe(0);
@@ -284,11 +284,11 @@ test('mute until unmuted, Make ticket from a muted batch, dismiss with mute and 
   expect(db.prepare('SELECT muted_until FROM conversation WHERE id=?').get(conversation)!.muted_until).toBeNull();
   expect(db.prepare('SELECT lifecycle FROM ticket WHERE id=?').get(ticket)!.lifecycle).toBe('proposed');
   dismiss(db, ticket, 'Noise', later(12));
-  expect(muteTicket(db, ticket, 168, later(12))).toEqual([conversation]);
+  expect(muteTicket(db, ticket, 10_080, later(12))).toEqual([conversation]);
   expect(db.prepare('SELECT muted_until FROM conversation WHERE id=?').get(conversation)!.muted_until).toBe('2026-11-13T10:12:00.000000Z');
   mute(db, conversation, 0, later(13));
   expect(readState(db, f.cfg, new Date(later(14))).muted).toEqual([]);
-  for (const hours of [-1, 8_761, 1.5]) expect(() => mute(db, conversation, hours, AT)).toThrow(TicketError);
+  for (const minutes of [-1, 525_601, 1.5]) expect(() => mute(db, conversation, minutes, AT)).toThrow(TicketError);
   expect(() => mute(db, 999_999, 1, AT)).toThrow('Conversation 999999 not found');
 });
 
@@ -305,14 +305,21 @@ test('page actions mute a skipped chat, dismiss with mute and unmute, rejecting 
   };
   initialize(current);
   try {
-    for (const body of [{ hours: 0 }, { hours: 8_761 }, { hours: 1.5 }, {}, { hours: 1, extra: true }]) expect((await post('batch', fixture.skipped, 'mute', body)).status).toBe(400);
+    for (const body of [{ hours: 0 }, { hours: 8_761 }, { hours: 1.5 }, {}, { hours: 1, extra: true }, { minutes: 0 }, { minutes: 525_601 }, { minutes: 1, hours: 1 }]) expect((await post('batch', fixture.skipped, 'mute', body)).status).toBe(400);
+    const short = Date.now();
+    const thirty = await post('batch', fixture.skipped, 'mute', { minutes: 30 });
+    expect(thirty.status).toBe(200);
+    const { conversation } = await thirty.json() as { conversation: number };
+    expect(Date.parse(String(mutedUntil(conversation))) - short).toBeGreaterThanOrEqual(30 * 60_000 - 1_000);
+    expect(Date.parse(String(mutedUntil(conversation))) - short).toBeLessThan(31 * 60_000);
+    // A page served by an older build still sends hours
     const muted = await post('batch', fixture.skipped, 'mute', { hours: null });
     expect(muted.status).toBe(200);
-    const { conversation } = await muted.json() as { conversation: number };
     expect(mutedUntil(conversation)).toBe(MUTE_FOREVER);
 
     const before = Date.now();
-    const dismissed = await post('ticket', fixture.proposal, 'dismiss', { reason: 'Noise', mute_hours: 24 });
+    expect((await post('ticket', fixture.proposal, 'dismiss', { reason: 'Noise', mute_minutes: 60, mute_hours: 1 })).status).toBe(400);
+    const dismissed = await post('ticket', fixture.proposal, 'dismiss', { reason: 'Noise', mute_minutes: 1_440 });
     expect(dismissed.status).toBe(200);
     expect(await dismissed.json()).toEqual({ ticket: fixture.proposal });
     {

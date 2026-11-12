@@ -666,12 +666,14 @@ export function dismiss(db: DatabaseSync, ticket: number, reason = '', at?: stri
 
 export const MUTE_FOREVER = '9999-12-31T23:59:59.000000Z';
 
-// Later batches of a muted conversation skip triage and forwarding until muted_until. hours null: until unmuted; 0: unmute.
-export function mute(db: DatabaseSync, conversation: number, hours: number | null, at?: string): number {
+export const MUTE_MAX_MINUTES = 525_600;
+
+// Later batches of a muted conversation skip triage and forwarding until muted_until. minutes null: until unmuted; 0: unmute.
+export function mute(db: DatabaseSync, conversation: number, minutes: number | null, at?: string): number {
   return transaction(db, () => {
     validId(conversation, 'conversation');
-    if (hours !== null && (!Number.isSafeInteger(hours) || hours < 0 || hours > 8_760)) throw new TicketError('ticket.invalid-input', 'Mute hours must be 0..8760 or null');
-    const until = hours === null ? MUTE_FOREVER : hours === 0 ? null : utc(new Date(Date.parse(utc(at)) + hours * 3_600_000).toISOString());
+    if (minutes !== null && (!Number.isSafeInteger(minutes) || minutes < 0 || minutes > MUTE_MAX_MINUTES)) throw new TicketError('ticket.invalid-input', `Mute minutes must be 0..${MUTE_MAX_MINUTES} or null`);
+    const until = minutes === null ? MUTE_FOREVER : minutes === 0 ? null : utc(new Date(Date.parse(utc(at)) + minutes * 60_000).toISOString());
     if (db.prepare('UPDATE conversation SET muted_until=? WHERE id=?').run(until, conversation).changes === 0) {
       throw new TicketError('ticket.not-found', `Conversation ${conversation} not found`);
     }
@@ -679,15 +681,15 @@ export function mute(db: DatabaseSync, conversation: number, hours: number | nul
   });
 }
 
-export function muteBatch(db: DatabaseSync, batch: number, hours: number | null, at?: string): number {
-  return transaction(db, () => mute(db, getBatch(db, batch).conversation, hours, at));
+export function muteBatch(db: DatabaseSync, batch: number, minutes: number | null, at?: string): number {
+  return transaction(db, () => mute(db, getBatch(db, batch).conversation, minutes, at));
 }
 
-export function muteTicket(db: DatabaseSync, ticket: number, hours: number | null, at?: string): number[] {
+export function muteTicket(db: DatabaseSync, ticket: number, minutes: number | null, at?: string): number[] {
   return transaction(db, () => {
     getTicket(db, ticket);
     return db.prepare("SELECT conversation FROM ticket_conversation WHERE ticket=? AND kind IN ('primary','linked') ORDER BY conversation").all(ticket)
-      .map((row) => mute(db, Number(row.conversation), hours, at));
+      .map((row) => mute(db, Number(row.conversation), minutes, at));
   });
 }
 
