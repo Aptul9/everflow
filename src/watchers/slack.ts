@@ -55,7 +55,8 @@ export function sshSlackCall(host: string, workspace: string, store?: string): S
 }
 
 const ts = z.string().regex(/^\d+\.\d+$/);
-const counted = z.object({ id: z.string().min(1), latest: z.string().optional() });
+const THREAD_DAYS = 3;
+const counted = z.object({ id: z.string().min(1), latest: z.string().optional(), updated: z.string().optional() });
 const counts = z.object({ channels: z.array(counted).default([]), mpims: z.array(counted).default([]), ims: z.array(counted).default([]) });
 const message = z.looseObject({ ts, type: z.string().optional(), subtype: z.string().optional(), user: z.string().optional(), bot_id: z.string().optional(), username: z.string().optional(),
   text: z.string().optional(), thread_ts: ts.optional(), reply_count: z.number().optional(), latest_reply: ts.optional(), edited: z.unknown().optional(),
@@ -105,15 +106,19 @@ export async function scanSlack(call: SlackCall, state: SlackState, emit: Emit, 
   if (auth?.user_id !== state.selfId || auth?.team_id !== state.workspace) throw new SourceError('slack', 'slack.account-mismatch');
   publishAccounts('slack', state, [state.account], emit);
   const c = parsed(counts, countsValue);
-  // client.counts holds the latest message of each conversation of the user; only those newer than the floor are read.
-  const active = [...c.channels, ...c.mpims, ...c.ims].filter((item) => Number(item.latest ?? 0) > Number(floor)).map((item) => item.id);
+  // client.counts holds, per conversation of the user, its latest message and an `updated` time that a thread reply also
+  // moves; only conversations with either newer than the floor are read.
+  const active = [...c.channels, ...c.mpims, ...c.ims].filter((item) => Math.max(Number(item.latest ?? 0), Number(item.updated ?? 0)) > Number(floor)).map((item) => item.id);
   const threads = new Map<string, { channel: string; ts: string }>();
   for (const item of parsed(view, viewValue).threads) if (Number(item.root_msg.latest_reply ?? 0) > Number(floor)) threads.set(`${item.root_msg.channel}/${item.root_msg.ts}`, item.root_msg);
   const found: { channel: string; raw: z.infer<typeof message> }[] = [];
+  // History goes back THREAD_DAYS past the floor so that a new reply under an older parent is found through the parent's
+  // latest_reply; pages beyond the first are read only while they still hold messages newer than the floor.
+  const oldest = (Number(floor) - THREAD_DAYS * 86400).toFixed(6);
   let pending = active.map((channel) => ({ channel, cursor: '' }));
   for (let round = 0; pending.length; round++) {
     if (round >= 10) throw new SourceError('slack', 'slack.pagination-limit');
-    const pages = await run(pending.map(({ channel, cursor }) => ({ method: 'conversations.history', params: { channel, oldest: floor, limit: '200', ...(cursor ? { cursor } : {}) } })));
+    const pages = await run(pending.map(({ channel, cursor }) => ({ method: 'conversations.history', params: { channel, oldest, limit: '200', ...(cursor ? { cursor } : {}) } })));
     const next: typeof pending = [];
     pages.forEach((page, index) => {
       const { channel } = pending[index]!, h = parsed(history, page);
@@ -121,7 +126,8 @@ export async function scanSlack(call: SlackCall, state: SlackState, emit: Emit, 
         found.push({ channel, raw });
         if (raw.reply_count && Number(raw.latest_reply ?? 0) > Number(floor)) threads.set(`${channel}/${raw.ts}`, { channel, ts: raw.ts });
       }
-      if (h.has_more && h.response_metadata?.next_cursor) next.push({ channel, cursor: h.response_metadata.next_cursor });
+      const reached = h.messages.some((raw) => Number(raw.ts) <= Number(floor));
+      if (h.has_more && h.response_metadata?.next_cursor && !reached) next.push({ channel, cursor: h.response_metadata.next_cursor });
     });
     pending = next;
   }
