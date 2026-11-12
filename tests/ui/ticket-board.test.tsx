@@ -294,7 +294,9 @@ test('triage and chat boxes pick the next model and effort; stale option lists a
   const state = uiState();
   state.health.push({ dependency: 'provider:first', scope: 'provider', state: 'failing', since: null, last_ok: null, last_error: 'down' });
   state.models.options = { at: null, error: 'triage: Provider first HTTP 503', requested_at: null, triage: [],
-    chat: [{ id: 'meridian-auto/claude-opus-5-5', name: 'Opus auto', efforts: ['high', 'max'] }, { id: 'meridian-roar/claude-sonnet-5-5', name: 'Sonnet roar', efforts: ['low'] }] };
+    chat: [{ id: 'meridian-auto/claude-opus-5-5', name: 'Opus auto', efforts: ['high', 'max'] }, { id: 'meridian-roar/claude-sonnet-5-5', name: 'Sonnet roar', efforts: ['low'] }],
+    accounts: { first: 'Claude #2 (everbright)', 'meridian-auto': 'Claude auto (pool)', 'meridian-roar': 'Claude #3 (roar)' } };
+  state.models.triage_routes = ['first', 'second'];
   state.models.chat = { model: 'meridian-auto/claude-opus-5-5', effort: 'max', default_model: 'meridian-auto/claude-opus-5-5', overridden: true };
   board(state);
   const health = screen.getByRole('region', { name: 'Health' });
@@ -302,8 +304,10 @@ test('triage and chat boxes pick the next model and effort; stale option lists a
   const triage = health.querySelector<HTMLElement>('[data-node="triage"]')!;
   expect(within(triage).getByRole('button', { name: 'Triage model' }).textContent).toBe('claude-haiku-5-5');
   expect(within(triage).getByRole('alert').textContent).toBe('triage: Provider first HTTP 503');
+  expect(within(triage).getByText(/^Account:/).textContent).toBe('Account: Claude #2 (everbright), then second');
   const chat = health.querySelector<HTMLElement>('[data-node="openchamber"]')!;
-  expect(within(chat).getByRole('button', { name: 'Chat model' }).textContent).toBe('Opus automeridian-auto');
+  expect(within(chat).getByRole('button', { name: 'Chat model' }).textContent).toBe('Opus auto');
+  expect(within(chat).getByText(/^Account:/).textContent).toBe('Account: Claude auto (pool)');
   fireEvent.click(within(chat).getByRole('button', { name: 'Chat effort' }));
   const efforts = await screen.findByRole('listbox', { name: 'Chat effort' });
   expect(within(efforts).getAllByRole('option').map((option) => [option.textContent, option.getAttribute('aria-selected')]))
@@ -314,8 +318,9 @@ test('triage and chat boxes pick the next model and effort; stale option lists a
   fireEvent.click(within(chat).getByRole('button', { name: 'Chat model' }));
   const search = await screen.findByRole('combobox', { name: 'Search models' });
   fireEvent.change(search, { target: { value: 'sonnet' } });
-  expect(within(screen.getByRole('listbox', { name: 'Chat model' })).getAllByRole('option').map((option) => option.textContent))
-    .toEqual(['Sonnet roarclaude-sonnet-5-5']);
+  const models = screen.getByRole('listbox', { name: 'Chat model' });
+  expect(within(models).getAllByRole('option').map((option) => option.textContent)).toEqual(['Sonnet roarclaude-sonnet-5-5']);
+  expect(within(models).getByRole('presentation').textContent).toBe('Claude #3 (roar)');
   fireEvent.change(search, { target: { value: 'nothing here' } });
   expect(screen.getByText('No match')).toBeTruthy();
   fireEvent.change(search, { target: { value: 'roar' } });

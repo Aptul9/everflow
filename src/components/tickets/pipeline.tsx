@@ -83,8 +83,10 @@ function Picker(props: { label: string; value: string; items: PickItem[]; onPick
   </Popover>;
 }
 
-// Model and effort the next triage call or the next new ticket chat starts with; empty picks the config default
-function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options: ModelOption[]; disabled: boolean; post: PausePost; error?: string | undefined }) {
+// Model and effort the next triage call or the next new ticket chat starts with; empty picks the config default.
+// A chat model runs on the account of its provider; a triage model on the triage routes, first one that answers.
+function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options: ModelOption[]; accounts: Record<string, string>; routes?: string[];
+  disabled: boolean; post: PausePost; error?: string | undefined }) {
   const { scope, choice } = props;
   const list = props.options.some((option) => option.id === choice.model) ? props.options
     : [{ id: choice.model, name: choice.model, efforts: EFFORTS }, ...props.options];
@@ -92,7 +94,10 @@ function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options:
   const efforts = current.efforts.length ? current.efforts : EFFORTS;
   const save = (key: string, value: string) => props.post(`setting:${key}`, '/api/setting', { key, value });
   const split = (id: string) => id.includes('/') ? { provider: id.slice(0, id.indexOf('/')), model: id.slice(id.indexOf('/') + 1) } : { provider: undefined, model: id };
-  const models = list.map((option) => ({ value: option.id, label: option.name, detail: split(option.id).model, group: split(option.id).provider,
+  const name = (provider: string) => props.accounts[provider] ?? provider;
+  const routes = props.routes?.length ? props.routes.map(name).join(', then ') : undefined;
+  const account = (id: string) => split(id).provider ? name(split(id).provider!) : routes;
+  const models = list.map((option) => ({ value: option.id, label: option.name, detail: split(option.id).model, group: account(option.id),
     ...(option.id === choice.default_model ? { tag: 'default' } : {}) }));
   const what = scope === 'triage' ? 'Triage' : 'Chat';
   return <div className="mt-2 border-t pt-2">
@@ -107,8 +112,9 @@ function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options:
           })().catch(() => {});
         }}>
         <span className="truncate" title={choice.model}>{current.name}</span>
-        {split(choice.model).provider && <span className="min-w-0 shrink-[4] truncate text-muted-foreground">{split(choice.model).provider}</span>}
       </Picker>
+      {account(choice.model) && <p className="-mt-0.5 px-0.5 text-[11px] leading-snug text-muted-foreground">
+        Account: <span className="text-foreground/80">{account(choice.model)}</span></p>}
       <Picker label={`${what} effort`} value={choice.effort ?? ''} disabled={props.disabled}
         items={[{ value: '', label: 'Default effort', detail: "model's own" }, ...efforts.map((effort) => ({ value: effort, label: effort }))]}
         onPick={(effort) => { void save(`${scope}.effort`, effort).catch(() => {}); }}>
@@ -371,7 +377,7 @@ export function Pipeline({ state, expired = false, pending = new Set(), errors =
             {providers.length === 0 && <li className="py-1 text-xs text-muted-foreground">No providers configured.</li>}
           </ul>
           <Agents agents={state.agents} kind="triage" />
-          <ModelPicker scope="triage" choice={state.models.triage} options={options.triage} disabled={pickerDisabled} post={post} error={pickerError('triage')} />
+          <ModelPicker scope="triage" choice={state.models.triage} options={options.triage} accounts={options.accounts} routes={state.models.triage_routes} disabled={pickerDisabled} post={post} error={pickerError('triage')} />
         </Node>
       </Stage>
 
@@ -396,7 +402,7 @@ export function Pipeline({ state, expired = false, pending = new Set(), errors =
             {openchamber.map((item) => <Row key={item.dependency} name={item.dependency === 'opencode' ? 'Server' : item.dependency.replace(/^opencode:/, '')} item={item} />)}
           </ul>
           <Agents agents={state.agents} kind="chat" />
-          <ModelPicker scope="chat" choice={state.models.chat} options={options.chat} disabled={pickerDisabled} post={post} error={pickerError('chat')} />
+          <ModelPicker scope="chat" choice={state.models.chat} options={options.chat} accounts={options.accounts} disabled={pickerDisabled} post={post} error={pickerError('chat')} />
         </Node>
       </Stage>
     </div>}

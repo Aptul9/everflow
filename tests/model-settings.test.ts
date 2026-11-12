@@ -80,17 +80,26 @@ test('picker options are fetched only on request, keep the side that worked and 
   expect(readState(db, cfg).models.options.requested_at).not.toBeNull();
   expect(takeModelRequest(db)).toBe(true);
   expect(takeModelRequest(db)).toBe(false);
-  const peer = { models: async () => [
+  const models = async () => [
     { providerID: 'meridian-auto', modelID: 'claude-opus-5-5', name: 'Opus auto', enabled: true, status: 'active', variants: [{ id: 'high' }, { id: 'max' }] },
     { providerID: 'old', modelID: 'gone', name: 'Old', enabled: true, status: 'deprecated', variants: [] },
-  ] } as never;
+  ];
+  const peer = { models, providers: async () => [{ id: 'meridian-auto', name: 'Claude auto (pool)' }, { id: 'first', name: 'Claude #1 (first)' }] } as never;
   const failing = (async () => new Response('', { status: 503 })) as unknown as typeof fetch;
   const value = await modelOptions(cfg, peer, failing);
   expect(value.chat).toEqual([{ id: 'meridian-auto/claude-opus-5-5', name: 'Opus auto', efforts: ['high', 'max'] }]);
+  expect(value.accounts).toEqual({ 'meridian-auto': 'Claude auto (pool)', first: 'Claude #1 (first)' });
+  const noNames = await modelOptions(cfg, { models, providers: async () => { throw new Error('down'); } } as never, failing);
+  expect([noNames.chat.length, noNames.accounts]).toEqual([1, {}]);
   expect(value.triage).toEqual([]);
   expect(value.error).toBe('triage: Provider first HTTP 503');
   const served = (async () => Response.json({ data: [{ id: 'claude-haiku-5-5', display_name: 'Haiku', capabilities: { effort: { low: { supported: true }, max: { supported: false }, supported: true } } }] })) as unknown as typeof fetch;
   expect((await modelOptions(cfg, peer, served)).triage).toEqual([{ id: 'claude-haiku-5-5', name: 'Haiku', efforts: ['low'] }]);
   storeModelOptions(db, value);
-  expect(readState(db, cfg).models.options).toMatchObject({ chat: value.chat, error: value.error, requested_at: null });
+  expect(readState(db, cfg).models.options).toMatchObject({ chat: value.chat, accounts: value.accounts, at: value.at, error: value.error, requested_at: null });
+  expect(readState(db, cfg).models.triage_routes).toEqual(cfg.triage.providers);
+  // Lists stored before account names count as stale, so the page asks again
+  const { accounts: _, ...older } = value;
+  storeModelOptions(db, older as never);
+  expect(readState(db, cfg).models.options).toMatchObject({ accounts: {}, at: null });
 });

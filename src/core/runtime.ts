@@ -305,14 +305,16 @@ export function scheduleMaintenance(db: DatabaseSync, cfg: Config, at?: string):
 export function heartbeat(db: DatabaseSync, metadata: Record<string, unknown>, at?: string) { healthOk(db, 'daemon', at, metadata); }
 
 // Picker options: triage models from the first triage route, chat models from OpenChamber. One side failing keeps the other.
-export async function modelOptions(cfg: Config, peer: Pick<Peer, 'models'> = connect(cfg), fetcher: typeof fetch = fetch) {
-  const [triage, chat] = await Promise.allSettled([triageModels(cfg, fetcher), peer.models()]);
+// Provider names tell the accounts apart (Claude #1 (notarify)); without them the page shows provider ids.
+export async function modelOptions(cfg: Config, peer: Pick<Peer, 'models' | 'providers'> = connect(cfg), fetcher: typeof fetch = fetch) {
+  const [triage, chat, providers] = await Promise.allSettled([triageModels(cfg, fetcher), peer.models(), peer.providers()]);
   const message = (result: PromiseSettledResult<unknown>) => result.status === 'rejected' ? String((result.reason as Error)?.message ?? result.reason).slice(0, 200) : null;
   return {
     triage: triage.status === 'fulfilled' ? triage.value : [],
     chat: chat.status === 'fulfilled' ? chat.value.filter((model) => model.enabled !== false && model.status !== 'deprecated')
       .map((model) => ({ id: `${model.providerID}/${model.modelID}`, name: model.name, efforts: model.variants.map((variant) => variant.id) }))
       .sort((a, b) => a.id.localeCompare(b.id)) : [],
+    accounts: providers.status === 'fulfilled' ? Object.fromEntries(providers.value.map((provider) => [String(provider.id), provider.name])) : {},
     at: utc(), error: [message(triage) && `triage: ${message(triage)}`, message(chat) && `chat: ${message(chat)}`].filter(Boolean).join('; ') || null,
   };
 }
