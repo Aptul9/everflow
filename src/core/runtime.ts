@@ -87,7 +87,9 @@ export function sourceCommand(cfg: Config, db: DatabaseSync, source: Source, bui
   if (source === 'oemail') args.push('--host', value.host!, ...value.accounts!.flatMap((account) => ['--account', account]));
   if (source === 'gchat' || source === 'gmail') {
     args.push('--account', value.account!);
-    if (value.executable) args.push('--executable', /[\\/]/.test(value.executable) ? local(value.executable) : value.executable);
+    // host: read through the OE Copilot agent on that host instead of the local gweb/gws CLI
+    if (value.host) args.push('--host', value.host);
+    else if (value.executable) args.push('--executable', /[\\/]/.test(value.executable) ? local(value.executable) : value.executable);
     if (source === 'gchat') {
       args.push('--self-id', value.self_id!);
       if (value.topics !== undefined) args.push('--topics', String(value.topics));
@@ -452,7 +454,7 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
         try {
           if (entry.active === true) {
             if (!kernel().childOf(expectedChild, watcher)) { log({ source, code: 'source.child-identity', ...failureFields({ reason: 'identity-mismatch' }, stage) }); return; }
-            registry.set(expectedChild.pid, { ...expectedChild, source, kind: source === 'gchat' || source === 'gmail' ? 'cli' : 'ssh', owner_pid: watcher.pid, owner_created: watcher.created });
+            registry.set(expectedChild.pid, { ...expectedChild, source, kind: (source === 'gchat' || source === 'gmail') && !command.args.includes('--host') ? 'cli' : 'ssh', owner_pid: watcher.pid, owner_created: watcher.created });
           } else if (entry.active === false) {
             const registered = registry.get(expectedChild.pid);
             if (!registered || registered.owner_pid !== watcher.pid || registered.owner_created !== watcher.created || !sameProcess(registered, expectedChild)) return;

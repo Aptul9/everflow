@@ -23,6 +23,10 @@ test('Google source runtime validates identity settings and builds only artifact
     expect(command.args).toContain('C:\\synthetic tools\\reader.exe');
     expect(command.args).not.toContain('--yes');
     expect(command.args).not.toContain('--browser-refresh');
+    expect(command.args).not.toContain('--host');
+    const oe = sourceCommand({ ...cfg, sources: { [source]: { enabled: true, account: 'me@example.invalid', self_id: 'self', executable: 'C:/synthetic tools/reader.exe', host: 'oe-vm' } } }, db, source, receipt);
+    expect(oe.args.slice(oe.args.indexOf('--host'), oe.args.indexOf('--host') + 2)).toEqual(['--host', 'oe-vm']);
+    expect(oe.args).not.toContain('--executable');
     if (source === 'gchat') {
       for (const setting of [true, false, 'true']) {
         const enabled = sourceCommand({ ...cfg, sources: { gchat: { enabled: true, account: 'me@example.invalid', self_id: 'self', browser_refresh: setting } } }, db, 'gchat', receipt);
