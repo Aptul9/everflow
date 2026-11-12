@@ -4,13 +4,14 @@ import { transaction } from './db.ts';
 import { TicketError } from './tickets.ts';
 import { utc } from './time.ts';
 
-export const SETTING_KEYS = ['triage.model', 'triage.effort', 'chat.model', 'chat.effort'] as const;
+export const SETTING_KEYS = ['triage.model', 'triage.effort', 'triage.account', 'chat.model', 'chat.effort'] as const;
 export type SettingKey = (typeof SETTING_KEYS)[number];
 
 // Effort levels Meridian and OpenCode accept; anything else is refused, never silently dropped
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 
-export interface ModelChoice { model: string; effort: string | null; default_model: string; overridden: boolean }
+// account: triage only, the configured route tried first; the other routes stay as fallback
+export interface ModelChoice { model: string; effort: string | null; default_model: string; overridden: boolean; account?: string }
 
 function read(db: DatabaseSync, key: SettingKey): string | null {
   const row = db.prepare('SELECT value FROM setting WHERE key=?').get(key);
@@ -22,7 +23,16 @@ export function modelChoice(db: DatabaseSync, cfg: Config, scope: 'triage' | 'ch
   const fallback = scope === 'triage' ? cfg.triage.model : cfg.opencode.model;
   const model = read(db, `${scope}.model`) || fallback;
   const effort = read(db, `${scope}.effort`) || null;
-  return { model, effort, default_model: fallback, overridden: model !== fallback || effort !== null };
+  // A chosen account that is no longer a configured route counts as no choice
+  const stored = scope === 'triage' ? read(db, 'triage.account') : null;
+  const account = stored && cfg.triage.providers.includes(stored) ? stored : undefined;
+  return { model, effort, default_model: fallback, overridden: model !== fallback || effort !== null || !!account, ...(account ? { account } : {}) };
+}
+
+// Triage routes in the order they are tried: the chosen account first, the rest as configured
+export function triageRoutes(cfg: Config, choice: Pick<ModelChoice, 'account'>): string[] {
+  const configured = [...new Set(cfg.triage.providers)];
+  return choice.account ? [choice.account, ...configured.filter((id) => id !== choice.account)] : configured;
 }
 
 export interface ModelOption { id: string; name: string; efforts: string[] }
@@ -69,6 +79,7 @@ export function saveSetting(db: DatabaseSync, key: string, value: string, at?: s
   if (clean && key === 'chat.effort' && !/^[a-z0-9][a-z0-9-]{0,31}$/.test(clean)) throw new TicketError('ticket.invalid-input', `Unknown effort ${clean}`);
   if (clean && key === 'chat.model' && !/^[\w.-]+\/[\w.:-]+$/.test(clean)) throw new TicketError('ticket.invalid-input', 'Chat model must be provider/model');
   if (clean && key === 'triage.model' && !/^[\w.:-]+$/.test(clean)) throw new TicketError('ticket.invalid-input', 'Triage model must be a model id');
+  if (clean && key === 'triage.account' && !/^[\w.-]+$/.test(clean)) throw new TicketError('ticket.invalid-input', 'Triage account must be a provider id');
   transaction(db, () => {
     if (clean) db.prepare('INSERT INTO setting(key,value,updated_at) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at').run(key, clean, utc(at));
     else db.prepare('DELETE FROM setting WHERE key=?').run(key);

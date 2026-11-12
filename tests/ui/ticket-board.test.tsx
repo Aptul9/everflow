@@ -293,7 +293,8 @@ test('each live source account row has a pause switch; paused rows say what wait
 test('triage and chat boxes pick the next model and effort; stale option lists ask the daemon once', async () => {
   const state = uiState();
   state.health.push({ dependency: 'provider:first', scope: 'provider', state: 'failing', since: null, last_ok: null, last_error: 'down' });
-  state.models.options = { at: null, error: 'triage: Provider first HTTP 503', requested_at: null, triage: [],
+  state.models.options = { at: null, error: 'triage: Provider first HTTP 503', requested_at: null,
+    triage: [{ id: 'claude-opus-4-8', name: 'Opus 4.8', efforts: [] }, { id: 'claude-haiku-5-5', name: 'Haiku 5.5', efforts: [] }, { id: 'claude-opus-5-5', name: 'Opus 5.5', efforts: [] }],
     chat: [{ id: 'meridian-auto/claude-opus-5-5', name: 'Opus auto', efforts: ['high', 'max'] }, { id: 'meridian-roar/claude-sonnet-5-5', name: 'Sonnet roar', efforts: ['low'] }],
     accounts: { first: 'Claude #2 (everbright)', 'meridian-auto': 'Claude auto (pool)', 'meridian-roar': 'Claude #3 (roar)' } };
   state.models.triage_routes = ['first', 'second'];
@@ -302,9 +303,21 @@ test('triage and chat boxes pick the next model and effort; stale option lists a
   const health = screen.getByRole('region', { name: 'Health' });
   await waitFor(() => expect(fetcher.mock.calls.some(([path, init]) => path === '/api/setting' && String(init?.body) === '{"refresh":true}')).toBe(true));
   const triage = health.querySelector<HTMLElement>('[data-node="triage"]')!;
-  expect(within(triage).getByRole('button', { name: 'Triage model' }).textContent).toBe('claude-haiku-5-5');
+  // Every triage account shows at once with its health; the selected one goes first
+  const accounts = within(triage).getByRole('group', { name: 'Account' });
+  expect(within(accounts).getAllByRole('radio').map((radio) => [radio.closest('label')!.textContent, (radio as HTMLInputElement).checked]))
+    .toEqual([['Claude #2 (everbright)failingdown', true], ['secondnot used yet', false]]);
+  expect(within(triage).getByText('Selected first, others as fallback.')).toBeTruthy();
+  expect(within(triage).getByRole('button', { name: 'Triage model' }).textContent).toBe('ModelHaiku 5.5');
   expect(within(triage).getByRole('alert').textContent).toBe('triage: Provider first HTTP 503');
-  expect(within(triage).getByText(/^Account:/).textContent).toBe('Account: Claude #2 (everbright), then second');
+  // Triage models belong to no account: no account header, newest first within each family
+  fireEvent.click(within(triage).getByRole('button', { name: 'Triage model' }));
+  const triageModels = await screen.findByRole('listbox', { name: 'Triage model' });
+  expect(within(triageModels).getAllByRole('option').map((option) => option.textContent))
+    .toEqual(['Opus 5.5claude-opus-5-5', 'Opus 4.8claude-opus-4-8', 'Haiku 5.5defaultclaude-haiku-5-5']);
+  expect(within(triageModels).queryByRole('presentation')).toBeNull();
+  fireEvent.keyDown(triageModels, { key: 'Escape' });
+  await waitFor(() => expect(screen.queryByRole('listbox', { name: 'Triage model' })).toBeNull());
   const chat = health.querySelector<HTMLElement>('[data-node="openchamber"]')!;
   expect(within(chat).getByRole('button', { name: 'Chat model' }).textContent).toBe('Opus auto');
   expect(within(chat).getByText(/^Account:/).textContent).toBe('Account: Claude auto (pool)');
@@ -327,6 +340,10 @@ test('triage and chat boxes pick the next model and effort; stale option lists a
   fireEvent.keyDown(search, { key: 'Enter' });
   await waitFor(() => expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').map(([, init]) => JSON.parse(String(init!.body)))).toEqual([
     { key: 'chat.model', value: 'meridian-roar/claude-sonnet-5-5' }, { key: 'chat.effort', value: '' }]));
+  fetcher.mockClear();
+  fireEvent.click(within(accounts).getByRole('radio', { name: /^second/ }));
+  await waitFor(() => expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').map(([, init]) => JSON.parse(String(init!.body))))
+    .toEqual([{ key: 'triage.account', value: 'second' }]));
 });
 
 test('a batch in triage shows at the top of Needs you before its ticket exists', async () => {
