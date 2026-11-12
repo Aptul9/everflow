@@ -124,14 +124,28 @@ export function conversationHistory(db: DatabaseSync, conversation: number, batc
   }));
 }
 
+// What triage needs to judge new input against a closed ticket: the request, how it was closed, the last chat report and the
+// newest `limit` timeline entries (messages, chat reports, status changes), oldest first.
+export function ticketRecord(db: DatabaseSync, ticket: number, limit = 60) {
+  const row = getTicket(db, ticket);
+  const timeline = (db.prepare("SELECT at,kind,actor,body FROM timeline WHERE ticket=? AND kind IN ('message','status','chat','comment','approval') ORDER BY at DESC,id DESC LIMIT ?")
+    .all(ticket, limit) as unknown as Pick<TimelineEvent, 'at' | 'kind' | 'actor' | 'body'>[]).reverse()
+    .map((event) => ({ at: event.at, kind: event.kind, actor: event.actor, body: event.body.slice(0, 1_000) }));
+  const closing = db.prepare("SELECT actor,body FROM timeline WHERE ticket=? AND kind='status' AND at>=? ORDER BY at,id LIMIT 1").get(ticket, row.closed_at ?? row.created_at);
+  return { id: row.id, title: row.title, client: row.client, lifecycle: row.lifecycle, summary: row.summary, ask: row.ask, proposal: row.proposal,
+    approved: row.approved_at !== null, closed_at: row.closed_at, closed_by: closing ? String(closing.actor) : null, closing_note: closing ? String(closing.body) : null,
+    last_report: row.report_line, timeline };
+}
+
 function batchRefs(db: DatabaseSync, batch: Batch): TicketRef[] {
   return extractRefs([batch.title ?? '', ...batchMessages(db, batch.id).map((message) => message.text ?? '')].join('\n'), 'message');
 }
 
 function inputAt(db: DatabaseSync, batch: Batch, target: number): string {
   const stamps = batchMessages(db, batch.id).map((message) => utc(message.stored_at));
-  const intents = db.prepare('SELECT at FROM timeline WHERE ticket=? AND (event_key=? OR event_key GLOB ?)')
-    .all(target, `make-ticket:batch:${batch.id}`, `correction:batch:${batch.id}:ticket:${target}:*`);
+  // A make-ticket, a correction or a triage reopen for this batch counts as its input time, so the close it predates does not drop it
+  const intents = db.prepare('SELECT at FROM timeline WHERE ticket=? AND (event_key=? OR event_key=? OR event_key GLOB ?)')
+    .all(target, `make-ticket:batch:${batch.id}`, `reopen:${target}:batch:${batch.id}`, `correction:batch:${batch.id}:ticket:${target}:*`);
   stamps.push(...intents.map((intent) => utc(String(intent.at))));
   return stamps.sort().at(-1) ?? utc(batch.created_at);
 }
@@ -258,7 +272,7 @@ export function candidates(db: DatabaseSync, cfg: Config, batch: number, at?: st
 
 export interface Route {
   ticket: number | null;
-  mode: 'new' | 'update' | 'forward' | 'closed';
+  mode: 'new' | 'update' | 'forward' | 'closed' | 'reopen';
   candidates: number[];
   context: number[];
 }
@@ -294,9 +308,11 @@ export function route(db: DatabaseSync, batch: number, at?: string, reopenDays =
     }
     if (owner && (owner.lifecycle === 'done' || owner.lifecycle === 'dismissed')) {
       if (owner.lifecycle === 'done' && !owner.merged_into && owner.closed_at && utc(owner.closed_at) >= daysBefore(now, reopenDays)) {
-        db.prepare('UPDATE ticket SET lifecycle=?,report=NULL,last_activity_at=? WHERE id=?').run(owner.approved_at ? 'active' : 'proposed', now, owner.id);
-        history(db, owner.id, now, 'status', 'rule', 'Reopened by new source input', `reopen:${owner.id}:batch:${batch}`);
-        owner = getTicket(db, owner.id);
+        // New input in the chat of a recently closed ticket: triage reads the ticket's record and decides whether it reopens,
+        // starts a new ticket or is skipped. Thanks, call notices and chatter no longer reopen it by rule.
+        db.prepare('UPDATE batch SET ticket=NULL WHERE id=?').run(batch);
+        const context = db.prepare("SELECT ticket FROM ticket_conversation WHERE conversation=? AND kind='context' ORDER BY ticket").all(row.conversation).map((link) => Number(link.ticket));
+        return { ticket: owner.id, mode: 'reopen', candidates: [owner.id], context };
       } else {
         db.prepare("UPDATE ticket_conversation SET kind='context' WHERE ticket=? AND conversation=?").run(owner.id, row.conversation);
         owner = null;
@@ -421,12 +437,26 @@ export function applyDecision(db: DatabaseSync, batch: number, input: unknown): 
     const routed = route(db, batch, now, scope.reopen_days);
     let owner = routed.ticket;
     let outcome: string;
+    const reopening = routed.mode === 'reopen';
     if (routed.mode === 'closed') outcome = 'closed';
     else if (routed.mode === 'forward') outcome = 'routed';
     else if (!decision.on_us) {
+      // Skipped input leaves a closed ticket closed; its chat keeps feeding it, so later input is judged again
       owner = null;
       outcome = 'not_on_us';
+    } else if (reopening && decision.action === 'update' && decision.ticket === routed.ticket && decision.confidence >= scope.min_confidence) {
+      const closed = getTicket(db, routed.ticket!);
+      db.prepare('UPDATE ticket SET lifecycle=?,report=NULL,last_activity_at=? WHERE id=?').run(closed.approved_at ? 'active' : 'proposed', now, closed.id);
+      history(db, closed.id, now, 'status', 'agent', 'Reopened by triage', `reopen:${closed.id}:batch:${batch}`);
+      if (!closed.approved_at) proposedFields(db, closed.id, decision, now);
+      attachBatch(db, batch, closed.id, now);
+      outcome = closed.approved_at ? 'routed' : 'proposed';
     } else {
+      // Anything else than reopening the closed ticket takes the chat off it, as an expired close does
+      if (reopening) {
+        db.prepare("UPDATE ticket_conversation SET kind='context' WHERE ticket=? AND conversation=?").run(routed.ticket!, row.conversation);
+        owner = null;
+      }
       // A different request in a chat that feeds a proposed ticket gets its own ticket; the chat keeps routing to the first one
       const separate = routed.mode === 'update' && decision.action === 'new';
       if (separate) owner = null;
@@ -445,7 +475,7 @@ export function applyDecision(db: DatabaseSync, batch: number, input: unknown): 
         if (maybe !== null) installLink(db, maybe, row.conversation, 'context', 'agent', now);
         if (!separate) installLink(db, owner, row.conversation, 'primary', 'agent', now);
       } else {
-        if (routed.ticket === null) installLink(db, owner, row.conversation, 'linked', 'agent', now);
+        if (routed.ticket === null || reopening) installLink(db, owner, row.conversation, 'linked', 'agent', now);
         proposedFields(db, owner, decision, now);
       }
       attachBatch(db, batch, owner, now);

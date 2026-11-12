@@ -6,7 +6,7 @@ import * as chat from '../src/core/chat.ts';
 import { connect } from '../src/core/opencode.ts';
 import { close, dismiss, ownContext, route, stage } from '../src/core/tickets.ts';
 import { ingest, schedule } from '../src/core/ingest.ts';
-import { AT, addBatch, chatFixture, claimed, proposed, row } from './chat-support.ts';
+import { AT, addBatch, chatFixture, claimed, proposed, reopenByTriage, row } from './chat-support.ts';
 import { remoteSession, scriptedPeer, PEER_AT } from './opencode-support.ts';
 import { snapshot } from './support.ts';
 
@@ -369,7 +369,7 @@ test('sync shows a ticket as Working while its chat runs a turn the owner starte
   expect(stage(db, ticket)).toBe('Waiting on them');
 });
 
-test('STATUS done closes, then within 2 days new linked input reopens and unarchives same approved session', async () => {
+test('STATUS done closes, then within 2 days new linked input that triage reopens unarchives the same approved session', async () => {
   const f = await admittedFixture();
   await using peer = f.peer;
   using db = f.db;
@@ -384,7 +384,9 @@ test('STATUS done closes, then within 2 days new linked input reopens and unarch
   expect(peer.sessions.get(session)!.time.archived).toBeTruthy();
   vi.setSystemTime(new Date('2026-11-08T00:00:00Z'));
   const batch = addBatch(db, f.ticket, { conversation: 'conversation-1', text: 'New linked input' });
-  expect(route(db, batch).mode).toBe('forward');
+  expect(route(db, batch).mode).toBe('reopen');
+  expect(row(db, 'ticket', f.ticket).lifecycle).toBe('done');
+  reopenByTriage(db, f.cfg, batch, f.ticket);
   jobs.enqueue(db, 'forward', 'reopen-input', { batch_ids: [batch] }, f.ticket);
   let next = claimed(db, f.cfg);
   if (next.kind === 'archive') { await chat.archive(f.cfg, db, next); next = claimed(db, f.cfg); }

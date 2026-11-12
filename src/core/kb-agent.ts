@@ -9,7 +9,7 @@ import { openDb, transaction } from './db.ts';
 import { backoff, classify, complete, defer, fail, healthError, healthOk, owns } from './jobs.ts';
 import type { Job } from './jobs.ts';
 import { modelChoice } from './settings.ts';
-import { applyDecision, assessmentPayload, batchMessages, conversationHistory, feedback, modelDecisionSchema, route, TicketError } from './tickets.ts';
+import { applyDecision, assessmentPayload, batchMessages, conversationHistory, feedback, modelDecisionSchema, route, ticketRecord, TicketError } from './tickets.ts';
 import type { Decision, Route, Ticket } from './tickets.ts';
 import { utc } from './time.ts';
 import { isNotePath, VAULT_LIMITS, VaultError, vaultRead, vaultSearch } from './vault.ts';
@@ -51,7 +51,7 @@ export interface AssessmentContext {
 export interface AssessmentInput {
   context: AssessmentContext;
   candidates: readonly { id: number }[];
-  mode: 'new' | 'update';
+  mode: 'new' | 'update' | 'reopen';
 }
 
 export interface AssessmentOptions {
@@ -117,7 +117,8 @@ Action, on_us, ticket and title must form one of these combinations:
 - update: on_us true, ticket set to an offered candidate id, non-empty title.
 on_us true means a ticket is created or updated. Work that is already tracked, already answered or only chatter is skip, even when it is Antonio's.
 When mode is update, the conversation already feeds that ticket: use update only when the new messages continue the same request. A different request, from another person or for a different deliverable, is new even in the same chat, and gets its own ticket.
-A message whose ref has mentions_me true tags Antonio directly. Never skip it as chatter or as already tracked: update the candidate it belongs to, or make it new. Skip it only when a later message from Antonio already answered it.
+When mode is reopen, the conversation fed closed_ticket, which Antonio already closed; it holds the request, how and when it was closed, the last chat report and its timeline. Read it all, with history, before deciding. Reopen it (update with closed_ticket.id) only when the new messages need more work from Antonio on that same request: a new or changed ask, a problem with what was delivered, a question only he can answer, a deadline that moved. Thanks, acknowledgements, "ok", greetings, call or meeting notices, "I'll check", status news that needs nothing from him, talk among others and anything the timeline shows as already done or answered are skip. A request that is not the closed one is new. When unsure, prefer skip with a low confidence over reopening.
+A message whose ref has mentions_me true tags Antonio directly. Never skip it as chatter or as already tracked: update the candidate it belongs to, or make it new. Skip it only when a later message from Antonio already answered it, or when it only thanks, greets or acknowledges.
 Antonio reads the ticket card at a glance, so keep it short and plain:
 - summary: a quick sum-up in at most two short sentences, about 200 characters: who wants what, by when.
 - ask: the request in one sentence.
@@ -179,7 +180,7 @@ function retryTime(db: DatabaseSync, id: string): number {
   return typeof detail.retry_at === 'string' ? Date.parse(detail.retry_at) || 0 : 0;
 }
 
-export async function assess(cfg: Config, context: AssessmentContext, candidates: readonly { id: number }[], mode: 'new' | 'update',
+export async function assess(cfg: Config, context: AssessmentContext, candidates: readonly { id: number }[], mode: AssessmentInput['mode'],
   signal?: AbortSignal, options: AssessmentOptions = {}): Promise<Decision> {
   const now = options.now ?? Date.now;
   const deadline = now() + cfg.triage.timeout_seconds * 1_000;
@@ -358,9 +359,11 @@ function freshOffer(cfg: Config, db: DatabaseSync, job: Job): OfferedAssessment 
       const owner = routed.ticket === null ? null : db.prepare('SELECT * FROM ticket WHERE id=?').get(routed.ticket) as unknown as Ticket;
       const candidates = scope.candidate_ids.map((id) => scope.candidates.find((candidate) => candidate.id === id)
         ?? db.prepare('SELECT id,title,client,lifecycle,summary FROM ticket WHERE id=?').get(id) as unknown as { id: number });
-      const input: AssessmentInput | null = row.state === 'pending' && (routed.mode === 'new' || routed.mode === 'update') ? {
-        mode: routed.mode, candidates, context: { ...scope, now: utc(), messages: batchMessages(db, batch),
-          history: conversationHistory(db, Number(row.conversation), batch, cfg.triage.history_messages), proposed_ticket: owner,
+      const reopen = routed.mode === 'reopen';
+      const input: AssessmentInput | null = row.state === 'pending' && (routed.mode === 'new' || routed.mode === 'update' || reopen) ? {
+        mode: routed.mode as AssessmentInput['mode'], candidates, context: { ...scope, now: utc(), messages: batchMessages(db, batch),
+          history: conversationHistory(db, Number(row.conversation), batch, cfg.triage.history_messages),
+          ...(reopen ? { closed_ticket: ticketRecord(db, routed.ticket!) } : { proposed_ticket: owner }),
           context_tickets: routed.context.map((id) => db.prepare('SELECT id,title,client,lifecycle,summary FROM ticket WHERE id=?').get(id)), feedback: feedback(db) },
       } : null;
       return { scope, routed, input };
@@ -382,7 +385,7 @@ function assertOffer(cfg: Config, db: DatabaseSync, job: Job, offered: OfferedAs
     || JSON.stringify(current.scope.message_versions) !== JSON.stringify(offered.scope.message_versions)) {
     throw new TicketError('ticket.conflict', 'Assessment source input or conversation title changed during I/O');
   }
-  if ((current.routed.mode === 'new' || current.routed.mode === 'update')
+  if ((current.routed.mode === 'new' || current.routed.mode === 'update' || current.routed.mode === 'reopen')
     && (current.routed.mode !== offered.routed.mode || current.routed.ticket !== offered.routed.ticket)) {
     throw new TicketError('ticket.conflict', 'Assessment proposal route changed during I/O');
   }
@@ -394,7 +397,7 @@ function finishRules(cfg: Config, db: DatabaseSync, job: Job, offered: OfferedAs
     const row = db.prepare('SELECT state FROM batch WHERE id=?').get(offered.scope.batch);
     if (row?.state !== 'pending') return;
     const routed = route(db, offered.scope.batch, undefined, cfg.jobs.reopen_days);
-    if (routed.mode === 'new' || routed.mode === 'update') throw new TicketError('ticket.conflict', 'Rule route requires a fresh assessment');
+    if (routed.mode === 'new' || routed.mode === 'update' || routed.mode === 'reopen') throw new TicketError('ticket.conflict', 'Rule route requires a fresh assessment');
   });
 }
 
