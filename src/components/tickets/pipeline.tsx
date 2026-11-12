@@ -84,9 +84,9 @@ function Picker(props: { label: string; value: string; items: PickItem[]; onPick
 }
 
 // Model and effort the next triage call or the next new ticket chat starts with; empty picks the config default.
-// A chat model runs on the account of its provider. Triage picks its account apart: tried first, the other routes take over when it is limited.
+// A chat model runs on the account of its provider; triage picks its account apart, in TriageAccounts.
 function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options: ModelOption[]; accounts: Record<string, string>;
-  routes?: { id: string; state: State }[]; disabled: boolean; post: PausePost; error?: string | undefined }) {
+  disabled: boolean; post: PausePost; error?: string | undefined }) {
   const { scope, choice } = props;
   const list = props.options.some((option) => option.id === choice.model) ? props.options
     : [{ id: choice.model, name: choice.model, efforts: EFFORTS }, ...props.options];
@@ -96,9 +96,6 @@ function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options:
   const split = (id: string) => id.includes('/') ? { provider: id.slice(0, id.indexOf('/')), model: id.slice(id.indexOf('/') + 1) } : { provider: undefined, model: id };
   const name = (provider: string) => props.accounts[provider] ?? provider;
   const provider = split(choice.model).provider;
-  const routes = props.routes ?? [];
-  const account = choice.account ?? routes[0]?.id;
-  const fallback = routes.filter((route) => route.id !== account).map((route) => name(route.id));
   const models = list.map((option) => ({ value: option.id, label: option.name, detail: split(option.id).model,
     group: split(option.id).provider && name(split(option.id).provider!), ...(option.id === choice.default_model ? { tag: 'default' } : {}) }));
   // Meridian lists models in no useful order; newest first within each family
@@ -107,14 +104,6 @@ function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options:
   return <div className="mt-2 border-t pt-2">
     <p className="mb-1 text-[11px] text-muted-foreground">{scope === 'triage' ? 'Next triage call' : 'Next new ticket chat'}</p>
     <div className="grid min-w-0 gap-1.5">
-      {scope === 'triage' && account && <div className="grid min-w-0 gap-0.5">
-        <Picker label="Triage account" value={account} disabled={props.disabled}
-          items={routes.map((route, index) => ({ value: route.id, label: name(route.id), detail: label(route.state), ...(index === 0 ? { tag: 'default' } : {}) }))}
-          onPick={(id) => { void save('triage.account', id === routes[0]!.id ? '' : id).catch(() => {}); }}>
-          <span className="text-muted-foreground">Account</span><span className="truncate">{name(account)}</span>
-        </Picker>
-        {fallback.length > 0 && <p className="px-0.5 text-[11px] leading-snug text-muted-foreground">Fallback: {fallback.join(', ')}</p>}
-      </div>}
       <Picker label={`${what} model`} value={choice.model} items={models} disabled={props.disabled} search="Search models"
         onPick={(model) => {
           const next = list.find((option) => option.id === model)?.efforts ?? [];
@@ -186,6 +175,34 @@ function Row({ name, item, toggle }: { name: string; item: Health; toggle?: { di
       {item.checkpoint && <>{item.coverage === 'recent-topics' ? 'Latest stored' : 'Checkpoint'} <Time value={item.checkpoint} /></>}</p>}
     {toggle?.error && <p role="alert" className="pl-4 text-[11px] text-destructive">{toggle.error}</p>}
   </li>;
+}
+
+// Triage accounts in the order they are tried, each with its health; the selected one goes first, the others take over when it is limited
+function TriageAccounts(props: { routes: string[]; health: Health[]; names: Record<string, string>; chosen: string | undefined; disabled: boolean; post: PausePost }) {
+  const first = props.routes[0];
+  if (!first) return <p className="mt-1.5 text-xs text-muted-foreground">No providers configured.</p>;
+  const chosen = props.chosen ?? first;
+  return <fieldset className="mt-1.5 min-w-0" disabled={props.disabled}>
+    <legend className="mb-1 text-[11px] text-muted-foreground">Account</legend>
+    <div className="grid gap-1">
+      {props.routes.map((id) => {
+        const item = props.health.find((entry) => entry.dependency === `provider:${id}`);
+        const state = item?.state ?? 'unknown';
+        const on = id === chosen;
+        return <label key={id} className={cn('block min-w-0 cursor-pointer rounded-md border px-2 py-1.5 text-xs transition-colors',
+          on ? 'border-primary/40 bg-primary/5' : 'border-transparent hover:bg-muted')}>
+          <span className="flex min-w-0 items-center gap-2">
+            <input type="radio" name="triage-account" value={id} checked={on} className="size-3.5 shrink-0 accent-primary"
+              onChange={() => { void props.post('setting:triage.account', '/api/setting', { key: 'triage.account', value: id === first ? '' : id }).catch(() => {}); }} />
+            <span className={cn('min-w-0 truncate', on && 'font-semibold')}>{props.names[id] ?? id}</span>
+          </span>
+          <span className="mt-0.5 flex items-center gap-1.5 pl-5.5 text-[11px] text-muted-foreground"><Dot state={state} />{label(state)}</span>
+          {item?.last_error && <span className="mt-0.5 block pl-5.5 text-[11px] leading-snug text-destructive">{item.last_error}</span>}
+        </label>;
+      })}
+    </div>
+    {props.routes.length > 1 && <p className="mt-1 text-[11px] leading-snug text-muted-foreground">Selected first, others as fallback.</p>}
+  </fieldset>;
 }
 
 function Issue({ href, children }: { href: string; children: React.ReactNode }) {
@@ -385,13 +402,10 @@ export function Pipeline({ state, expired = false, pending = new Set(), errors =
             state.problems.triage.length > 0 && <Issue key="invalid" href={`#problem-triage-${state.problems.triage[0]!.id}`}>{state.problems.triage.length} invalid</Issue>,
             triageJobs.length > 0 && <Issue key="parked" href={`#problem-job-${triageJobs[0]!.id}`}>{triageJobs.length} parked</Issue>,
           ]}>
-          <ul className="mt-1.5 divide-y divide-border/60">
-            {providers.map((item) => <Row key={item.dependency} name={item.dependency.replace(/^provider:/, '')} item={item} />)}
-            {providers.length === 0 && <li className="py-1 text-xs text-muted-foreground">No providers configured.</li>}
-          </ul>
+          <TriageAccounts routes={state.models.triage_routes} health={providers} names={options.accounts} chosen={state.models.triage.account}
+            disabled={pickerDisabled} post={post} />
           <Agents agents={state.agents} kind="triage" />
-          <ModelPicker scope="triage" choice={state.models.triage} options={options.triage} accounts={options.accounts}
-            routes={state.models.triage_routes.map((id) => ({ id, state: providers.find((item) => item.dependency === `provider:${id}`)?.state ?? 'unknown' }))} disabled={pickerDisabled} post={post} error={pickerError('triage')} />
+          <ModelPicker scope="triage" choice={state.models.triage} options={options.triage} accounts={options.accounts} disabled={pickerDisabled} post={post} error={pickerError('triage')} />
         </Node>
       </Stage>
 

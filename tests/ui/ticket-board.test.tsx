@@ -303,8 +303,11 @@ test('triage and chat boxes pick the next model and effort; stale option lists a
   const health = screen.getByRole('region', { name: 'Health' });
   await waitFor(() => expect(fetcher.mock.calls.some(([path, init]) => path === '/api/setting' && String(init?.body) === '{"refresh":true}')).toBe(true));
   const triage = health.querySelector<HTMLElement>('[data-node="triage"]')!;
-  expect(within(triage).getByRole('button', { name: 'Triage account' }).textContent).toBe('AccountClaude #2 (everbright)');
-  expect(within(triage).getByText(/^Fallback:/).textContent).toBe('Fallback: second');
+  // Every triage account shows at once with its health; the selected one goes first
+  const accounts = within(triage).getByRole('group', { name: 'Account' });
+  expect(within(accounts).getAllByRole('radio').map((radio) => [radio.closest('label')!.textContent, (radio as HTMLInputElement).checked]))
+    .toEqual([['Claude #2 (everbright)failingdown', true], ['secondnot used yet', false]]);
+  expect(within(triage).getByText('Selected first, others as fallback.')).toBeTruthy();
   expect(within(triage).getByRole('button', { name: 'Triage model' }).textContent).toBe('ModelHaiku 5.5');
   expect(within(triage).getByRole('alert').textContent).toBe('triage: Provider first HTTP 503');
   // Triage models belong to no account: no account header, newest first within each family
@@ -338,11 +341,7 @@ test('triage and chat boxes pick the next model and effort; stale option lists a
   await waitFor(() => expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').map(([, init]) => JSON.parse(String(init!.body)))).toEqual([
     { key: 'chat.model', value: 'meridian-roar/claude-sonnet-5-5' }, { key: 'chat.effort', value: '' }]));
   fetcher.mockClear();
-  fireEvent.click(within(triage).getByRole('button', { name: 'Triage account' }));
-  const accounts = await screen.findByRole('listbox', { name: 'Triage account' });
-  expect(within(accounts).getAllByRole('option').map((option) => [option.textContent, option.getAttribute('aria-selected')]))
-    .toEqual([['Claude #2 (everbright)defaultfailing', 'true'], ['secondnot used yet', 'false']]);
-  fireEvent.click(within(accounts).getByRole('option', { name: /^second/ }));
+  fireEvent.click(within(accounts).getByRole('radio', { name: /^second/ }));
   await waitFor(() => expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST').map(([, init]) => JSON.parse(String(init!.body))))
     .toEqual([{ key: 'triage.account', value: 'second' }]));
 });
