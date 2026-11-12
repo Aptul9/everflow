@@ -127,8 +127,9 @@ export interface OverviewState {
   skipped: SkippedBatch[];
   triaging: TriageBatch[];
   agents: Agent[];
-  // Model and effort the next triage call and the next new ticket chat use, and what the pickers can offer
-  models: { triage: ModelChoice; chat: ModelChoice; options: ModelOptions };
+  // Model and effort the next triage call and the next new ticket chat use, and what the pickers can offer.
+  // triage_routes: providers triage tries in order, so the account its model runs on
+  models: { triage: ModelChoice; chat: ModelChoice; options: ModelOptions; triage_routes: string[] };
   // Folder name of the OpenChamber project that holds ticket chats, and per client where it has its own
   chat_project: string;
   chat_projects?: Record<string, string>;

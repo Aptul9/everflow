@@ -206,6 +206,9 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
     async models(signal?: AbortSignal) {
       return (await client.model.list({ location: { directory: cfg.opencode.directory }, types: ['chat'] }, request(signal))).data;
     },
+    async providers(signal?: AbortSignal) {
+      return (await client.provider.list({ location: { directory: cfg.opencode.directory } }, request(signal))).data;
+    },
     // Every chat folder: the ticket's client can change between a lost create and its recovery
     async findTicket(store: string, ticket: number, signal?: AbortSignal): Promise<string | null> {
       const matches = new Set<string>();

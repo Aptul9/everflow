@@ -26,7 +26,8 @@ export function modelChoice(db: DatabaseSync, cfg: Config, scope: 'triage' | 'ch
 }
 
 export interface ModelOption { id: string; name: string; efforts: string[] }
-export interface ModelOptions { triage: ModelOption[]; chat: ModelOption[]; at: string | null; error: string | null; requested_at: string | null }
+// accounts: provider id to its display name, the account a model runs on
+export interface ModelOptions { triage: ModelOption[]; chat: ModelOption[]; accounts: Record<string, string>; at: string | null; error: string | null; requested_at: string | null }
 
 function json<T>(db: DatabaseSync, key: string): T | null {
   const row = db.prepare('SELECT value FROM setting WHERE key=?').get(key);
@@ -41,7 +42,9 @@ function put(db: DatabaseSync, key: string, value: string, at?: string): void {
 export function readModelOptions(db: DatabaseSync): ModelOptions {
   const stored = json<Omit<ModelOptions, 'requested_at'>>(db, 'options.models');
   const requested = db.prepare("SELECT value FROM setting WHERE key='options.requested'").get();
-  return { triage: stored?.triage ?? [], chat: stored?.chat ?? [], at: stored?.at ?? null, error: stored?.error ?? null, requested_at: requested ? String(requested.value) : null };
+  // Lists stored before account names existed count as stale, so the page asks for new ones
+  return { triage: stored?.triage ?? [], chat: stored?.chat ?? [], accounts: stored?.accounts ?? {}, at: stored?.accounts ? stored.at : null,
+    error: stored?.error ?? null, requested_at: requested ? String(requested.value) : null };
 }
 
 export function requestModelOptions(db: DatabaseSync, at?: string): string {
