@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { sshRun } from './relay.ts';
 import { accountNames, emitChanged, isEntrypoint, publishAccounts, requiredOption, runSource, sourceStamp, sourceText, SourceError, watcherArguments, writeDiagnostic, writeRecord } from './source.ts';
-import type { Emit, SourceMessage } from './source.ts';
+import type { Emit, Source, SourceMessage } from './source.ts';
 import { htmlToText } from './teams.ts';
 
 // Mail of the OE Copilot agent mailboxes, read through its /api/communication gateway on the OE host.
@@ -45,17 +45,18 @@ export function oeCommand(requests: OeRequest[], container = 'oe-copilot-agent',
 }
 
 /** The lines of oeCommand: HTTP status and body of each request, in order. */
-export function parseOeOutput(output: string, expected: number): { status: number; body: string }[] {
+export function parseOeOutput(output: string, expected: number, source: Source = 'oemail'): { status: number; body: string }[] {
   const lines = output.split('\n').filter((line) => line !== '');
   const parsed = lines.map((line) => /^(\d{3}) ([A-Za-z0-9+/=]*)$/.exec(line));
-  if (lines.length !== expected || parsed.some((m) => !m)) throw new SourceError('oemail', 'oemail.response-shape');
+  if (lines.length !== expected || parsed.some((m) => !m)) throw new SourceError(source, 'oemail.response-shape');
   return parsed.map((m) => ({ status: Number(m![1]), body: Buffer.from(m![2]!, 'base64').toString('utf8') }));
 }
 
-export function sshOeCall(host: string): OeCall {
+// Gmail and Google Chat read the same agent through this call; their errors keep the oemail.* transport codes under their own source.
+export function sshOeCall(host: string, source: Source = 'oemail'): OeCall {
   return async (requests, signal) => {
-    const output = await sshRun('oemail', 'oemail', { host, timeoutMs: 90_000, maxBytes: 32 * 1024 * 1024 }, oeCommand(requests), signal);
-    return parseOeOutput(output.toString('utf8'), requests.length);
+    const output = await sshRun(source, 'oemail', { host, timeoutMs: 90_000, maxBytes: 32 * 1024 * 1024 }, oeCommand(requests), signal);
+    return parseOeOutput(output.toString('utf8'), requests.length, source);
   };
 }
 
