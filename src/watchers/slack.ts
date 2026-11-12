@@ -98,6 +98,8 @@ function plain(state: SlackState, text: string): string {
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 }
 
+const mentions = (state: SlackState, text: string | undefined) => (text ?? '').includes(`<@${state.selfId}`);
+
 export async function scanSlack(call: SlackCall, state: SlackState, emit: Emit, now = () => new Date().toISOString(), signal?: AbortSignal): Promise<void> {
   const started = sourceStamp(now());
   const floor = seconds(new Date(Date.parse(state.floor) - 120_000).toISOString());
@@ -110,7 +112,12 @@ export async function scanSlack(call: SlackCall, state: SlackState, emit: Emit, 
   // moves; only conversations with either newer than the floor are read.
   const active = [...c.channels, ...c.mpims, ...c.ims].filter((item) => Math.max(Number(item.latest ?? 0), Number(item.updated ?? 0)) > Number(floor)).map((item) => item.id);
   const threads = new Map<string, { channel: string; ts: string }>();
-  for (const item of parsed(view, viewValue).threads) if (Number(item.root_msg.latest_reply ?? 0) > Number(floor)) threads.set(`${item.root_msg.channel}/${item.root_msg.ts}`, item.root_msg);
+  // Threads Slack has the user following: he started, replied in or was added to them
+  const followed = new Set<string>();
+  for (const item of parsed(view, viewValue).threads) {
+    followed.add(`${item.root_msg.channel}/${item.root_msg.ts}`);
+    if (Number(item.root_msg.latest_reply ?? 0) > Number(floor)) threads.set(`${item.root_msg.channel}/${item.root_msg.ts}`, item.root_msg);
+  }
   const found: { channel: string; raw: z.infer<typeof message> }[] = [];
   // History goes back THREAD_DAYS past the floor so that a new reply under an older parent is found through the parent's
   // latest_reply; pages beyond the first are read only while they still hold messages newer than the floor.
@@ -133,9 +140,17 @@ export async function scanSlack(call: SlackCall, state: SlackState, emit: Emit, 
   }
   const roots = [...threads.values()];
   const replies = await run(roots.map((root) => ({ method: 'conversations.replies', params: { channel: root.channel, ts: root.ts, oldest: floor, limit: '200' } })));
-  replies.forEach((page, index) => { for (const raw of parsed(history, page).messages) if (raw.ts !== roots[index]!.ts) found.push({ channel: roots[index]!.channel, raw }); });
+  const parents: typeof found = [];
+  replies.forEach((page, index) => {
+    for (const raw of parsed(history, page).messages) (raw.ts !== roots[index]!.ts ? found : parents).push({ channel: roots[index]!.channel, raw });
+  });
 
-  const kept = found.filter(({ raw }) => KEPT.has(raw.subtype) && Number(raw.ts) > Number(floor));
+  // DMs and group DMs are read whole; a channel only for threads that tag the user, that he wrote in or that he follows
+  const direct = new Set([...c.mpims, ...c.ims].map((item) => item.id));
+  const thread = (channel: string, raw: z.infer<typeof message>) => `${channel}/${raw.thread_ts ?? raw.ts}`;
+  const involved = new Set(followed);
+  for (const { channel, raw } of [...found, ...parents]) if (raw.user === state.selfId || mentions(state, raw.text)) involved.add(thread(channel, raw));
+  const kept = found.filter(({ channel, raw }) => KEPT.has(raw.subtype) && Number(raw.ts) > Number(floor) && (direct.has(channel) || involved.has(thread(channel, raw))));
   const channels = [...new Set(kept.map(({ channel }) => channel))].filter((id) => !state.conversations.has(id));
   const infos = await run(channels.map((channel) => ({ method: 'conversations.info', params: { channel } })));
   const ims = new Map<string, string>();
@@ -160,7 +175,7 @@ export async function scanSlack(call: SlackCall, state: SlackState, emit: Emit, 
       sender_is_me: raw.user === state.selfId, sent_at: new Date(Number(raw.ts) * 1000).toISOString(), text: sourceText(plain(state, raw.text ?? ''), 50000),
       attachments: (raw.files ?? []).map((file) => ({ name: file.name || file.title || '(unnamed)', ...(file.size === undefined ? {} : { size: file.size }) })),
       ref: { account: state.account, workspace: state.workspace, channel, ts: raw.ts, ...(raw.thread_ts && raw.thread_ts !== raw.ts ? { thread_ts: raw.thread_ts } : {}),
-        ...(raw.edited ? { edited: true } : {}), ...((raw.text ?? '').includes(`<@${state.selfId}`) ? { mentions_me: true } : {}) } };
+        ...(raw.edited ? { edited: true } : {}), ...(mentions(state, raw.text) ? { mentions_me: true } : {}) } };
     if (state.seen.size >= 100000 && !state.seen.has(JSON.stringify(['slack', state.account, record.message_id]))) throw new SourceError('slack', 'slack.message-limit');
     emitChanged(state.seen, record, emit);
   }
