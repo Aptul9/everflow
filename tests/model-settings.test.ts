@@ -31,7 +31,7 @@ test('a page choice overrides the config model and effort; an empty value goes b
   expect(modelChoice(db, cfg, 'chat').model).toBe('meridian-auto/claude-opus-5-5');
   saveSetting(db, 'chat.effort', 'none');
   expect(modelChoice(db, cfg, 'chat').effort).toBe('none');
-  for (const [key, value] of [['triage.effort', 'none'], ['chat.effort', 'Bad Value'], ['chat.model', 'no-provider'], ['triage.model', 'a/b'], ['other.key', 'x']] as const) {
+  for (const [key, value] of [['triage.effort', 'none'], ['chat.effort', 'Bad Value'], ['chat.model', 'no-provider'], ['triage.model', 'a/b'], ['triage.account', 'a/b'], ['other.key', 'x']] as const) {
     expect(() => saveSetting(db, key, value)).toThrow(TicketError);
   }
 });
@@ -49,6 +49,23 @@ test('the next triage call sends the chosen model and effort to the provider', a
   expect(peer.requests[0]).toMatchObject({ model: 'claude-sonnet-5-5', output_config: { effort: 'high' } });
   saveSetting(db, 'triage.effort', '');
   expect(modelChoice(db, cfg, 'triage').effort).toBeNull();
+});
+
+test('the chosen triage account is tried first, the other routes stay as fallback; an unconfigured account is ignored', async () => {
+  const { cfg } = kbFixture();
+  cfg.triage.providers = ['first', 'second'];
+  using db = openDb(cfg.db.path);
+  saveSetting(db, 'triage.account', 'gone');
+  expect(modelChoice(db, cfg, 'triage').account).toBeUndefined();
+  saveSetting(db, 'triage.account', 'second');
+  expect(modelChoice(db, cfg, 'triage')).toMatchObject({ account: 'second', overridden: true });
+  ingest(db, { source: 'outlook', account: 'me@acme.invalid', conversation_id: 'conversation', conversation_title: 'Title', message_id: 'native-1',
+    sender: 'bob@acme.invalid', sender_name: 'Bob', sender_is_me: false, sent_at: '2026-11-05T23:50:00Z', text: 'Check RCA-12' });
+  schedule(db, cfg, AT);
+  await using first = await triagePeer(() => ({ body: text(JSON.stringify(decision())) }));
+  await using second = await triagePeer(() => ({ status: 429, headers: { 'retry-after': '60' }, body: {} }));
+  await handleTriage(cfg, db, jobs.claim(db, cfg, 'w', AT)!, { providers: { first: provider(first.baseURL), second: provider(second.baseURL) } });
+  expect([second.requests.length, first.requests.length]).toEqual([1, 1]);
 });
 
 async function createdModel(settings: [string, string][]) {
