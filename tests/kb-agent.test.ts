@@ -87,6 +87,7 @@ test('the triage system prompt spells out every valid action, on_us and ticket c
   expect(system).toMatch(/only for work Antonio himself has to do.*in Cc.*does not make every request in it his/is);
   expect(system).toMatch(/clearly meant for another named person, or a step only another team carries out.*is skip unless the message names Antonio/is);
   expect(system).toMatch(/group or distribution list is his when it is his team that is asked/i);
+  expect(system).toMatch(/one-to-one chat, a fault or gap reported to him on something he built or runs is an ask/i);
   expect(system).toMatch(/ref\.addressed.*only in cc is not his work unless the text names him or asks him/is);
   expect(system).toMatch(/light Markdown.*\*\*bold\*\*/is);
 });
