@@ -161,6 +161,8 @@ export async function actionPost(request: Request, scope: 'ticket' | 'batch' | '
       }
       throw new HttpError(404, 'action.not-found', 'Action not found');
     }));
+    // The daemon's retitle worker, registered process-wide (this route runs in Next's module graph)
+    (globalThis as Record<symbol, (() => void) | undefined>)[Symbol.for('everflow.retitle.wake')]?.();
     return Response.json(result, { headers: { 'cache-control': 'no-store' } });
   } catch (error) { return errorResponse(error); }
 }

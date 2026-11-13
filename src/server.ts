@@ -140,7 +140,8 @@ export async function startDaemon(options: { configPath: string; buildReceipt: s
       metadata: { pid: receipt.pid, created: receipt.created, config_path: receipt.config_path, port: receipt.port, artifact: receipt.artifact },
       onChildren: (children) => { receipt.children = children; save(); },
       onHeartbeat: () => { receipt.heartbeat_at = new Date().toISOString(); save(); },
-      onError: (error) => { if (starting) { startupFailed = true; startupFailure = error; } else stop(); } });
+      onError: (error) => { if (starting) { startupFailed = true; startupFailure = error; } else stop(); },
+      titles: cfg.tickets.enabled === true && cfg.chats.enabled === true });
     if (startupFailed) throw startupFailure;
     starting = false;
     receipt.status = 'ready'; save(); atomicJson(paths.ready, receipt); requested();

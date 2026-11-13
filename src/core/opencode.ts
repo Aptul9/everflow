@@ -146,6 +146,10 @@ function interval(messages: readonly SessionMessageInfo[], target?: string): Tur
   return null;
 }
 
+// server.connected always arrives first on its own
+export const SESSION_EVENTS = ['session.status', 'session.idle', 'session.execution.started', 'session.execution.succeeded',
+  'session.execution.failed', 'session.execution.interrupted', 'session.renamed'] as const;
+
 const settingsSchema = z.looseObject({ desktopLocalPort: z.number().int().min(1).max(65535), desktopUiPassword: z.string().default('') });
 
 function settingsError(read: boolean): Error {
@@ -253,6 +257,9 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
       return (await client.session.active(request(signal)))[session]?.type === 'running';
     },
     archive: (session: string, archived = true, signal?: AbortSignal) => client.session.update({ sessionID: session, archived }, request(signal)),
+    // Server-sent events; the connection needs a peer made with a timeout longer than the stream should live.
+    // onActivity also fires on keepalive frames, so a silent stream can be told apart from a dead one.
+    events: (signal: AbortSignal, onActivity: () => void) => client.event.subscribe({ types: [...SESSION_EVENTS], signal, onActivity }),
   };
 }
 

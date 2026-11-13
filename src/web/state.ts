@@ -3,8 +3,8 @@ import { basename } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../core/config.ts';
 import { chatDirectory, clientsFor, sourceAccounts, sourceEnabled } from '../core/policy.ts';
-import { batchClients, batchMessages, batchPaused, detail, feedback, MUTE_FOREVER, pausedInputs } from '../core/tickets.ts';
-import type { Message } from '../core/tickets.ts';
+import { batchClients, batchMessages, batchPaused, boardColumn, detail, feedback, MUTE_FOREVER, pausedInputs } from '../core/tickets.ts';
+import type { Column, Message, Stage } from '../core/tickets.ts';
 import { modelChoice, readModelOptions } from '../core/settings.ts';
 import { calendarDay, utc } from '../core/time.ts';
 import type { Health, OverviewState, Reference, SkippedBatch, SourceMessage, TicketCard, TicketDetail, TriageBatch } from '../lib/web-types.ts';
@@ -89,13 +89,10 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
     .map((row) => ticketDetail(db, Number(row.id)).ticket)
     .sort((a, b) => Number(b.lifecycle === 'proposed') - Number(a.lifecycle === 'proposed')
       || utc(b.last_activity_at ?? b.created_at).localeCompare(utc(a.last_activity_at ?? a.created_at)) || b.id - a.id);
-  for (const ticket of tickets) {
-    if (finished(ticket)) groups[ticket.lifecycle === 'dismissed' ? 'skipped' : 'done_today'].push(ticket);
-    else if (ticket.stage === 'Failed') groups.failed.push(ticket);
-    else if (ticket.stage === 'Needs you') groups.needs_you.push(ticket);
-    else if (ticket.stage === 'Waiting on them') groups.waiting_them.push(ticket);
-    else groups.working.push(ticket);
-  }
+  // Same column function as the session title, so card and title never disagree
+  const group: Record<Column, keyof OverviewState['groups']> = { 'Needs you': 'needs_you', Working: 'working', 'Waiting on them': 'waiting_them',
+    Failed: 'failed', Done: 'done_today', Skipped: 'skipped' };
+  for (const ticket of tickets) groups[group[boardColumn(ticket.stage as Stage, ticket.lifecycle)]].push(ticket);
   const skipped = db.prepare(`SELECT b.id,c.title,c.source,c.account,b.outcome,b.created_at,
     (SELECT t.reason FROM triage_log t WHERE t.batch=b.id ORDER BY t.id DESC LIMIT 1) AS reason FROM batch b JOIN conversation c ON c.id=b.conversation
     WHERE b.outcome IN ('not_on_us','backlog','answered','muted') AND b.cleared_at IS NULL AND COALESCE(b.done_at,b.created_at)>=?

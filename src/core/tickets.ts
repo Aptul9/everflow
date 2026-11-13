@@ -9,6 +9,7 @@ import { calendarDay, utc } from './time.ts';
 import type { Lifecycle, Report } from './types.ts';
 
 export type Stage = 'Failed' | 'Needs you' | 'Working' | 'Waiting on them' | 'Idle' | 'Done' | 'Dismissed';
+export type Column = 'Needs you' | 'Working' | 'Waiting on them' | 'Failed' | 'Done' | 'Skipped';
 
 export class TicketError extends Error {
   constructor(readonly code: 'ticket.not-found' | 'ticket.conflict' | 'ticket.invalid-decision' | 'ticket.invalid-input', message: string) {
@@ -177,9 +178,17 @@ export function stage(db: DatabaseSync, ticket: number, projection: { exclude_jo
   return row.lifecycle === 'done' ? 'Done' : 'Dismissed';
 }
 
+// The board column a ticket's card sits in; the session title carries the same word
+export function boardColumn(stage: Stage, lifecycle: Lifecycle): Column {
+  if (lifecycle === 'dismissed' || stage === 'Dismissed') return 'Skipped';
+  if (lifecycle === 'done' || stage === 'Done') return 'Done';
+  return stage === 'Idle' ? 'Working' : stage;
+}
+
 // The session title is derived from the ticket alone, never written by the chat
 export function stageTitle(db: DatabaseSync, ticket: number): string {
-  return `[${stage(db, ticket)}] #${ticket} ${getTicket(db, ticket).title}`;
+  const row = getTicket(db, ticket);
+  return `[${boardColumn(stage(db, ticket), row.lifecycle)}] #${ticket} ${row.title}`;
 }
 
 export function detail(db: DatabaseSync, ticket: number) {
