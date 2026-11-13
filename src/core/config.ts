@@ -63,6 +63,8 @@ const configSchema = z.looseObject({
   clients: z.record(z.string().min(1), z.looseObject({
     accounts: z.array(z.string()).default([]), domains: z.array(z.string()).default([]), keywords: z.array(z.string()).default([]),
     directory: z.string().min(1).optional(),
+    // What is Antonio's work at this client, for triage (trusted text in its system prompt)
+    role: z.string().max(2_000).optional(),
   })).default({}),
 });
 

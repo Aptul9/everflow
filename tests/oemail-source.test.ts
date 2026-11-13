@@ -51,6 +51,21 @@ test('reads inbox and sent of each listed mailbox, keys by internet message id a
   expect(state.floor).toBe(NOW);
 });
 
+test('mail from others records where the mailbox stood: to, cc, or other for a distribution list; own mail carries none', async () => {
+  const to = (...addresses: string[]) => addresses.map((address) => ({ EmailAddress: { Name: address, Address: address } }));
+  const { call, calls } = fake({ [MSC]: 'ok' }, {
+    [`${MSC}:Inbox`]: [[mail('to', { ToRecipients: to('someone@msc.invalid', 'ME@msc.invalid') }), mail('cc', { ToRecipients: to('cloud@msc.invalid'), CcRecipients: to(MSC) }),
+      mail('dl', { ToRecipients: to('dl-requests@msc.invalid'), CcRecipients: null })]],
+    [`${MSC}:SentItems`]: [[mail('own', { From: { EmailAddress: { Name: 'Me', Address: MSC } }, ToRecipients: to('cloud@msc.invalid') })]],
+  });
+  const records: SourceRecord[] = [];
+  await scanOeMail(call, createOeMailState({ accounts: [MSC], since: '2026-11-10T17:00:00Z' }), (record) => records.push(record), () => NOW);
+  const refs = Object.fromEntries((records.filter((record) => 'message_id' in record) as Extract<SourceRecord, { message_id: string }>[])
+    .map((record) => [record.message_id, record.ref?.addressed ?? null]));
+  expect(refs).toEqual({ '<to@mail>': 'to', '<cc@mail>': 'cc', '<dl@mail>': 'other', '<own@mail>': null });
+  expect(decodeURIComponent(String((calls[1]![0]!.body as { path: string }).path))).toContain('ToRecipients,CcRecipients');
+});
+
 test('an unavailable mailbox keeps its own floor: the checkpoint stays at it, names it failed, the others still emit and advance', async () => {
   const { call } = fake({ [MSC]: 'ok', [NPO]: 'errore' }, { [`${MSC}:Inbox`]: [[mail('a')]] });
   const records: SourceRecord[] = [], reported: unknown[] = [];

@@ -98,9 +98,11 @@ Action, on_us, ticket and title must form one of these combinations:
 - skip: on_us false, ticket null.
 - new: on_us true, ticket null, non-empty title.
 - update: on_us true, ticket set to an offered candidate id, non-empty title.
-on_us true means a ticket is created or updated. Work that is already tracked, already answered or only chatter is skip, even when it is Antonio's.
+on_us true means a ticket is created or updated, and only for work Antonio himself has to do: a request put to him by name or in a one-to-one chat, a question only he can answer, a decision or deliverable that is his. Being on the thread, in To or Cc, or owning the wider project does not make a request his. A request to everyone, to a team or distribution list, to another named person, or for another team to carry out (configure, grant access, open firewall rules, change DNS or policies, sign a certificate) is skip unless the message names Antonio as the one to act or his configured role for that client makes it his. When unsure whether the work is his, skip with a low confidence.
+On mail, ref.addressed says where Antonio's mailbox stood on the message: to, cc, or other (a distribution list or Bcc). cc and other are not his work unless the text names him.
+Work that is already tracked, already answered or only chatter is skip, even when it is Antonio's.
 When mode is update, the conversation already feeds that ticket: use update only when the new messages continue the same request. A different request, from another person or for a different deliverable, is new even in the same chat, and gets its own ticket.
-When mode is reopen, the conversation fed closed_ticket, which Antonio already closed; it holds the request, how and when it was closed, the last chat report and its timeline. Read it all, with history, before deciding. Reopen it (update with closed_ticket.id) only when the new messages need more work from Antonio on that same request: a new or changed ask, a problem with what was delivered, a question only he can answer, a deadline that moved. Thanks, acknowledgements, "ok", greetings, call or meeting notices, "I'll check", status news that needs nothing from him, talk among others and anything the timeline shows as already done or answered are skip. A request that is not the closed one is new. When unsure, prefer skip with a low confidence over reopening.
+When mode is reopen, the conversation fed closed_ticket, which Antonio already closed; it holds the request, how and when it was closed, the last chat report and its timeline. Read it all, with history, before deciding. Reopen it (update with closed_ticket.id) only when the new messages need more work from Antonio on that same request: a new or changed ask, a problem with what was delivered, a question only he can answer, a deadline that moved. Thanks, acknowledgements, "ok", greetings, call or meeting notices, "I'll check", status news that needs nothing from him, talk among others, requests to other people or teams and anything the timeline shows as already done or answered are skip. A request that is not the closed one is new. When unsure, prefer skip with a low confidence over reopening.
 A message whose ref has mentions_me true tags Antonio directly. Never skip it as chatter or as already tracked: update the candidate it belongs to, or make it new. Skip it only when a later message from Antonio already answered it, or when it only thanks, greets or acknowledges.
 Antonio reads the ticket card at a glance, so keep it short and plain:
 - summary: a quick sum-up in at most two short sentences, about 200 characters: who wants what, by when.
@@ -112,7 +114,9 @@ ${JSON.stringify(z.toJSONSchema(modelDecisionSchema))}`;
 
 function systemPrompt(cfg: Config): string {
   const guide = cfg.vault.guide?.trim();
-  return guide ? `${system}\nVault layout, from Antonio's configuration (trusted): ${guide}` : system;
+  const roles = Object.entries(cfg.clients).flatMap(([name, client]) => client.role?.trim() ? [`- ${name}: ${client.role.trim()}`] : []);
+  return [system, ...(guide ? [`Vault layout, from Antonio's configuration (trusted): ${guide}`] : []),
+    ...(roles.length ? [`Antonio's role per client, from his configuration (trusted). Work outside it is not on_us:\n${roles.join('\n')}`] : [])].join('\n');
 }
 
 function timeout(): DOMException { return new DOMException('Assessment wall budget exhausted', 'TimeoutError'); }
