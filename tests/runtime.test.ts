@@ -212,6 +212,7 @@ test('maintenance uses per-ticket/day keys and due-only rearm without unfinished
   const { path, cfg } = fixture();
   using db = openDb(path);
   const ticket = owner(db);
+  db.prepare('UPDATE ticket SET session_title=? WHERE id=?').run(`[Idle] #${ticket} Synthetic`, ticket);
   expect(runtime.scheduleMaintenance).toBeTypeOf('function');
   if (!runtime.scheduleMaintenance) return;
   runtime.scheduleMaintenance(db, cfg, AT);
@@ -230,6 +231,32 @@ test('maintenance uses per-ticket/day keys and due-only rearm without unfinished
   expect(db.prepare("SELECT state FROM job WHERE kind='sync'").get()?.state).toBe('queued');
   runtime.scheduleMaintenance(db, cfg, '2026-11-07T10:00:00Z');
   expect(db.prepare("SELECT COUNT(*) AS n FROM job WHERE kind='sync' AND state IN ('queued','running')").get()?.n).toBe(1);
+});
+
+test('a stale session title makes the ticket sync due at once, skips in-flight input, and a rearmed sync starts its backoff over', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const ticket = owner(db);
+  db.prepare('UPDATE ticket SET session_title=? WHERE id=?').run(`[Idle] #${ticket} Synthetic`, ticket);
+  runtime.scheduleMaintenance(db, cfg, AT);
+  const sync = () => db.prepare("SELECT state,next_at,failures,attempts,error_class FROM job WHERE kind='sync' AND ticket=?").get(ticket)!;
+  // Earlier failures of the day, then a successful run with its next sync a minute out
+  db.prepare("UPDATE job SET state='done',next_at=?,failures=9,attempts=2,error_class='dependency',last_error='Transport: fetch failed' WHERE ticket=?").run('2026-11-06T10:01:00.000000Z', ticket);
+  runtime.scheduleMaintenance(db, cfg, '2026-11-06T10:00:10Z');
+  expect(sync().state).toBe('done');
+  // Done from the page: the title is due now
+  db.prepare("UPDATE ticket SET lifecycle='done',report='done',closed_at=? WHERE id=?").run('2026-11-06T10:00:15.000000Z', ticket);
+  runtime.scheduleMaintenance(db, cfg, '2026-11-06T10:00:20Z');
+  expect({ ...sync() }).toEqual({ state: 'queued', next_at: '2026-11-06T10:00:20.000000Z', failures: 0, attempts: 0, error_class: null });
+  // While an input is in flight its collector writes the title, so the scheduler waits
+  db.prepare("UPDATE job SET state='done',next_at=? WHERE kind='sync' AND ticket=?").run('2026-11-06T10:01:20.000000Z', ticket);
+  db.prepare('UPDATE ticket SET session_title=NULL WHERE id=?').run(ticket);
+  db.prepare("INSERT INTO job(kind,key,ticket,state,next_at,created_at,updated_at) VALUES ('collect','in-flight',?,'running',?,?,?)").run(ticket, AT, AT, AT);
+  runtime.scheduleMaintenance(db, cfg, '2026-11-06T10:00:30Z');
+  expect(sync().state).toBe('done');
+  db.prepare("UPDATE job SET state='done' WHERE key='in-flight'").run();
+  runtime.scheduleMaintenance(db, cfg, '2026-11-06T10:00:40Z');
+  expect(sync().state).toBe('queued');
 });
 
 test('purge changes only old unowned not_on_us text and commits completion under the same lease', async () => {

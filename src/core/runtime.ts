@@ -16,6 +16,7 @@ import { ingest, IngestError, schedule, sourceStart } from './ingest.ts';
 import { claim, complete, defer, enqueue, fail, hasPendingInput, healthError, healthOk, owns, startRenewal } from './jobs.ts';
 import type { Job } from './jobs.ts';
 import { handleTriage } from './kb-agent.ts';
+import { stageTitle } from './tickets.ts';
 import { connect } from './opencode.ts';
 import type { Peer } from './opencode.ts';
 import { storeModelOptions, takeModelRequest } from './settings.ts';
@@ -288,18 +289,24 @@ export function scheduleMaintenance(db: DatabaseSync, cfg: Config, at?: string):
   transaction(db, () => {
     const now = utc(at), day = now.slice(0, 10);
     // A dismissed ticket gets a sync only until its session title says so
-    for (const row of db.prepare(`SELECT id,lifecycle FROM ticket WHERE approved_at IS NOT NULL AND session_id IS NOT NULL
+    for (const row of db.prepare(`SELECT id,lifecycle,session_title FROM ticket WHERE approved_at IS NOT NULL AND session_id IS NOT NULL
       AND (lifecycle<>'dismissed' OR COALESCE(session_title,'') NOT LIKE '[Dismissed]%') ORDER BY id`).all()) {
       const ticket = Number(row.id);
       if (hasPendingInput(db, ticket)) continue;
+      // A stage change (page action, report, reopen) is due in the session title now, not at the next sync; an input in flight writes it itself
+      const retitle = row.session_title !== stageTitle(db, ticket)
+        && !db.prepare("SELECT 1 FROM job WHERE ticket=? AND state='running' AND kind IN ('collect','start_chat','forward')").get(ticket);
       for (const kind of row.lifecycle === 'dismissed' ? ['sync'] as const : ['sync', 'archive'] as const) {
         if (db.prepare("SELECT 1 FROM job WHERE kind=? AND ticket=? AND state IN ('queued','running')").get(kind, ticket)) continue;
+        const due = kind === 'sync' && retitle;
         const latest = db.prepare("SELECT next_at FROM job WHERE kind=? AND ticket=? AND state='done' ORDER BY updated_at DESC,id DESC LIMIT 1").get(kind, ticket);
-        if (latest && utc(String(latest.next_at)) > now) continue;
+        if (latest && utc(String(latest.next_at)) > now && !due) continue;
         const key = `${kind}:ticket:${ticket}:${day}`;
         const existing = db.prepare('SELECT id,state,next_at FROM job WHERE key=?').get(key);
         if (!existing) enqueue(db, kind, key, {}, ticket);
-        else if (existing.state === 'done' && utc(String(existing.next_at)) <= now) db.prepare("UPDATE job SET state='queued',payload='{}',updated_at=? WHERE id=? AND state='done'").run(now, existing.id!);
+        // A done run succeeded: its retry backoff starts over, so one blip later in the day waits seconds, not the day's failure count
+        else if (existing.state === 'done' && (due || utc(String(existing.next_at)) <= now)) db.prepare(`UPDATE job SET state='queued',payload='{}',attempts=0,failures=0,
+          error_class=NULL,last_error=NULL,next_at=?,updated_at=? WHERE id=? AND state='done'`).run(now, now, existing.id!);
       }
     }
     enqueue(db, 'purge', `purge:ticket:none:${day}`, {});
