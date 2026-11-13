@@ -177,6 +177,11 @@ export function stage(db: DatabaseSync, ticket: number, projection: { exclude_jo
   return row.lifecycle === 'done' ? 'Done' : 'Dismissed';
 }
 
+// The session title is derived from the ticket alone, never written by the chat
+export function stageTitle(db: DatabaseSync, ticket: number): string {
+  return `[${stage(db, ticket)}] #${ticket} ${getTicket(db, ticket).title}`;
+}
+
 export function detail(db: DatabaseSync, ticket: number) {
   const owner = getTicket(db, ticket);
   const timeline = (db.prepare('SELECT * FROM timeline WHERE ticket=?').all(ticket) as unknown as TimelineEvent[])

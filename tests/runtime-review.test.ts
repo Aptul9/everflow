@@ -81,7 +81,8 @@ test('I1 chats-off old pre-turn reservation looks up and persists an accepted ta
 test.each(['sync', 'archive'] as const)('M1 prior-day completed %s due time survives a new day key', (kind) => {
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-06T23:59:00Z'));
   const f = fixture(); using db = openDb(f.path); prepareStart(db);
-  const owner = ticket(db, 'Maintenance'); db.prepare("UPDATE ticket SET session_id='synthetic-session' WHERE id=?").run(owner);
+  const owner = ticket(db, 'Maintenance');
+  db.prepare("UPDATE ticket SET session_id='synthetic-session',session_title=? WHERE id=?").run(`[Idle] #${owner} Maintenance`, owner);
   const old = enqueue(db, kind, `${kind}:ticket:${owner}:2026-11-06`, {}, owner);
   db.prepare("UPDATE job SET state='done',next_at='2026-11-07T00:04:00.000000Z' WHERE id=?").run(old);
   vi.setSystemTime(new Date('2026-11-07T00:00:00Z')); scheduleMaintenance(db, f.cfg);

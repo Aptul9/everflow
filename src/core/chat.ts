@@ -9,7 +9,7 @@ import type { Job } from './jobs.ts';
 import { connect } from './opencode.ts';
 import type { Peer, TurnDetail } from './opencode.ts';
 import { modelChoice } from './settings.ts';
-import { addRefs, batchMessages, extractRefs, ownContext, route, stage, TicketError } from './tickets.ts';
+import { addRefs, batchMessages, extractRefs, ownContext, route, stage, stageTitle, TicketError } from './tickets.ts';
 import type { Message, Ticket } from './tickets.ts';
 import { utc } from './time.ts';
 import type { ErrorClass, Report, TurnKind } from './types.ts';
@@ -597,7 +597,7 @@ async function alignTitle(db: DatabaseSync, job: Job, ticket: number, peer: Peer
   if (!owner.session_id) return true;
   // A collector or input in flight writes the title itself with its report
   if (db.prepare("SELECT 1 FROM job WHERE ticket=? AND state='running' AND kind IN ('collect','start_chat','forward') AND id<>?").get(ticket, job.id)) return true;
-  const title = `[${stage(db, ticket)}] #${ticket} ${owner.title}`;
+  const title = stageTitle(db, ticket);
   if ((owner.lifecycle === 'done' || owner.lifecycle === 'dismissed') && owner.session_title === title) return true;
   if ((await peer.get(owner.session_id, options.signal)).title !== title) {
     if (!owns(db, job, now())) return false;
