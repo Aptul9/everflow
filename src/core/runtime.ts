@@ -191,8 +191,12 @@ export function createSourceReader(db: DatabaseSync, cfg: Config, source: Source
         if (off(value)) return false;
         const changed = ingest(db, value);
         if ('checkpoint' in (value as object)) {
+          // Accounts the watcher could not read this round keep the failure it reports for them on stderr
+          const failed = new Set(((value as { failed?: string[] }).failed ?? []).map((account) => account.toLowerCase()));
           healthOk(db, source);
-          for (const row of db.prepare("SELECT account FROM cursor WHERE source=? AND account<>'*'").all(source)) healthOk(db, `${source}:${row.account}`);
+          for (const row of db.prepare("SELECT account FROM cursor WHERE source=? AND account<>'*'").all(source)) {
+            if (!failed.has(String(row.account).toLowerCase())) healthOk(db, `${source}:${row.account}`);
+          }
         }
         return changed;
       } catch (error) {
@@ -464,7 +468,11 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
         let stage = 'child.parent';
         try {
           if (entry.active === true) {
-            if (!kernel().childOf(expectedChild, watcher)) { log({ source, code: 'source.child-identity', ...failureFields({ reason: 'identity-mismatch' }, stage) }); return; }
+            if (!kernel().childOf(expectedChild, watcher)) {
+              // A short SSH call often exits before its report arrives: nothing left to own, so only a live stranger is a mismatch
+              if (kernel().running(expectedChild)) log({ source, code: 'source.child-identity', ...failureFields({ reason: 'identity-mismatch' }, stage) });
+              return;
+            }
             registry.set(expectedChild.pid, { ...expectedChild, source, kind: (source === 'gchat' || source === 'gmail') && !command.args.includes('--host') ? 'cli' : 'ssh', owner_pid: watcher.pid, owner_created: watcher.created });
           } else if (entry.active === false) {
             const registered = registry.get(expectedChild.pid);

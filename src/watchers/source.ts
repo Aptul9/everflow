@@ -23,7 +23,7 @@ export interface SourceMessage {
   attachments: { name: string; size?: number | null }[];
   ref: Record<string, any>;
 }
-export type SourceRecord = SourceMessage | { source: Source; accounts: string[] } | { source: Source; account: string; muted: string[] } | { source: Source; checkpoint: string; accounts?: string[]; coverage?: 'saved-history-replay' | 'recent-topics'; observed_at?: string };
+export type SourceRecord = SourceMessage | { source: Source; accounts: string[] } | { source: Source; account: string; muted: string[] } | { source: Source; checkpoint: string; accounts?: string[]; failed?: string[]; coverage?: 'saved-history-replay' | 'recent-topics'; observed_at?: string };
 export type Emit = (record: SourceRecord) => void;
 
 export class SourceError extends Error {

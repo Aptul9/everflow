@@ -51,20 +51,50 @@ test('reads inbox and sent of each listed mailbox, keys by internet message id a
   expect(state.floor).toBe(NOW);
 });
 
-test('an unreadable mailbox keeps the floor: no checkpoint, the others still emit, the error names the account', async () => {
+test('an unavailable mailbox keeps its own floor: the checkpoint stays at it, names it failed, the others still emit and advance', async () => {
   const { call } = fake({ [MSC]: 'ok', [NPO]: 'errore' }, { [`${MSC}:Inbox`]: [[mail('a')]] });
-  const records: SourceRecord[] = [];
+  const records: SourceRecord[] = [], reported: unknown[] = [];
   const state = createOeMailState({ accounts: [MSC, NPO], since: '2026-11-10T17:00:00Z' });
-  await expect(scanOeMail(call, state, (record) => records.push(record), () => NOW)).rejects.toMatchObject({ code: 'oemail.account-unavailable', account: NPO });
-  expect(records.some((record) => 'checkpoint' in record)).toBe(false);
+  await scanOeMail(call, state, (record) => records.push(record), () => NOW, undefined, (error) => reported.push(error));
   expect(records.filter((record) => 'message_id' in record)).toHaveLength(1);
+  expect(records.at(-1)).toEqual({ source: 'oemail', accounts: [MSC, NPO], checkpoint: '2026-11-10T17:00:00.000Z', failed: [NPO] });
+  expect(reported).toEqual([expect.objectContaining({ code: 'oemail.account-unavailable', account: NPO, reason: 'errore' })]);
+  expect(state.floors.get(MSC)).toBe(NOW);
   expect(state.floor).toBe('2026-11-10T17:00:00.000Z');
 });
 
-test('a failed read fails the scan with the HTTP status and account', async () => {
-  const call: OeCall = async (requests) => requests.map((request) => request.path === '/api/communication/accounts'
-    ? { status: 200, body: JSON.stringify({ accounts: [{ upn: MSC, status: 'ok' }] }) } : { status: 502, body: '{"errore":"x"}' });
-  await expect(scanOeMail(call, createOeMailState({ accounts: [MSC], since: NOW }), () => {}, () => NOW)).rejects.toMatchObject({ code: 'oemail.http', account: MSC, status: 502 });
+test('a failed read sets only that mailbox aside, reports it once, and it catches up from its own floor when it recovers', async () => {
+  let broken = true;
+  const listed: Record<string, string[]> = {};
+  const call: OeCall = async (requests) => requests.map((request) => {
+    if (request.path === '/api/communication/accounts') return { status: 200, body: JSON.stringify({ accounts: [{ upn: MSC, status: 'ok' }, { upn: NPO, status: 'ok' }] }) };
+    const { account, path } = request.body as { account: string; path: string };
+    (listed[account] ??= []).push(decodeURIComponent(path));
+    if (account === NPO && broken) return { status: 502, body: '{"errore":"x"}' };
+    return { status: 200, body: JSON.stringify({ value: path.includes('Inbox') ? [mail(account === MSC ? 'm' : 'n')] : [] }) };
+  });
+  const records: SourceRecord[] = [], reported: unknown[] = [];
+  const state = createOeMailState({ accounts: [MSC, NPO], since: '2026-11-10T17:00:00Z' });
+  const scan = (at: string) => scanOeMail(call, state, (record) => records.push(record), () => at, undefined, (error) => reported.push(error));
+  await scan(NOW);
+  await scan('2026-11-10T18:01:00.000Z');
+  expect(records.filter((record) => 'message_id' in record).map((record) => (record as { account: string }).account)).toEqual([MSC]);
+  expect(records.filter((record) => 'checkpoint' in record)).toEqual([
+    { source: 'oemail', accounts: [MSC, NPO], checkpoint: '2026-11-10T17:00:00.000Z', failed: [NPO] },
+    { source: 'oemail', accounts: [MSC, NPO], checkpoint: '2026-11-10T17:00:00.000Z', failed: [NPO] }]);
+  expect(reported).toEqual([expect.objectContaining({ code: 'oemail.http', account: NPO, status: 502 })]);
+  expect(listed[MSC]!.at(-1)).toContain('ge 2026-11-10T17:58:00Z');
+  broken = false;
+  await scan('2026-11-10T18:02:00.000Z');
+  expect(listed[NPO]!.at(-1)).toContain('ge 2026-11-10T16:58:00Z');
+  expect(records.filter((record) => 'message_id' in record).map((record) => (record as { account: string }).account)).toEqual([MSC, NPO]);
+  expect(records.at(-1)).toEqual({ source: 'oemail', accounts: [MSC, NPO], checkpoint: '2026-11-10T18:02:00.000Z' });
+  expect(reported).toHaveLength(1);
+});
+
+test('a failure that names no account still fails the whole scan', async () => {
+  const call: OeCall = async () => [{ status: 503, body: '' }];
+  await expect(scanOeMail(call, createOeMailState({ accounts: [MSC], since: NOW }), () => {}, () => NOW)).rejects.toMatchObject({ code: 'oemail.http', status: 503 });
 });
 
 test('next links become gateway paths; the remote command carries requests only as base64', () => {
