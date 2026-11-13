@@ -138,6 +138,22 @@ test('I2 injected snapshot-to-identity PID reuse never enrolls or terminates the
   expect(f.terminated).not.toEqual(expect.arrayContaining([expect.objectContaining({ created: replacement.created })]));
 });
 
+test('a child that exited before its report is neither enrolled nor logged; a live process that is not the watcher child is logged', async () => {
+  const f = await ownershipFixture();
+  const mismatches = () => fs.existsSync(f.cfg.db.path + '.log')
+    ? fs.readFileSync(f.cfg.db.path + '.log', 'utf8').split('\n').filter((line) => line.includes('identity-mismatch')).length : 0;
+  try {
+    f.setCurrent(replacement);
+    f.child.emit('message', { type: 'everflow.child', pid: original.pid, active: true, identity: original, owner: watcherIdentity });
+    expect(f.runtime.children()).not.toEqual(expect.arrayContaining([expect.objectContaining({ pid: original.pid })]));
+    expect(mismatches()).toBe(0);
+    f.kernel.childOf.mockReturnValueOnce(false);
+    f.child.emit('message', { type: 'everflow.child', pid: replacement.pid, active: true, identity: replacement, owner: watcherIdentity });
+    expect(f.runtime.children()).not.toEqual(expect.arrayContaining([expect.objectContaining({ pid: replacement.pid, created: replacement.created })]));
+    expect(mismatches()).toBe(1);
+  } finally { await f.runtime.close(); f.db.close(); }
+});
+
 test('I2 stale inactive packet cannot unregister a newer verified owned child with the same injected PID', async () => {
   const f = await ownershipFixture();
   try {

@@ -31,7 +31,7 @@ const messageSchema = z.looseObject({
 const inventorySchema = z.strictObject({ source: sourceSchema, accounts: accountsSchema });
 const mutedSchema = z.strictObject({ source: sourceSchema, account: accountSchema, muted: z.array(idSchema).max(10_000) });
 const checkpointSchema = z.strictObject({
-  source: sourceSchema, checkpoint: timestamp, accounts: accountsSchema.optional(),
+  source: sourceSchema, checkpoint: timestamp, accounts: accountsSchema.optional(), failed: accountsSchema.optional(),
   coverage: z.enum(['saved-history-replay', 'recent-topics']).optional(), observed_at: timestamp.optional(),
 });
 
@@ -112,6 +112,7 @@ export function ingest(db: DatabaseSync, record: unknown): boolean {
       if (!checkpoint.accounts?.length) throw new IngestError('source checkpoint requires complete account coverage');
       const missing = known.filter((account) => !checkpoint.accounts!.includes(account));
       if (missing.length) throw new IngestError(`source checkpoint omitted known accounts: ${missing.sort().join(', ')}`);
+      if (checkpoint.failed?.some((account) => !checkpoint.accounts!.includes(account))) throw new IngestError('source checkpoint failed accounts must be covered accounts');
       for (const account of [...checkpoint.accounts, '*']) advance(db, checkpoint.source, account, checkpoint.checkpoint);
       return true;
     });

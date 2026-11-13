@@ -56,6 +56,26 @@ test('a source account list stores only listed accounts and keeps checkpoint cov
   expect(storedAccounts(every)).toEqual(['off@example.invalid', 'on@example.invalid']);
 });
 
+test('a checkpoint with failed accounts marks the source and the read accounts ok, the failed one keeps its error and cursor', () => {
+  const f = instance('[sources.teams]\nenabled = true\n');
+  using db = openDb(f.path);
+  sourceStart(db, f.cfg, 'teams', AT);
+  const reader = createSourceReader(db, f.cfg, 'teams');
+  const accounts = ['good@example.invalid', 'bad@example.invalid'];
+  expect(reader.stdout(line({ source: 'teams', accounts }))).toBe(true);
+  reader.stderr(line({ source: 'teams', code: 'teams.http', account: 'bad@example.invalid', status: 502 }));
+  reader.stderr(line({ source: 'teams', code: 'teams.http', status: 503 }));
+  expect(reader.stdout(line(message('good@example.invalid', 'good-1', { sent_at: later(3) })))).toBe(true);
+  expect(reader.stdout(line({ source: 'teams', checkpoint: AT, accounts, failed: ['bad@example.invalid'] }))).toBe(true);
+  const health = Object.fromEntries(db.prepare('SELECT dependency,state,last_error FROM health').all().map((row) => [row.dependency, [row.state, row.last_error]]));
+  expect(health.teams![0]).toBe('ok');
+  expect(health['teams:good@example.invalid']![0]).toBe('ok');
+  expect(health['teams:bad@example.invalid']).toEqual(['failing', 'teams.http (502)']);
+  expect(db.prepare("SELECT since FROM cursor WHERE source='teams' AND account='bad@example.invalid'").get()!.since).toBe(AT);
+  expect(reader.stdout(line({ source: 'teams', checkpoint: AT, accounts, failed: ['other@example.invalid'] }))).toBe(false);
+  expect(db.prepare('SELECT COUNT(*) AS n FROM quarantine').get()!.n).toBe(1);
+});
+
 test('a source switched off in config reads disabled and the source-wide cursor is no account', () => {
   const f = instance('[sources.teams]\nenabled = false\n[sources.teamsrelay]\nenabled = true\naccounts = ["on@example.invalid"]\n');
   using db = openDb(f.path);
