@@ -68,7 +68,7 @@ test('configured client roles reach the triage system prompt; a client without o
   cfg.clients = { acme: { accounts: [], domains: [], keywords: [], role: ' One of two reviewers; intake assigned by name. ' }, other: { accounts: [], domains: [], keywords: [], role: ' ' } };
   await run(cfg, context(), [], 'new', undefined, { db, providers: { first: provider(peer.baseURL) } });
   expect(peer.requests[0]!.system).not.toContain('role per client');
-  expect(peer.requests[1]!.system).toContain("Antonio's role per client, from his configuration (trusted). Work outside it is not on_us:\n- acme: One of two reviewers; intake assigned by name.");
+  expect(peer.requests[1]!.system).toContain("Antonio's role per client, from his configuration (trusted). For a listed client, work outside its role is not on_us; clients not listed follow the rules above alone:\n- acme: One of two reviewers; intake assigned by name.");
   expect(peer.requests[1]!.system).not.toContain('- other:');
 });
 
@@ -84,9 +84,10 @@ test('the triage system prompt spells out every valid action, on_us and ticket c
   expect(system).toMatch(/already tracked.*skip/i);
   expect(system).toMatch(/mode is update.*different request.*is new/is);
   expect(system).toMatch(/mentions_me true tags Antonio.*never skip/is);
-  expect(system).toMatch(/only for work Antonio himself has to do.*in To or Cc.*does not make a request his/is);
-  expect(system).toMatch(/to a team or distribution list, to another named person, or for another team to carry out.*is skip unless/is);
-  expect(system).toMatch(/ref\.addressed.*cc and other are not his work unless the text names him/is);
+  expect(system).toMatch(/only for work Antonio himself has to do.*in Cc.*does not make every request in it his/is);
+  expect(system).toMatch(/clearly meant for another named person, or a step only another team carries out.*is skip unless the message names Antonio/is);
+  expect(system).toMatch(/group or distribution list is his when it is his team that is asked/i);
+  expect(system).toMatch(/ref\.addressed.*only in cc is not his work unless the text names him or asks him/is);
   expect(system).toMatch(/light Markdown.*\*\*bold\*\*/is);
 });
 
