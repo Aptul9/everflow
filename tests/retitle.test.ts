@@ -157,6 +157,16 @@ test('session events: a started turn reads Working, a finished one makes its syn
   expect(f.db.prepare('SELECT session_title FROM ticket WHERE id=?').get(id)!.session_title).toBe('Something else');
 });
 
+test('a finished turn makes a waiting collector due now and leaves the sync to it', () => {
+  const f = fixture();
+  const id = ticket(f.db);
+  const session = String(f.db.prepare('SELECT session_id FROM ticket WHERE id=?').get(id)!.session_id);
+  f.db.prepare("INSERT INTO job(kind,key,ticket,state,next_at,created_at,updated_at) VALUES ('collect','collect:turn:1',?,'queued','2026-11-13T10:00:10.000Z',?,?)").run(id, AT, AT);
+  expect(applySessionEvent(f.db, { type: 'session.execution.succeeded', data: { sessionID: session } }, AT)).toBe(true);
+  expect(f.db.prepare("SELECT next_at FROM job WHERE kind='collect'").get()!.next_at).toBe(AT);
+  expect(f.db.prepare("SELECT COUNT(*) AS n FROM job WHERE kind='sync'").get()!.n).toBe(0);
+});
+
 test('sync now requeues a finished sync with fresh counters and leaves pending input to its collector', () => {
   const f = fixture();
   const id = ticket(f.db);
@@ -187,7 +197,7 @@ test('the event stream reconnects after a drop or a silent stream, marks health,
   const f = fixture();
   const id = ticket(f.db, { report: 'needs_you' });
   const session = String(f.db.prepare('SELECT session_id FROM ticket WHERE id=?').get(id)!.session_id);
-  let connects = 0, wakes = 0;
+  let connects = 0, wakes = 0, dues = 0;
   const logs: unknown[] = [];
   const streams: ((signal: AbortSignal, activity: () => void) => AsyncGenerator<unknown>)[] = [
     async function* () { yield { type: 'server.connected', data: {} }; throw new Error('socket hang up'); },
@@ -200,13 +210,14 @@ test('the event stream reconnects after a drop or a silent stream, marks health,
       clearInterval(keepalive);
     },
   ];
-  const events = startSessionEvents(f.cfg, f.db, { wake: () => { wakes++; }, log: (event) => logs.push(event), idleMs: 200, maxBackoffMs: 20,
+  const events = startSessionEvents(f.cfg, f.db, { wake: () => { wakes++; }, due: () => { dues++; }, log: (event) => logs.push(event), idleMs: 200, maxBackoffMs: 20,
     peer: () => ({ events: (signal: AbortSignal, activity: () => void) => streams[Math.min(connects++, streams.length - 1)]!(signal, activity) as never }) });
   try {
     for (let i = 0; i < 100 && f.db.prepare('SELECT chat_running_at FROM ticket WHERE id=?').get(id)!.chat_running_at === null; i++) await delay(20);
     expect(f.db.prepare('SELECT chat_running_at FROM ticket WHERE id=?').get(id)!.chat_running_at).not.toBeNull();
     expect(connects).toBeGreaterThanOrEqual(3);
     expect(wakes).toBeGreaterThanOrEqual(4);
+    expect(dues).toBeGreaterThanOrEqual(1);
     expect(logs).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'events.disconnected' })]));
   } finally { await events.close(); }
   expect(f.db.prepare("SELECT state FROM health WHERE dependency='opencode:events'").get()!.state).toBe('ok');

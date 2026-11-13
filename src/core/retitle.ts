@@ -119,6 +119,8 @@ export function applySessionEvent(db: DatabaseSync, event: SessionEvent, at = ut
   } else if (event.type === 'session.idle' || status === 'idle' || event.type === 'session.execution.succeeded'
     || event.type === 'session.execution.failed' || event.type === 'session.execution.interrupted') {
     db.prepare('UPDATE ticket SET chat_running_at=NULL WHERE id=?').run(ticket);
+    // An input Everflow sent is read by its collector, otherwise by the ticket's sync: either is due now
+    db.prepare("UPDATE job SET next_at=? WHERE ticket=? AND kind='collect' AND state='queued' AND next_at>?").run(at, ticket, at);
     syncNow(db, ticket, at);
   } else if (event.type === 'session.renamed') {
     // The echo of our own rename matches; anything else is put back
@@ -132,7 +134,8 @@ const STOPPED = Symbol('stopped');
 
 /** Keeps one OpenCode event stream open, reconnecting with backoff, and when no frame (keepalives included) came for `idleMs`. */
 export function startSessionEvents(cfg: Config, db: DatabaseSync, options: { wake: () => void; log: Log;
-  peer?: () => Pick<Peer, 'events'>; idleMs?: number; maxBackoffMs?: number }) {
+  // due: work an event made due (a finished turn's collector or sync) runs now instead of at the next tick
+  due?: () => void; peer?: () => Pick<Peer, 'events'>; idleMs?: number; maxBackoffMs?: number }) {
   const controller = new AbortController();
   const peer = options.peer ?? (() => connect(cfg, { timeoutMs: 2_147_483_647 }));
   const idleMs = options.idleMs ?? 60_000, maxBackoffMs = options.maxBackoffMs ?? 30_000;
@@ -161,7 +164,7 @@ export function startSessionEvents(cfg: Config, db: DatabaseSync, options: { wak
               healthOk(db, 'opencode:events');
               reconcileTitles(db);
               options.wake();
-            } else if (applySessionEvent(db, event)) options.wake();
+            } else if (applySessionEvent(db, event)) { options.wake(); options.due?.(); }
           }
         } finally { void iterator.return?.().catch(() => {}); }
       } catch (error) {

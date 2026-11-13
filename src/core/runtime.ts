@@ -420,7 +420,7 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
   function watchSessions() {
     if (!retitler || stopped) return;
     if (!events && db.prepare('SELECT 1 FROM ticket WHERE session_id IS NOT NULL AND approved_at IS NOT NULL LIMIT 1').get()) {
-      events = startSessionEvents(cfg, db, { wake: retitler.wake, log });
+      events = startSessionEvents(cfg, db, { wake: retitler.wake, log, due: () => queueMicrotask(tick) });
     }
     retitler.wake();
   }
