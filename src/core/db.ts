@@ -18,6 +18,14 @@ const sourceMuteTable = `CREATE TABLE IF NOT EXISTS source_mute (
 // Choices made on the page that override config defaults (triage and chat model/effort)
 const settingTable = `CREATE TABLE IF NOT EXISTS setting (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL);`;
 
+// Per-ticket and per-batch lookups the page state runs on every poll
+const lookupIndexes = `
+CREATE INDEX IF NOT EXISTS message_conversation ON message(conversation);
+CREATE INDEX IF NOT EXISTS message_batch ON message(batch);
+CREATE INDEX IF NOT EXISTS batch_ticket ON batch(ticket);
+CREATE INDEX IF NOT EXISTS turn_ticket ON turn(ticket);
+CREATE INDEX IF NOT EXISTS timeline_ticket ON timeline(ticket);`;
+
 // Source accounts paused on the page: their new input waits, untriaged and unforwarded, until switched back on
 const inputPauseTable = `CREATE TABLE IF NOT EXISTS input_pause (
   source TEXT NOT NULL, account TEXT NOT NULL, paused_at TEXT NOT NULL, PRIMARY KEY (source, account));`;
@@ -252,6 +260,7 @@ export function openDb(path: string): DatabaseSync {
     refineChat(db);
     refineConversation(db);
     refineBatch(db);
+    db.exec(lookupIndexes);
     db.exec('PRAGMA journal_mode = WAL');
     return db;
   } catch (error) {

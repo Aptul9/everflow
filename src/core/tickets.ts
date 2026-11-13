@@ -181,8 +181,8 @@ export function detail(db: DatabaseSync, ticket: number) {
   const owner = getTicket(db, ticket);
   const timeline = (db.prepare('SELECT * FROM timeline WHERE ticket=?').all(ticket) as unknown as TimelineEvent[])
     .sort((a, b) => utc(b.at).localeCompare(utc(a.at)) || b.id - a.id);
-  const messages = (db.prepare(`SELECT DISTINCT m.* FROM message m LEFT JOIN ticket_conversation l ON l.conversation=m.conversation
-    LEFT JOIN batch b ON b.id=m.batch WHERE l.ticket=? OR b.ticket=?`).all(ticket, ticket) as unknown as Message[])
+  const messages = (db.prepare(`SELECT m.* FROM message m WHERE m.conversation IN (SELECT conversation FROM ticket_conversation WHERE ticket=?)
+    UNION SELECT m.* FROM message m WHERE m.batch IN (SELECT id FROM batch WHERE ticket=?)`).all(ticket, ticket) as unknown as Message[])
     .sort((a, b) => utc(b.sent_at).localeCompare(utc(a.sent_at)) || b.id - a.id);
   return { ticket: owner, stage: stage(db, ticket), timeline, messages,
     refs: db.prepare('SELECT * FROM ticket_ref WHERE ticket=? ORDER BY kind,key,id').all(ticket),
