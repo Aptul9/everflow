@@ -411,11 +411,19 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
           });
         inFlight.set(job.id, { controller, done });
       }
-    } catch (error) { fatal(error, stage); } finally { ticking = false; retitler?.wake(); }
+    } catch (error) { fatal(error, stage); } finally { ticking = false; watchSessions(); }
   }
-  // Marks written by another process (the chat's ticket CLI) are picked up at the next tick
+  // Marks written by another process (the chat's ticket CLI) are picked up at the next tick. OpenCode is not contacted
+  // before the first approved chat exists, so the event stream starts with it.
   const retitler = options.titles ? startRetitler(cfg, db, { log }) : undefined;
-  const events = retitler ? startSessionEvents(cfg, db, { wake: retitler.wake, log }) : undefined;
+  let events: ReturnType<typeof startSessionEvents> | undefined;
+  function watchSessions() {
+    if (!retitler || stopped) return;
+    if (!events && db.prepare('SELECT 1 FROM ticket WHERE session_id IS NOT NULL AND approved_at IS NOT NULL LIMIT 1').get()) {
+      events = startSessionEvents(cfg, db, { wake: retitler.wake, log });
+    }
+    retitler.wake();
+  }
   const interval = setInterval(tick, cfg.jobs.collect_seconds * 1000);
   const beat = () => {
     let stage = 'heartbeat.store';
