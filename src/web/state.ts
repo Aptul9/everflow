@@ -78,18 +78,20 @@ function health(db: DatabaseSync, cfg: Config): Health[] {
 export function readState(db: DatabaseSync, cfg: Config, at = new Date()): OverviewState {
   const day = calendarDay(at);
   const groups: OverviewState['groups'] = { needs_you: [], working: [], waiting_them: [], failed: [], done_today: [], skipped: [] };
-  const tickets = db.prepare('SELECT id FROM ticket ORDER BY id').all().map((row) => ticketDetail(db, Number(row.id)).ticket)
-    .sort((a, b) => Number(b.lifecycle === 'proposed') - Number(a.lifecycle === 'proposed')
-      || utc(b.last_activity_at ?? b.created_at).localeCompare(utc(a.last_activity_at ?? a.created_at)) || b.id - a.id);
-  const cleared = new Set(db.prepare('SELECT id FROM ticket WHERE cleared_at IS NOT NULL').all().map((row) => Number(row.id)));
   // Finished cards and skipped batches leave the board at the end of the local day they finished
   const midnight = new Date(at);
   midnight.setHours(0, 0, 0, 0);
   const shownSince = utc(midnight.toISOString());
+  const finished = (row: { lifecycle?: unknown }) => row.lifecycle === 'done' || row.lifecycle === 'dismissed';
+  // Only cards on the board get their detail built: the page polls this every 10 s and closed tickets pile up
+  const tickets = db.prepare('SELECT id,lifecycle,closed_at,cleared_at FROM ticket ORDER BY id').all()
+    .filter((row) => !finished(row) || row.closed_at && row.cleared_at === null && utc(String(row.closed_at)) >= shownSince)
+    .map((row) => ticketDetail(db, Number(row.id)).ticket)
+    .sort((a, b) => Number(b.lifecycle === 'proposed') - Number(a.lifecycle === 'proposed')
+      || utc(b.last_activity_at ?? b.created_at).localeCompare(utc(a.last_activity_at ?? a.created_at)) || b.id - a.id);
   for (const ticket of tickets) {
-    if (ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed') {
-      if (ticket.closed_at && utc(ticket.closed_at) >= shownSince && !cleared.has(ticket.id)) groups[ticket.lifecycle === 'dismissed' ? 'skipped' : 'done_today'].push(ticket);
-    } else if (ticket.stage === 'Failed') groups.failed.push(ticket);
+    if (finished(ticket)) groups[ticket.lifecycle === 'dismissed' ? 'skipped' : 'done_today'].push(ticket);
+    else if (ticket.stage === 'Failed') groups.failed.push(ticket);
     else if (ticket.stage === 'Needs you') groups.needs_you.push(ticket);
     else if (ticket.stage === 'Waiting on them') groups.waiting_them.push(ticket);
     else groups.working.push(ticket);
