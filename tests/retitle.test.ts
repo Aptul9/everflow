@@ -91,15 +91,20 @@ test('a fresh database marks every chat once so existing titles move to column n
 test('a pass renames stale titles once, clears matching ones without a call, and waits while an input runs', async () => {
   const f = fixture();
   const stale = ticket(f.db, { report: 'needs_you' }), fine = ticket(f.db), busy = ticket(f.db), gone = ticket(f.db, { session: null });
+  const unread = ticket(f.db), later = ticket(f.db, { report: 'waiting_them' });
   f.db.prepare('UPDATE ticket SET session_title=? WHERE id=?').run(stageTitle(f.db, fine), fine);
   f.db.prepare("INSERT INTO job(kind,key,ticket,state,next_at,created_at,updated_at) VALUES ('collect','c',?,'running',?,?,?)").run(busy, AT, AT, AT);
-  for (const id of [stale, fine, busy, gone]) f.db.prepare('INSERT OR REPLACE INTO stage_dirty(ticket,at) VALUES (?,?)').run(id, AT);
+  // A sync due now reads the finished turn's report first; one due later does not hold the title
+  f.db.prepare("INSERT INTO job(kind,key,ticket,state,next_at,created_at,updated_at) VALUES ('sync','s1',?,'queued',?,?,?)").run(unread, AT, AT, AT);
+  f.db.prepare("INSERT INTO job(kind,key,ticket,state,next_at,created_at,updated_at) VALUES ('sync','s2',?,'queued','2099-01-01T00:00:00.000Z',?,?)").run(later, AT, AT);
+  for (const id of [stale, fine, busy, gone, unread, later]) f.db.prepare('INSERT OR REPLACE INTO stage_dirty(ticket,at) VALUES (?,?)').run(id, AT);
   const peer = fakePeer();
   await retitlePass(f.db, peer);
-  const session = String(f.db.prepare('SELECT session_id FROM ticket WHERE id=?').get(stale)!.session_id);
-  expect(peer.calls).toEqual([`rename ${session} [Needs you] #${stale} Synthetic`, `get ${session}`]);
+  const session = (id: number) => String(f.db.prepare('SELECT session_id FROM ticket WHERE id=?').get(id)!.session_id);
+  expect(peer.calls).toEqual([`rename ${session(stale)} [Needs you] #${stale} Synthetic`, `get ${session(stale)}`,
+    `rename ${session(later)} [Waiting on them] #${later} Synthetic`, `get ${session(later)}`]);
   expect(f.db.prepare('SELECT session_title FROM ticket WHERE id=?').get(stale)!.session_title).toBe(`[Needs you] #${stale} Synthetic`);
-  expect(marks(f.db)).toEqual([busy]);
+  expect(marks(f.db)).toEqual([busy, unread]);
 });
 
 test('a failed rename keeps the mark; a deleted chat drops it', async () => {

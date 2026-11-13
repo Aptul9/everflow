@@ -13,7 +13,10 @@ export const RETITLE_WAKE = Symbol.for('everflow.retitle.wake');
 export function wakeRetitle(): void { (globalThis as Record<symbol, (() => void) | undefined>)[RETITLE_WAKE]?.(); }
 
 type Log = (event: { source: string; code: string; [key: string]: unknown }) => void;
-const inputRunning = "SELECT 1 FROM job WHERE ticket=? AND state='running' AND kind IN ('collect','start_chat','forward')";
+// Work that writes the title itself after reading the chat: an input in flight, or a collector or sync running or due now
+// (a finished turn's report is not read yet, so renaming from the old one would flicker)
+const reportPending = `SELECT 1 FROM job WHERE ticket=? AND (state='running' AND kind IN ('collect','start_chat','forward','sync')
+  OR state='queued' AND kind IN ('collect','sync') AND next_at<=?)`;
 const mark = (db: DatabaseSync, ticket: number) => db.prepare('INSERT OR REPLACE INTO stage_dirty(ticket,at) VALUES (?,?)').run(ticket, utc());
 
 /** Renames every marked ticket whose derived title differs from the last one written; a write meanwhile keeps the mark. */
@@ -23,8 +26,8 @@ export async function retitlePass(db: DatabaseSync, peer: Pick<Peer, 'get' | 're
     const ticket = Number(row.ticket);
     const owner = db.prepare('SELECT session_id,approved_at,session_title FROM ticket WHERE id=?').get(ticket);
     if (!owner?.session_id || !owner.approved_at) { db.prepare('DELETE FROM stage_dirty WHERE ticket=?').run(ticket); continue; }
-    // The collector writes the title with its report; its job finishing marks the ticket again
-    if (db.prepare(inputRunning).get(ticket)) continue;
+    // That work writes the title with its report; its job finishing marks the ticket again
+    if (db.prepare(reportPending).get(ticket, utc())) continue;
     const session = String(owner.session_id), title = stageTitle(db, ticket);
     if (title !== owner.session_title) {
       try {

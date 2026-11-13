@@ -602,8 +602,8 @@ async function alignTitle(db: DatabaseSync, job: Job, ticket: number, peer: Peer
   if ((owner.lifecycle === 'done' || owner.lifecycle === 'dismissed') && owner.session_title === title) return true;
   if ((await peer.get(owner.session_id, options.signal)).title !== title) {
     if (!owns(db, job, now())) return false;
-    // Stage marks and session events rename first; a repair here means one of them missed this change
-    options.log?.({ source: 'jobs', code: 'title.repaired', job: job.id });
+    // Stage marks and session events rename first; a stale title with no mark left means one of them missed this change
+    if (!db.prepare('SELECT 1 FROM stage_dirty WHERE ticket=?').get(ticket)) options.log?.({ source: 'jobs', code: 'title.repaired', job: job.id });
     await peer.rename(owner.session_id, title, options.signal);
     if ((await peer.get(owner.session_id, options.signal)).title !== title) throw Object.assign(new Error('OpenCode title PATCH was not observed'), { status: 503 });
   }
