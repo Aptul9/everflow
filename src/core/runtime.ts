@@ -16,6 +16,7 @@ import { ingest, IngestError, schedule, sourceStart } from './ingest.ts';
 import { claim, complete, defer, enqueue, fail, hasPendingInput, healthError, healthOk, owns, startRenewal } from './jobs.ts';
 import type { Job } from './jobs.ts';
 import { handleTriage } from './kb-agent.ts';
+import { ACCOUNT_CHECK_MS, applyAccounts, readAccounts } from './meridian.ts';
 import { startRetitler, startSessionEvents } from './retitle.ts';
 import { connect } from './opencode.ts';
 import type { Peer } from './opencode.ts';
@@ -383,12 +384,21 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
       .catch((error: unknown) => log({ source: 'daemon', code: 'models.refresh-failed', ...failureFields(error, 'models.refresh') }))
       .finally(() => { refreshing = false; });
   };
+  let checking = false, checkedAt = 0;
+  // Meridian says whether each triage account can serve; a local read, no tokens
+  const checkAccounts = () => {
+    if (checking || !cfg.tickets.enabled || Date.now() - checkedAt < ACCOUNT_CHECK_MS) return;
+    checking = true; checkedAt = Date.now();
+    void readAccounts(cfg).then((verdicts) => { if (!stopped) applyAccounts(db, cfg, verdicts); })
+      .catch((error: unknown) => log({ source: 'daemon', code: 'accounts.check-failed', ...failureFields(error, 'accounts.check') }))
+      .finally(() => { checking = false; });
+  };
   function tick() {
     if (stopped || ticking) return;
     ticking = true;
     let stage = 'runtime.schedule';
     try {
-      stage = 'runtime.models'; refreshModels();
+      stage = 'runtime.models'; refreshModels(); checkAccounts();
       stage = 'runtime.schedule';
       schedule(db, cfg); stage = 'runtime.maintenance'; scheduleMaintenance(db, cfg);
       for (const id of reconcile) if (['done', 'cancelled', 'parked'].includes(String(db.prepare('SELECT state FROM job WHERE id=?').get(id)?.state))) reconcile.delete(id);

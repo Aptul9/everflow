@@ -166,6 +166,9 @@ function Row({ name, item, toggle }: { name: string; item: Health; toggle?: { di
       {toggle && <Switch on={!paused} label={`Triage ${name}`} disabled={toggle.disabled} onChange={toggle.onChange} />}
     </div>
     {item.last_error && <p className="mt-0.5 line-clamp-2 pl-4 text-[11px] leading-snug text-destructive">{item.last_error}</p>}
+    {item.usage && <p className="pl-4 text-[11px] text-muted-foreground">
+      {[item.usage.five_hour !== undefined && `5h ${Math.round(item.usage.five_hour * 100)}%`, item.usage.seven_day !== undefined && `7d ${Math.round(item.usage.seven_day * 100)}%`]
+        .filter(Boolean).join(' · ')}</p>}
     {(item.checkpoint || item.clients?.length) && <p className="pl-4 text-[11px] text-muted-foreground">
       {item.clients?.length ? <span className="font-medium text-foreground/70">{item.clients.join(', ')}</span> : null}
       {item.clients?.length && item.checkpoint ? ' · ' : null}
@@ -174,7 +177,8 @@ function Row({ name, item, toggle }: { name: string; item: Health; toggle?: { di
   </li>;
 }
 
-// Triage accounts in the order they are tried; a limited one is skipped until its retry time, so triage fails over on its own
+// Triage accounts in the order they are tried; health comes from Meridian's own account check where the route names a profile.
+// A limited or signed-out one is skipped until its retry time, so triage fails over on its own.
 function TriageAccounts(props: { routes: string[]; health: Health[]; names: Record<string, string> }) {
   if (!props.routes.length) return <p className="mt-1.5 text-xs text-muted-foreground">No providers configured.</p>;
   return <div className="mt-1.5 min-w-0">
