@@ -16,7 +16,7 @@ test('import and direct route handlers fail closed without a context or default 
   expect(ticketGet(new Request('http://localhost:1234/api/ticket/1'), '1').status).toBe(503);
   expect((await actionPost(new Request('http://localhost:1234/api/ticket/1/start', { method: 'POST', body: '{}' }), 'ticket', '1', 'start')).status).toBe(503);
   const scratch = webFixture();
-  const absent = resolve(scratch.root, 'data', 'dispatcher.db');
+  const absent = resolve(scratch.root, 'data', 'everflow-v1.db');
   const script = `import {stateGet} from ${JSON.stringify(pathToFileURL(resolve('dist/web/api.js')).href)};
     const result=stateGet(new Request('http://localhost:1234/api/state')); console.log(result.status);`;
   expect(execFileSync(process.execPath, ['--input-type=module', '-e', script], { cwd: scratch.root, encoding: 'utf8' }).trim()).toBe('503');
@@ -49,28 +49,30 @@ test('a missing initialized DB fails closed without creating an empty replacemen
   try {
     renameSync(fixture.path, `${fixture.path}.retained`);
     const response = await actionPost(new Request('http://127.0.0.1:12345/api/ticket/1/start', { method: 'POST',
-      headers: { host: '127.0.0.1:12345', origin: 'http://127.0.0.1:12345', 'x-dispatcher-token': current.token, 'content-type': 'application/json' }, body: '{}',
+      headers: { host: '127.0.0.1:12345', origin: 'http://127.0.0.1:12345', 'x-everflow-token': current.token, 'content-type': 'application/json' }, body: '{}',
     }), 'ticket', '1', 'start');
     expect(response.status).toBe(503);
     expect(existsSync(fixture.path)).toBe(false);
   } finally { release(current); }
 });
 
-test('terminal groups use local calendar day across the UTC boundary', () => {
+test('finished tickets leave the board at the end of the local day they closed', () => {
   const fixture = webFixture();
   using db = new DatabaseSync(fixture.path);
-  db.prepare("UPDATE ticket SET closed_at='2026-11-06T07:30:00Z' WHERE id=?").run(fixture.done);
-  db.prepare("UPDATE ticket SET closed_at='2026-11-06T08:30:00Z' WHERE id=?").run(fixture.dismissed);
+  // Los Angeles: 00:30 on 11-06 (today) and 23:30 on 11-05 (yesterday); the board is read at 01:00 on 11-06
+  db.prepare("UPDATE ticket SET closed_at='2026-11-06T08:30:00Z' WHERE id=?").run(fixture.done);
+  db.prepare("UPDATE ticket SET closed_at='2026-11-06T07:30:00Z' WHERE id=?").run(fixture.dismissed);
   const script = `import {DatabaseSync} from 'node:sqlite';
-    import {loadConfig} from ${JSON.stringify(pathToFileURL(resolve('dist/dispatcher/config.js')).href)};
+    import {loadConfig} from ${JSON.stringify(pathToFileURL(resolve('dist/core/config.js')).href)};
     import {readState} from ${JSON.stringify(pathToFileURL(resolve('dist/web/state.js')).href)};
     using db=new DatabaseSync(${JSON.stringify(fixture.path)},{readOnly:true});
     const state=readState(db,loadConfig(${JSON.stringify(fixture.config)}),new Date('2026-11-06T09:00:00Z'));
-    console.log(JSON.stringify(state.groups.done_today.map(ticket=>({id:ticket.id,stage:ticket.stage}))));`;
+    const pick=(list)=>list.map(ticket=>({id:ticket.id,stage:ticket.stage}));
+    console.log(JSON.stringify({done:pick(state.groups.done_today),skipped:pick(state.groups.skipped)}));`;
   const result = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
     env: { ...process.env, TZ: 'America/Los_Angeles' }, encoding: 'utf8',
   });
-  expect(JSON.parse(result)).toEqual([{ id: fixture.dismissed, stage: 'Dismissed' }]);
+  expect(JSON.parse(result)).toEqual({ done: [{ id: fixture.done, stage: 'Done' }], skipped: [] });
 });
 
 test('detail orders equal-time messages, refs and timeline deterministically newest first', () => {
@@ -87,6 +89,40 @@ test('detail orders equal-time messages, refs and timeline deterministically new
   const state = readState(db, fixture.cfg);
   expect(JSON.stringify(state)).not.toContain(fixture.config);
   expect(JSON.stringify(state)).not.toContain('HEALTH-SECRET');
+});
+
+test('a ticket card carries the newest triage reasoning', () => {
+  const fixture = webFixture();
+  using db = new DatabaseSync(fixture.path);
+  expect(ticketDetail(db, fixture.proposal).ticket.reason).toBeNull();
+  const event = db.prepare("INSERT INTO timeline(ticket,at,kind,actor,body,event_key) VALUES (?,?,'triage','agent',?,?)");
+  event.run(fixture.proposal, '2026-11-06T08:00:00.000000Z', 'New request', 'reason-old');
+  event.run(fixture.proposal, '2026-11-06T08:05:00.000000Z', 'Same issue, owner changed', 'reason-new');
+  db.prepare("INSERT INTO timeline(ticket,at,kind,actor,body,event_key) VALUES (?,?,'comment','you','later comment','reason-comment')").run(fixture.proposal, '2026-11-06T08:10:00.000000Z');
+  expect(ticketDetail(db, fixture.proposal).ticket.reason).toBe('Same issue, owner changed');
+  expect(readState(db, fixture.cfg).groups.needs_you.find((ticket) => ticket.id === fixture.proposal)!.reason).toBe('Same issue, owner changed');
+});
+
+test('a skipped batch carries the newest triage reason', () => {
+  const fixture = webFixture();
+  using db = new DatabaseSync(fixture.path);
+  const reason = (id: number) => readState(db, fixture.cfg).skipped.find((batch) => batch.id === id)!.reason;
+  expect(reason(fixture.skipped)).toBeNull();
+  const log = db.prepare("INSERT INTO triage_log(batch,conversation,at,action,reason,raw) SELECT id,conversation,?,'skip',?,NULL FROM batch WHERE id=?");
+  log.run('2026-11-06T08:00:00.000000Z', 'First look', fixture.skipped);
+  log.run('2026-11-06T08:05:00.000000Z', 'Greeting only', fixture.skipped);
+  expect(reason(fixture.skipped)).toBe('Greeting only');
+  expect(reason(fixture.backlog)).toBeNull();
+});
+
+test('an invalid triage leaves Problems once a later assessment of the same batch succeeds', () => {
+  const fixture = webFixture();
+  using db = new DatabaseSync(fixture.path);
+  const invalid = () => readState(db, fixture.cfg).problems.triage.map((item) => item.batch);
+  const batch = invalid()[0]!;
+  expect(batch).not.toBeNull();
+  db.prepare("INSERT INTO triage_log(batch,conversation,at,action,reason,raw) SELECT id,conversation,?,'skip','Chatter only',NULL FROM batch WHERE id=?").run(new Date().toISOString(), batch);
+  expect(invalid()).not.toContain(batch);
 });
 
 test('build entry points stay dynamic and never initialize an instance on import', () => {

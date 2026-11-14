@@ -3,12 +3,12 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
-import { utc } from '../dispatcher/time.ts';
+import { utc } from '../core/time.ts';
 import { createKernel, NativeError, spawnedIdentity } from '../windows/kernel.ts';
 import type { ProcessIdentity } from '../windows/kernel.ts';
 import type { ChildProcess, Serializable } from 'node:child_process';
 
-export type Source = 'outlook' | 'teams' | 'teamsrelay' | 'gchat' | 'gmail';
+export type Source = 'outlook' | 'teams' | 'teamsrelay' | 'gchat' | 'gmail' | 'oemail' | 'slack';
 export interface SourceMessage {
   source: Source;
   account: string;
@@ -23,7 +23,7 @@ export interface SourceMessage {
   attachments: { name: string; size?: number | null }[];
   ref: Record<string, any>;
 }
-export type SourceRecord = SourceMessage | { source: Source; accounts: string[] } | { source: Source; checkpoint: string; accounts?: string[]; coverage?: 'saved-history-replay' | 'recent-topics'; observed_at?: string };
+export type SourceRecord = SourceMessage | { source: Source; accounts: string[] } | { source: Source; account: string; muted: string[] } | { source: Source; checkpoint: string; accounts?: string[]; failed?: string[]; coverage?: 'saved-history-replay' | 'recent-topics'; observed_at?: string };
 export type Emit = (record: SourceRecord) => void;
 
 export class SourceError extends Error {
@@ -108,7 +108,7 @@ export function requiredOption(values: Record<string, unknown>, key: string): st
   return value;
 }
 
-function sourceOwner(): boolean { return process.connected === true && process.env.INBOX_DISPATCHER_SOURCE_OWNER === String(process.ppid); }
+function sourceOwner(): boolean { return process.connected === true && process.env.EVERFLOW_SOURCE_OWNER === String(process.ppid); }
 
 export interface ChildTracker { owner: ProcessIdentity; capture(pid: number): ProcessIdentity; send(value: unknown): void | Promise<void> }
 export async function trackSourceChild(child: ChildProcess, input?: ChildTracker): Promise<void> {
@@ -121,7 +121,7 @@ export async function trackSourceChild(child: ChildProcess, input?: ChildTracker
   }));
   let expected: ProcessIdentity | undefined;
   const notify = (active: boolean) => {
-    if (expected) return send({ type: 'dispatcher.child', pid: expected.pid, identity: { ...expected }, owner, active });
+    if (expected) return send({ type: 'everflow.child', pid: expected.pid, identity: { ...expected }, owner, active });
   };
   const exit = Promise.withResolvers<void>();
   const closed = () => exit.resolve();
@@ -134,14 +134,14 @@ export async function trackSourceChild(child: ChildProcess, input?: ChildTracker
   } catch (error) {
     child.off('close', closed);
     const diagnostic = error instanceof NativeError ? { code: error.code, status: error.status } : { code: 'source.unexpected' };
-    try { await send({ type: 'dispatcher.child-error', ...diagnostic }); } finally { throw error; }
+    try { await send({ type: 'everflow.child-error', ...diagnostic }); } finally { throw error; }
   }
 }
 
 export async function runSource(source: Source, options: { once: boolean; poll: number }, scan: (signal: AbortSignal) => void | Promise<void>, lifecycle: { wait?: (ms: number, signal: AbortSignal) => Promise<void>; close?: () => void | Promise<void> } = {}, signal?: AbortSignal): Promise<number> {
   const controller = new AbortController();
   const abort = () => controller.abort();
-  const message = (value: unknown) => { if (value && typeof value === 'object' && 'type' in value && value.type === 'dispatcher.stop') abort(); };
+  const message = (value: unknown) => { if (value && typeof value === 'object' && 'type' in value && value.type === 'everflow.stop') abort(); };
   const owned = sourceOwner();
   process.on('SIGINT', abort); process.on('SIGTERM', abort);
   process.on('message', message);

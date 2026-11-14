@@ -1,8 +1,8 @@
-# Workdesk
+# Everflow
 
-TypeScript inbox collection, local ticket proposals and approved OpenChamber chats. SQLite holds the queue and processed markers. Source read state is never changed. The dispatcher has no mail or chat send transport and no channel-based approvals or alerts.
+TypeScript inbox collection, local ticket proposals and approved OpenChamber chats. SQLite holds the queue and processed markers. Source read state is never changed. Everflow has no mail or chat send transport and no channel-based approvals or alerts.
 
-Workdesk was previously named inbox-dispatcher. The checkout and GitHub repository retain their existing names. Existing instance paths, database files, named-pipe locks and `INBOX_*` environment variables remain unchanged. `npm run workdesk -- --help` is the current launcher; `npm run inbox` remains a compatibility alias. No state migration is required for the rename or new sources.
+The name Everflow covers the GitHub repository, the checkout, `EVERFLOW_*` environment variables, named-pipe locks, OpenChamber session tags and build and scratch paths. `npm run everflow -- --help` is the only launcher. A build made before the last rename keeps its own names and paths, so it does not run against a renamed instance folder: rebuild instead. Chats created by such a build carry an older session tag; their session ids stay on the ticket, only the lost-create recovery lookup misses them. No database migration is required.
 
 Tickets and chats are disabled by default. Source collection has its own switches. Implementation and synthetic tests do not authorize live migration, source activation or chat activation.
 
@@ -12,9 +12,9 @@ Tickets and chats are disabled by default. Source collection has its own switche
 - MSVC C++ build tools with a Windows SDK. The recorded toolchain uses Visual Studio 2026 Build Tools. Native compilation also requires a node-gyp-compatible Python interpreter. It is build tooling only. The application, watchers, CLI and tests use TypeScript/Node.
 - Network access to the lockfile's dependency downloads during the private build. Source-specific access is separate and unnecessary for the disabled synthetic instance below.
 - For live triage, an explicit read-only knowledge-base root, model and ordered provider ids in `[triage]`. Provider routes come from `triage.provider_config_path` or the existing OpenCode JSONC settings. No provider is installed, started or selected automatically.
-- For approved chats, an already running OpenChamber server and its existing settings. An empty `opencode.url` reads `~/.config/openchamber/settings.json` for `desktopLocalPort` and `desktopUiPassword`. An explicit HTTP(S) `opencode.url` uses that server instead, with optional `INBOX_OPENCODE_PASSWORD`. `opencode.directory` identifies the session directory. A nonempty model uses `provider/model` form.
+- For approved chats, an already running OpenChamber server and its existing settings. An empty `opencode.url` reads `~/.config/openchamber/settings.json` for `desktopLocalPort` and `desktopUiPassword`. An explicit HTTP(S) `opencode.url` uses that server instead, with optional `EVERFLOW_OPENCODE_PASSWORD`. `opencode.directory` identifies the session directory. A nonempty model uses `provider/model` form.
 
-The dispatcher never starts, focuses, closes or restarts Outlook, Teams or providers. Google Chat has an explicit opt-in for minimized authentication bootstrap. Provider quota endpoints, provider lifecycle helpers and daemon autostart are absent. Source prerequisites are described below.
+Everflow never starts, focuses, closes or restarts Outlook, Teams or providers. Google Chat has an explicit opt-in for minimized authentication bootstrap. Provider quota endpoints, provider lifecycle helpers and daemon autostart are absent. Source prerequisites are described below.
 
 ## Build
 
@@ -28,9 +28,22 @@ This is the clean setup and production-build command. No checkout dependency ins
 
 The build supplies only named root inputs, including this README, and approved TypeScript/TSX/CSS source and the historical SQL test fixture. It excludes the default instance configuration, environment files, Git metadata, documentation trees, databases and user state. Source links, junctions and hard links are rejected. Dependency links and output traces must remain inside the stage. Project, Turbopack and tracing roots are pinned to that stage.
 
-Dependencies, npm configuration, profile, cache, node-gyp headers and temporary files are private to the stage. Build output currently lives under `C:/Users/Antonio/AppData/Local/Temp/opencode/inbox-dispatcher-v2/source-builds`, as declared in [build-artifact.ts](src/web/build-artifact.ts). The final JSON line contains `buildReceipt`, an absolute path to a completed `build-receipt.json`. A prepared stage is not a runnable artifact.
+Dependencies, npm configuration, profile, cache, node-gyp headers and temporary files are private to the stage. Build output currently lives under `C:/Users/Antonio/AppData/Local/Temp/opencode/everflow/source-builds`, as declared in [build-artifact.ts](src/web/build-artifact.ts). The final JSON line contains `buildReceipt`, an absolute path to a completed `build-receipt.json`. A prepared stage is not a runnable artifact.
 
 No checkout `dist` or `.next` is required. Do not invoke Next.js directly in the checkout. Staging is not an OS sandbox or a complete filesystem/network audit.
+
+## Daily use
+
+`scripts/everflow.ps1` drives one instance folder, by default `%LOCALAPPDATA%\everflow`, which holds `config.toml`, the database and `build.txt`. `build` runs `npm run build` in this checkout and writes the new receipt path to `build.txt`; no other step selects a build. `start`, `stop` and `status` call the pinned build's CLI with that config, and `open` opens the page of the running instance. `-Instance <folder>` selects another instance folder.
+
+```powershell
+.\scripts\everflow.ps1 build
+.\scripts\everflow.ps1 start
+.\scripts\everflow.ps1 open
+.\scripts\everflow.ps1 stop
+```
+
+A rebuilt instance uses the new build after `stop` and `start`.
 
 ## Select an artifact
 
@@ -42,12 +55,12 @@ $receipt = Read-Host 'Absolute completed buildReceipt path from npm run build'
 $build = Get-Content -LiteralPath $receipt -Raw | ConvertFrom-Json
 if ($build.status -ne 'complete') { throw 'Completed build receipt required' }
 $cli = Join-Path $build.root 'dist/cli.js'
-$scratch = Join-Path $env:LOCALAPPDATA ('Temp/opencode/inbox-dispatcher-v2/manual-' + [guid]::NewGuid().ToString('N'))
+$scratch = Join-Path $env:LOCALAPPDATA ('Temp/opencode/everflow/manual-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $scratch -ErrorAction Stop | Out-Null
 $config = Join-Path $scratch 'config.toml'
 ```
 
-Both receipt and config paths passed to the CLI must be absolute. Every non-help command validates a completed artifact before opening the explicit instance config. `INBOX_DISPATCHER_ARTIFACT` is an alternative explicit receipt input; examples retain `--artifact` on each command. The checkout package launcher forwards to the selected compiled CLI. No default config or artifact fallback exists.
+Both receipt and config paths passed to the CLI must be absolute. Every non-help command validates a completed artifact before opening the explicit instance config. `EVERFLOW_ARTIFACT` is an alternative explicit receipt input; examples retain `--artifact` on each command. The checkout package launcher forwards to the selected compiled CLI. No default config or artifact fallback exists.
 
 ## Disabled instance
 
@@ -82,7 +95,7 @@ enabled = false
 enabled = false
 ```
 
-Only a literal TOML `true` enables tickets or chats. Missing switches, strings such as `"true"` and other values stay disabled. Configuration is loaded at startup. A changed file requires a manual restart to take effect. The old shadow, dispatch, approval, delivery and watcher-command settings are ignored by [config.ts](src/dispatcher/config.ts).
+Only a literal TOML `true` enables tickets or chats. Missing switches, strings such as `"true"` and other values stay disabled. Configuration is loaded at startup. A changed file requires a manual restart to take effect. The old shadow, dispatch, approval, delivery and watcher-command settings are ignored by [config.ts](src/core/config.ts).
 
 ## CLI help
 
@@ -110,7 +123,7 @@ Verification requires generated winax settings `clang: 0`, both LTO settings `"f
 & node (Join-Path $build.root 'scripts/setup.ts') --verify-only --log (Join-Path $scratch 'native-verify.log')
 ```
 
-`--verify-only` and `--log` are setup-script flags, not build or dispatcher flags. Without `--verify-only`, standalone setup performs an installation in its own script root. That stateful mode must not be used on a completed evidence artifact.
+`--verify-only` and `--log` are setup-script flags, not build or Everflow flags. Without `--verify-only`, standalone setup performs an installation in its own script root. That stateful mode must not be used on a completed evidence artifact.
 
 ## Manual commands
 
@@ -133,7 +146,7 @@ The daemon is manually launched through the Windows native bridge. It owns a can
 
 ## Runtime defaults
 
-These values come from the exported schema in [config.ts](src/dispatcher/config.ts), not from a live instance or the excluded root configuration:
+These values come from the exported schema in [config.ts](src/core/config.ts), not from a live instance or the excluded root configuration:
 
 ```json
 {
@@ -141,7 +154,7 @@ These values come from the exported schema in [config.ts](src/dispatcher/config.
   "chats": { "enabled": false },
   "web": { "port": 8789 },
   "triage": { "providers": [], "model": "", "tool_limit": 8, "timeout_seconds": 120, "min_confidence": 0.75, "history_messages": 40 },
-  "windows": { "outlook": 300, "teams": 120, "teamsrelay": 120, "gchat": 120, "gmail": 300 },
+  "windows": { "outlook": 300, "teams": 120, "teamsrelay": 120, "gchat": 120, "gmail": 300, "oemail": 180, "slack": 120 },
   "jobs": {
     "triage_concurrency": 3,
     "turn_concurrency": 4,
@@ -157,7 +170,7 @@ These values come from the exported schema in [config.ts](src/dispatcher/config.
     "sync_seconds": 300,
     "heartbeat_seconds": 10,
     "archive_hours": 24,
-    "reopen_days": 14,
+    "reopen_days": 2,
     "purge_days": 30,
     "log_max_bytes": 10485760,
     "log_files": 5
@@ -166,27 +179,31 @@ These values come from the exported schema in [config.ts](src/dispatcher/config.
 }
 ```
 
-Quiet windows are 300 seconds for Outlook and Gmail, 120 seconds for Teams, relay and Google Chat. An own-only batch gets `answered` and starts no turn. Own messages remain timeline and next-turn context. A mixed batch still follows routing and triage rules.
+Quiet windows are 300 seconds for Outlook and Gmail, 180 seconds for OE mail, 120 seconds for Teams, relay, Google Chat and Slack. An own-only batch gets `answered` and starts no turn. Own messages remain timeline and next-turn context. A mixed batch still follows routing and triage rules.
 
 There are 3 triage slots and 4 reserved/in-flight chat-turn slots. Jobs hold fenced 120-second leases renewed every 30 seconds. Expired leases return to the queue. Collection, scheduling and daemon heartbeat use 10-second intervals. The page independently refreshes every 10 seconds. Direct-chat report sync runs every 300 seconds.
 
-Approved sessions can be archived after 24 hours idle once local and remote pending work is excluded. Linked work can reopen a done ticket within 14 days and unarchive its session. Later work creates a proposal with the old ticket as context. Purge clears only message text older than 30 days in unowned `not_on_us` batches without a routed conversation. It does not delete tickets or backup files. Logs rotate at 10485760 bytes with 5 retained files.
+Approved sessions can be archived after 24 hours idle once local and remote pending work is excluded. New input in the chat of a ticket closed within 2 days goes to triage, which gets the closed ticket's record (request, summary, how and when it was closed, last chat report and its newest 60 timeline entries) next to the chat history: only input that needs more work from Antonio on that request reopens it and unarchives its session; thanks, acknowledgements, call notices and other chatter are skipped and leave it closed; a different request becomes a new ticket that takes the chat, with the old one as context. Later work creates a proposal with the old ticket as context. Triage sees at most 30 candidate tickets, ranked by shared reference, shared people, open same-client and latest activity; a batch with a known client sees only that client's tickets. Purge clears only message text older than 30 days in unowned `not_on_us` batches without a routed conversation. It does not delete tickets or backup files. Logs rotate at 10485760 bytes with 5 retained files.
 
 ## Page and approval
 
-The page shows Needs you, Working, Waiting on them, Failed, Done today and Skipped, plus source/dependency health and Problems. Start approves the proposal. Open chat with note records Antonio's exact instruction and approves it. Dismiss records the optional reason. These local actions enqueue work; they do not perform provider or source writes in the HTTP request.
+The page shows Needs you, Working, Waiting on them, Failed, Done today and Skipped, plus source/dependency health, Problems and muted chats. Start approves the proposal. Open chat with note records Antonio's exact instruction and approves it. Dismiss records the optional reason as triage feedback. Done closes a ticket handled by hand with an optional note; it is not triage feedback, and within 2 days triage decides whether new linked messages reopen it. During the trial each chat brief asks the chat to report a failing or missing tool in the turn and in `99_Inbox/everflow-tool-issues.md` under the configured vault. These local actions enqueue work; they do not perform provider or source writes in the HTTP request.
 
-Chat creation requires both rollout switches enabled and explicit ticket approval. Chats off disables the chat actions during review. A created session has Antonio's normal OpenChamber tools and rules, with no dispatcher deny override. Outward-facing text requires his approval in that chat before sending. The page does not approve outward text. No Teams self-chat or other channel approves or alerts on tickets.
+Mute keeps a chat out of triage for 30 minutes, 1, 2 or 4 hours, until 9:00 the next morning (local time), 1 week, a custom number of minutes, hours or days up to one year, or until unmuted; the dialog shows when the mute ends. The page sends minutes (`minutes`, `mute_minutes`); `hours` and `mute_hours` from a page served by an older build are still accepted. It is offered on a Skipped batch and in the Dismiss dialog, where it mutes the dismissed ticket's routed conversations. New batches of a muted chat are stored as `muted` under Skipped, with no triage or forwarding; own-only batches stay `answered`. Make ticket on a muted batch ends that chat's mute. Muted chats are listed on the page with Unmute, and a timed mute ends by itself.
+
+Chat creation requires both rollout switches enabled and explicit ticket approval. Chats off disables the chat actions during review. A created session has Antonio's normal OpenChamber tools and rules, with no Everflow deny override. Outward-facing text requires his approval in that chat before sending. The page does not approve outward text. No Teams self-chat or other channel approves or alerts on tickets.
 
 The brief identifies source messages and knowledge-base contents as untrusted data. It requires canonical files, normal shared-write approval and no desktop activation. These instructions and the page controls are not a sandbox for tools in an approved normal chat.
 
-Each completed turn ends with `STATUS: <working|needs_you|waiting_them|blocked|done> | <one line>`. Reports use the assistant message identity and completion timestamp. A later direct-chat report is not overwritten by an older collector or polling time. The page shows the stored session title for finding the chat. No working session deep-link is assumed.
+Each completed turn ends with `STATUS: <working|needs_you|waiting_them|done> | <one line>`; `blocked` from older sessions still parses as Needs you. Reports use the assistant message identity and completion timestamp. A later direct-chat report is not overwritten by an older collector or polling time. The session title is `[<stage>] #<id> <title>` and follows the ticket's stage whatever changed it: each sync (every `sync_seconds`) compares it with the stage computed from the database and renames the session when they differ, so page actions (Done, Dismiss), a reopen, a turn running in the session and a reply without a valid STATUS are reflected within one sync. Open tickets are compared with the session itself, closed and dismissed ones with the title last written; a dismissed ticket gets a sync job only until its title says `[Dismissed]`; a ticket with a collector or input job running is left to that job. A reply without a valid STATUS still fails that ticket's sync and leaves the report unchanged. The page shows the stored session title for finding the chat. No working session deep-link is assumed.
 
 ## Backlog and migration
 
 The first explicit v2 start persists `triage_after`, defaulting to that start's UTC time. A quoted aware `[start] triage_after` can set the initial cutoff. The persisted value wins on later starts. Unbatched messages with `stored_at` strictly before the cutoff become `backlog`, regardless of their source `sent_at`. They appear under Skipped rather than generating old proposals. Make ticket converts a skipped batch into a ticket or reuses its current routed ticket. A fresh proposal is not approved for chat by that action. Dismiss reasons and Make ticket counts remain visible as feedback.
 
-`start` runs migration for its explicit instance before collection. For nonempty pre-v2 databases, [db.ts](src/dispatcher/db.ts) creates a uniquely named `.pre-v2-...db` SQLite backup and validates integrity and schema before upgrading. Source rows, cursors, numeric message identities and triage history are retained. Old work-item, draft, consent and send tables are removed from the migrated instance. Tickets begin empty. Old OpenChamber sessions are not resumed as v2 tickets.
+`start` runs migration for its explicit instance before collection. For nonempty pre-v2 databases, [db.ts](src/core/db.ts) creates a uniquely named `.pre-v2-...db` SQLite backup and validates integrity and schema before upgrading. Source rows, cursors, numeric message identities and triage history are retained. Old work-item, draft, consent and send tables are removed from the migrated instance. Tickets begin empty. Old OpenChamber sessions are not resumed as v2 tickets.
+
+Opening a v2 database adds the nullable `conversation.muted_until` column when it is missing. Existing rows keep their values, the schema version stays 2 and no backup is made for this step.
 
 Source lookback defaults to zero and is capped at seven days for initial collection. Outlook and Teams resume with a rolling seven-day lower bound. Relay retains its saved initial replay floor across restarts. This policy does not change the stored-at backlog cutoff.
 
@@ -194,7 +211,7 @@ Held database migration, reading a held backup for acceptance, making a live cop
 
 ## Failure handling
 
-The implementation is in [jobs.ts](src/dispatcher/jobs.ts), [kb-agent.ts](src/dispatcher/kb-agent.ts) and [chat.ts](src/dispatcher/chat.ts).
+The implementation is in [jobs.ts](src/core/jobs.ts), [kb-agent.ts](src/core/kb-agent.ts) and [chat.ts](src/core/chat.ts).
 
 | Class | Examples | Policy |
 |---|---|---|
@@ -202,11 +219,11 @@ The implementation is in [jobs.ts](src/dispatcher/jobs.ts), [kb-agent.ts](src/di
 | Job | HTTP 400/403; 401 after fresh sign-in; missing session; programming error; triage decision still invalid after repair | Park immediately. |
 | Unknown | Unclassified failures | Same backoff. Consume an attempt. Park on the fifth attempt. |
 
-Triage reads the new batch plus the latest 40 earlier batched messages of the same conversation, oldest first, each with `sent_at` and text capped at 2000 characters, and the current UTC time. `[triage] history_messages` sets that count, from 0 to 100. Triage gets one repair turn for an invalid decision. Both attempts share the maximum 8 tool calls and 120-second wall budget. Only read-only `vault_search` and `vault_read` are offered. Providers are tried in configured order after dependency failures, without quota checks or autostart. A missing or invalid configured route is a job error.
+Triage reads the new batch plus the latest 40 earlier batched messages of the same conversation, oldest first, each with `sent_at` and text capped at 2000 characters, and the current UTC time. `[triage] history_messages` sets that count, from 0 to 100. Triage gets one repair turn for an invalid decision. Both attempts share the maximum 8 tool calls and 120-second wall budget. Only read-only `vault_search` and `vault_read` are offered. Search is case-insensitive; a note matches when its path or text contains every word of the query. Folders are walked in name order, so numbered top-level folders rank first. One search reads at most 4096 notes, 256 KiB of each and 64 MiB in total; a read returns at most 32 KiB. Triage calls the provider directly, not through OpenChamber, so Antonio's normal instructions are not loaded; optional `[vault] guide` text describes the vault layout in the triage system prompt, and optional `[clients.<name>] role` text (up to 2000 characters) says what Antonio's work at that client is. Triage proposes only work Antonio himself has to do: a request put to him by name, with others or in a one-to-one chat, a question only he can answer, a decision or deliverable of his, an ask to his own team. A request meant for another person, a step only another team carries out, or mail where he is only in Cc is skipped unless it names him; a client role, where configured, decides what is his at that client. Providers are tried in configured order after dependency failures, without quota checks or autostart. A missing or invalid configured route is a job error.
 
 Jobs for one ticket preserve FIFO order. A parked job blocks later work. A parked triage batch retains its messages and absorbs later messages of its conversation. Later forwards merge behind the parked forward. Manual retry resets the job's attempts, failures, error and retry time; it does not erase immutable turn history or its recovery budget. Maintenance jobs `sync`, `archive` and `purge` retry indefinitely and report health instead of parking. They cannot be manually parked.
 
-A failed chat turn gets at most 2 nondependency recovery turns for its original input. Dependency recovery uses backoff without consuming or resetting that budget. Recovery notes require checking sent items, pull requests and files before repeating outside actions. Budget exhaustion parks the collector and shows the ticket as Failed.
+A failed chat turn gets at most 2 nondependency recovery turns for its original input. Dependency recovery uses backoff without consuming or resetting that budget. Recovery notes require checking sent items, pull requests and files before repeating outside actions. Budget exhaustion parks the collector and shows the ticket as Failed. A turn cut short by a later input in the same chat (a steer typed while it ran) never goes idle; once the session has worked on that later input, the collector closes the turn as interrupted and its batches as forwarded, with no recovery turn, because the chat already holds the input and sync collects the later report.
 
 Session lookup uses durable store/ticket metadata, including archived sessions in the same directory. Duplicate tag matches are rejected. Prompt id, exact text and target are committed before HTTP submission. Restart reconciles existing ids against reachable history and inbox before retrying a proven-absent prepared prompt. Admitted inputs are collected. Unreachable history retains the reservation and blocks later input. [crash-matrix.test.ts](tests/crash-matrix.test.ts) injects real SQLite faults, lost acknowledgements and lease handoffs at triage, start, forward, recovery, collect, sync, archive and purge boundaries, then reopens the store and checks the shared invariants. A session create still in flight when its lease expires is not modeled; the 30-second client timeout is shorter than the 120-second lease.
 
@@ -228,7 +245,7 @@ Use actual internal ids from ticket details, `job list` and Problems. Set `$tick
 & node $cli --artifact $receipt --config $config quarantine replay --all
 ```
 
-Inspect the exact job error, fix its config, source reader or parser cause, then retry the same job. CLI retry accepts parked work or failed queued work. Page Retry accepts parked work. Relink and merge refuse reserved, prepared, admitted or unresolved input rather than changing its target. Corrections write timeline entries. Closing preserves unresolved input for reconciliation.
+Inspect the exact job error, fix its config, source reader or parser cause, then retry the same job. CLI retry accepts parked work or failed queued work. Page Retry accepts parked work. Make ticket also accepts a `muted` batch. Relink and merge refuse reserved, prepared, admitted or unresolved input rather than changing its target. Corrections write timeline entries. Closing preserves unresolved input for reconciliation.
 
 Quarantine replay reuses the saved line after the underlying cause is fixed. It does not repair invalid bytes. Earlier unreplayed rows must be resolved first. Truncated input cannot be replayed. `--all` commits replay, messages, cursors and receipts together or rolls back the whole selection. Do not edit away failures or skip the barrier to advance a source.
 
@@ -241,20 +258,26 @@ $state = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/state"
 $state.health | ConvertTo-Json -Depth 5
 ```
 
-Inspect `dependency`, `state`, `since`, `last_ok`, `last_error` and account checkpoints. Restore the named source prerequisite or provider route, then let the existing retry run. If a watcher process exited, an explicit dispatcher stop/start is required; no app restart or TLS bypass is a remedy. Structured logs are beside the selected DB as `.log` and rotated suffixes. Raw unstructured watcher stderr is not retained because it can contain credentials.
+Inspect `dependency`, `state`, `since`, `last_ok`, `last_error` and account checkpoints. Restore the named source prerequisite or provider route, then let the existing retry run. If a watcher process exited, an explicit Everflow stop/start is required; no app restart or TLS bypass is a remedy. Structured logs are beside the selected DB as `.log` and rotated suffixes. Raw unstructured watcher stderr is not retained because it can contain credentials.
 
 ## Sources
 
-Source flags are independent of tickets/chats and default to disabled. Only enabled sources are launched. Default compiled entrypoints are `dist/watchers/outlook.js`, `dist/watchers/teams.js`, `dist/watchers/relay.js`, `dist/watchers/gchat.js` and `dist/watchers/gmail.js` inside the selected artifact. No external watcher checkout is used. Google watchers invoke their installed CLI dependencies, not external watcher code.
+Source flags are independent of tickets/chats and default to disabled. Only enabled sources are launched.
+
+An optional `accounts` list under `[sources.<name>]` limits an enabled source to those receiving accounts, compared case-insensitively. Messages of other accounts are dropped before storage and never reach triage. Account inventory and checkpoints still cover every account, so coverage stays complete and an account added later starts from that moment, without a backlog of the off period. Without the list every account of the source is on. The page shows an account outside the list as `off`. A changed list takes effect on the next start. Default compiled entrypoints are `dist/watchers/outlook.js`, `dist/watchers/teams.js`, `dist/watchers/relay.js`, `dist/watchers/gchat.js` and `dist/watchers/gmail.js` inside the selected artifact. No external watcher checkout is used. Google watchers invoke their installed CLI dependencies, not external watcher code.
 
 - Outlook: [outlook.ts](src/watchers/outlook.ts) attaches to an already running Classic Outlook instance. Modern Outlook is unsupported. Every configured Outlook account's DeliveryStore Inbox and Sent folders are covered, for item classes 43, 53 and 54. A missing account, unreadable folder or failed covered item prevents a complete checkpoint. Scans use UTC DASL date filters, minute resolution and 2 minutes of overlap. OLE wall-clock conversion handles local timezone and DST; ambiguous fall-back times use the first occurrence. Polling defaults to 60 seconds. Native NewMailEx is unavailable with the pinned winax bridge because connection-point disposal is not supported. Polling is authoritative.
 - Teams: [teams.ts](src/watchers/teams.ts) requires an explicit `[sources.teams] profile` identifying an existing signed-in local WebView profile. The reader uses its Cookies snapshot and adjacent Local State under the same Windows user, plus an instance-owned DPAPI cache. The runtime supplies private cache/snapshot paths; an optional bootstrap cache must be an explicitly selected compatible DPAPI cache. Expiring or rejected tokens refresh from the existing profile, never by restarting Teams. Missing profiles, unsupported cookies, expired accounts and certificate failures remain failures. Requests use the system CA store and never disable TLS validation. Cached, discovered and persisted expected accounts all contribute to coverage; the checkpoint requires every known account. Polling defaults to 30 seconds with 2 minutes of overlap. Source read receipts are never written.
 - Relay: [relay.ts](src/watchers/relay.ts) requires `[sources.teamsrelay] host`, absolute remote `data_dir` and `owner`, existing noninteractive SSH access and an already installed remote `sqlite3`. Only that owner's active stores are queried through `sqlite3 -readonly -json`, query-only transactions and checked arguments. Nothing is installed or deployed. The fixed initial floor, including a 2-minute overlap, is replayed on each 30-second default poll and after restart. List-scan time and `observed_at` are health evidence, not message-body completeness, so they do not advance that floor. Main saved message text is capped at 2000 characters; quoted context can be prefixed separately. Only retained saved history is available. Receiving-account/native-id deduplication preserves legacy relay identity.
 
 - Google Chat: [gchat.ts](src/watchers/gchat.ts) uses the installed `gweb` web-session CLI, without an OAuth project. `[sources.gchat] account` and `self_id` must explicitly identify the account and Google user id; every conversation read verifies the authenticated id. `gweb chat read SPACE_ID -n 1 --json --no-refresh` reports `self_id`. Rejected Google authentication attempts real HTTP cookie renewal and retries the read. By default the watcher passes `--no-refresh`, which forbids browser fallback. Only literal `[sources.gchat] browser_refresh = true` permits `--background-refresh`: gweb may open its saved Chrome profile minimized, capture existing sign-in cookies and retry. The saved session must contain a profile directory, recorded through explicit `gweb login --profile-dir "Profile 29" --wait 0`. No focus change, interactive sign-in or new consent is performed. A revoked session or required sign-in remains a visible failure; continuous authentication is not guaranteed. Older binaries fail on unsupported flags before session access. Polling defaults to 30 seconds; `topics` defaults to 200, allowed range 1..1000. Every space/DM returned by `chat ls` is reread, preserving native conversation/message/thread identities, own replies, edits, returned tombstones and attachment/link metadata. No files are downloaded. Topic limits, the upstream conversation-list limit and caps of 100 unread/20 read replies per topic mean this is recent-history coverage only. `coverage: "recent-topics"` and `observed_at` appear in source health. A successful scan does not advance a completeness cursor; unavailable older topics/replies remain outside coverage.
+- OE mail: [oemail.ts](src/watchers/oemail.ts) reads the OE Copilot agent mailboxes through its `/api/communication` gateway: noninteractive SSH to `[sources.oemail] host`, then `bash` and `curl` on that host call the agent on `127.0.0.1:3180` with the `API_KEY` read by `docker inspect oe-copilot-agent` into a 0700 temporary file (the Rust agent image has no shell or node, so `docker exec` cannot run there); the agent API key and Microsoft tokens never leave the OE host. The SSH user needs Docker access. `accounts` is required and lists the mailboxes read. Each poll sends GET reads only, for Inbox and Sent Items, from the floor minus two minutes, following next links up to 20 rounds. Messages are keyed by `InternetMessageId`; text is `UniqueBody` without quoted history, HTML converted to text, capped at 50000 characters. Drafts are skipped. Mail from others carries `ref.addressed`: `to` or `cc` when the mailbox is on that recipient line, `other` when it got the mail through a distribution list or Bcc. A mailbox the agent reports as not `ok` fails the scan with `oemail.account-unavailable` and holds the checkpoint.
 - Gmail: [gmail.ts](src/watchers/gmail.ts) uses the installed Google Workspace CLI `gws` and its existing authentication. `[sources.gmail] account` is required and must match `gmail users getProfile`. Access needs `gmail.readonly` or an existing broader mail scope; the watcher performs GET operations only. Polling defaults to 30 seconds, configurable through `poll_seconds`. It searches Inbox and Sent with epoch-second bounds, two minutes of overlap and all returned pages, up to 100 pages of 500 results. Full message bodies are MIME-decoded, preferring plain text over HTML alternatives, capped at 50000 characters. Attachment names and sizes are stored without fetching binaries. Large text bodies provided only as external attachment data fail explicitly with `gmail.body-unavailable`. Native thread ids group conversations; message ids deduplicate replays. Sent labels or a matching From address identify own replies. Unread labels, flags and source read state remain unchanged. A failed profile, page, message or MIME decode prevents the complete checkpoint. Gmail draft, spam and trash folders are not collected.
 
-Both Google watchers use [cli-json.ts](src/watchers/cli-json.ts): no shell, 60-second subprocess deadline (240 seconds for opted-in Chat browser refresh), 16 MiB output ceiling, cancellation and exact-identity child tracking. Raw CLI stderr is discarded; fixed error codes and exit status reach source health. Optional `executable` selects an installed CLI by name or path, never an arbitrary command string. A changed authenticated account fails closed. CLI installation, interactive login, browser focus and consent are never performed by the daemon.
+- Gmail and Google Chat through the OE agent: a `host` under `[sources.gmail]` or `[sources.gchat]` replaces the local CLI with the OE Copilot agent on that host, over the same SSH path as OE mail ([oe-google.ts](src/watchers/oe-google.ts)): `/api/communication/gmail/read` and `/api/communication/gchat/read`, so the Gmail grant and the Chat cookies stay on the OE host and no `gws` or `gweb` runs on this machine. `executable` and `browser_refresh` are ignored there. Records, `account` and `self_id` checks, checkpoints and coverage are the same as the CLI transports. Gmail sends its message reads 50 per SSH session; Chat lists the conversations once per poll and rereads, 8 per SSH session, only those whose last activity is not older than the replay floor, so an edit or deletion in a conversation with no newer message is not seen. Through the agent, Chat keeps only what concerns Antonio: the agent's group detail (read once per conversation) tells app DMs, which are never read, from DMs with people and unnamed group chats, which are kept whole, and named spaces, of which only the threads with a mention of Antonio or a message of his are kept, unless the space's name or id is listed in `[sources.gchat] full_spaces`. A mention is `@` followed by his display name in the text (`self_name`, or the name on his own messages); a mention sets `mentions_me`. Transport errors keep the OE mail codes (`oemail.ssh-failed`, `oemail.http` with the agent's status) under the `gmail` or `gchat` source. An agent Chat answer `409` means its Google session needs a new import: `autologin` target `oe-gchat`, on the OE host's renew timer, logs in to Google over HTTP and imports a fresh session. With `host`, `[sources.gmail] accounts` may list several agent mailboxes instead of one `account`; each is read as above and one checkpoint covers them all once every one is read. A Gmail grant the agent can no longer refresh is renewed by the `autologin` targets `oe-gmail-tecnomat` and `oe-gmail-itv` (PKCE consent in a headless browser).
+- Slack: [slack.ts](src/watchers/slack.ts) reads one workspace with the browser session slackcli keeps on the OE host for the communication MCP (`workspaces.json`, default `/opt/communication-mcp-state/slackcli/workspaces.json`, `store` overrides). `[sources.slack] host`, `account` (the receiving address used for routing), `self_id` (the Slack user id) and `workspace` (team id) are required. Over noninteractive SSH, `bash`, `jq` and `curl` on that host call the Slack Web API with that session, so the token and cookie never leave it; only read methods are allowed, nothing is marked read. Each poll calls `auth.test` (user and team must match), `client.counts` (per conversation of the user, its latest message and an `updated` time that thread replies also move) and `subscriptions.thread.getView` (followed threads), then `conversations.history` for conversations with either newer than the floor minus two minutes, reaching 3 days further back so that parents with a newer `latest_reply` are found, and `conversations.replies` for those threads, 25 calls per SSH session. Names come from `conversations.info` and `users.info`, cached for the watcher's life; a sender with a profile email is stored by that email. Joins, leaves and other system messages are skipped. DMs and group DMs are kept whole; a channel keeps only the threads that tag the user (`<@self_id>`), that he wrote in, or that Slack has him following; the rest of the channel never reaches Everflow. A reply under a parent more than 3 days older than the floor, in a thread the user does not follow, is not seen. Mentions of the user set `mentions_me`. A Slack `ok: false` fails the scan with `slack.api` and the method and Slack error as reason; `invalid_auth` means the session needs `autologin` target `oe-slack` on the OE host.
+
+Both CLI Google watchers use [cli-json.ts](src/watchers/cli-json.ts): no shell, 60-second subprocess deadline (240 seconds for opted-in Chat browser refresh), 16 MiB output ceiling, cancellation and exact-identity child tracking. Raw CLI stderr is discarded; fixed error codes and exit status reach source health. Optional `executable` selects an installed CLI by name or path, never an arbitrary command string. A changed authenticated account fails closed. CLI installation, interactive login, browser focus and consent are never performed by the daemon.
 
 Example source settings for a separately approved instance:
 
@@ -266,10 +289,21 @@ self_id = "GOOGLE_USER_ID"
 poll_seconds = 30
 topics = 200
 browser_refresh = false
+# full_spaces = ["Team space"]   # with host: named spaces read whole, not only threads that concern you
 
 [sources.gmail]
 enabled = false
 account = "me@example.invalid"
+poll_seconds = 60
+# host = "oe-vm"   # read through the OE Copilot agent instead of gws (same key under [sources.gchat] for gweb)
+# accounts = ["me@example.invalid", "other@example.invalid"]   # with host: several agent mailboxes
+
+[sources.slack]
+enabled = false
+host = "oe-vm"
+account = "me@example.invalid"
+self_id = "U00000000"
+workspace = "T00000000"
 poll_seconds = 60
 ```
 
@@ -277,7 +311,7 @@ The original three sources remain independent. Tesco is absent from the recorded
 
 ## Local request security
 
-The server binds only `127.0.0.1`. Before Next.js routing, Host must be exactly `127.0.0.1:<port>` or `localhost:<port>`. Each server start creates a fresh action token. POST requires `x-dispatcher-token` and an Origin matching that exact local Host. Reload the page after restart or a rejected token. No CORS access is granted. Source/model text is rendered as escaped React text, never raw HTML. Assets and fonts are local.
+The server binds only `127.0.0.1`. Before Next.js routing, Host must be exactly `127.0.0.1:<port>` or `localhost:<port>`. Each server start creates a fresh action token. POST requires `x-everflow-token` and an Origin matching that exact local Host. Reload the page after restart or a rejected token. No CORS access is granted. Source/model text is rendered as escaped React text, never raw HTML. Assets and fonts are local.
 
 The Host/Origin/token controls protect local page actions. They do not constrain normal approved-chat tools or grant outward-send/shared-write approval.
 
@@ -302,20 +336,20 @@ Keep both artifact variables and the fresh Git metadata. The inline TypeScript l
 
 ```powershell
 $env:TEST_BUILD_RECEIPT = $receipt
-$env:INBOX_DISPATCHER_ARTIFACT = $receipt
+$env:EVERFLOW_ARTIFACT = $receipt
 $run = @'
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { isolatedEnvironment } from './scripts/build.ts';
 import { readBuildReceipt } from './src/web/build-artifact.ts';
 const artifact = readBuildReceipt(process.env.TEST_BUILD_RECEIPT);
-assert.equal(process.env.INBOX_DISPATCHER_ARTIFACT, process.env.TEST_BUILD_RECEIPT);
+assert.equal(process.env.EVERFLOW_ARTIFACT, process.env.TEST_BUILD_RECEIPT);
 assert(process.env.TEST_TRACKED_LEGACY_PATHS !== undefined);
 assert(Array.isArray(JSON.parse(process.env.TEST_TRACKED_LEGACY_PATHS)));
 const env = { ...isolatedEnvironment(artifact.root, process.env),
   NODE_ENV: 'test',
   TEST_BUILD_RECEIPT: process.env.TEST_BUILD_RECEIPT,
-  INBOX_DISPATCHER_ARTIFACT: process.env.INBOX_DISPATCHER_ARTIFACT,
+  EVERFLOW_ARTIFACT: process.env.EVERFLOW_ARTIFACT,
   TEST_TRACKED_LEGACY_PATHS: process.env.TEST_TRACKED_LEGACY_PATHS };
 for (const args of [
   ['node_modules/typescript/bin/tsc', '--noEmit'],
@@ -338,7 +372,7 @@ try {
 
 ## Live checks
 
-[live-checks.ts](scripts/live-checks.ts) drives acceptance on owned scratch instances. Every command requires `--opt-in`, a `--scenario` name and a `--run-root` under `C:/Users/Antonio/AppData/Local/Temp/opencode/inbox-dispatcher-v2/live-checks`. Run it with Node from the completed stage, never from the checkout.
+[live-checks.ts](scripts/live-checks.ts) drives acceptance on owned scratch instances. Every command requires `--opt-in`, a `--scenario` name and a `--run-root` under `C:/Users/Antonio/AppData/Local/Temp/opencode/everflow/live-checks`. Run it with Node from the completed stage, never from the checkout.
 
 Before any connection, spawn or file read, the guard refuses the held database, its sidecars and the relay token. It also refuses case, stream, trailing-dot and short-name spellings, traversal, paths outside the run root, link or junction components, hard-linked state and existing databases not recorded in the run manifest. The only accepted seed is `data/backups/pre-review-resume-20261104-234928.db`, copied into a fresh run. A final-component symlink among read-only inputs is resolved to its declared target, which then passes the same checks.
 

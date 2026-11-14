@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { expect, test } from 'vitest';
-import { openDb } from '../src/dispatcher/db.ts';
-import * as api from '../src/dispatcher/tickets.ts';
+import { openDb } from '../src/core/db.ts';
+import * as api from '../src/core/tickets.ts';
 import { scratch } from './support.ts';
 
 const { extractRefs } = api;

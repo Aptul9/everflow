@@ -5,15 +5,15 @@ import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import type { NextServer, NextServerOptions, RequestHandler } from 'next/dist/server/next.js';
-import { loadConfig } from './dispatcher/config.ts';
+import { loadConfig } from './core/config.ts';
 import { allowedHost, errorResponse, guardPost } from './web/api.ts';
 import { initialize, release } from './web/instance.ts';
 import type { WebInstance } from './web/instance.ts';
 import { readBuildReceipt, samePath } from './web/build-artifact.ts';
-import { acquireInstance, atomicJson, cleanupChildren, DaemonError, instancePaths, readDaemonReceipt, readJson } from './dispatcher/daemon.ts';
-import type { DaemonReceipt } from './dispatcher/daemon.ts';
-import { migrate, openDb, prepareStart } from './dispatcher/db.ts';
-import { startRuntime, validateRuntimeConfig } from './dispatcher/runtime.ts';
+import { acquireInstance, atomicJson, cleanupChildren, DaemonError, instancePaths, readDaemonReceipt, readJson } from './core/daemon.ts';
+import type { DaemonReceipt } from './core/daemon.ts';
+import { migrate, openDb, prepareStart } from './core/db.ts';
+import { startRuntime, validateRuntimeConfig } from './core/runtime.ts';
 import { createKernel } from './windows/kernel.ts';
 
 export async function startServer(options: { configPath: string; buildReceipt: string; port?: number }) {
@@ -21,7 +21,7 @@ export async function startServer(options: { configPath: string; buildReceipt: s
   const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   if (!samePath(moduleRoot, artifact.root) || !samePath(process.cwd(), artifact.root)) throw new Error('Launch the compiled staged server with its staged working directory');
   if (!options || typeof options.configPath !== 'string' || !isAbsolute(options.configPath)) throw new Error('Absolute explicit instance config required');
-  process.env.INBOX_DISPATCHER_BUILD_ROOT = artifact.root;
+  process.env.EVERFLOW_BUILD_ROOT = artifact.root;
   const next = createRequire(import.meta.url)('next') as (options: NextServerOptions) => Pick<NextServer, 'prepare' | 'close' | 'getRequestHandler'>;
   const config = loadConfig(options.configPath);
   const requestedPort = options.port ?? config.web.port;
@@ -140,7 +140,8 @@ export async function startDaemon(options: { configPath: string; buildReceipt: s
       metadata: { pid: receipt.pid, created: receipt.created, config_path: receipt.config_path, port: receipt.port, artifact: receipt.artifact },
       onChildren: (children) => { receipt.children = children; save(); },
       onHeartbeat: () => { receipt.heartbeat_at = new Date().toISOString(); save(); },
-      onError: (error) => { if (starting) { startupFailed = true; startupFailure = error; } else stop(); } });
+      onError: (error) => { if (starting) { startupFailed = true; startupFailure = error; } else stop(); },
+      titles: cfg.tickets.enabled === true && cfg.chats.enabled === true });
     if (startupFailed) throw startupFailure;
     starting = false;
     receipt.status = 'ready'; save(); atomicJson(paths.ready, receipt); requested();

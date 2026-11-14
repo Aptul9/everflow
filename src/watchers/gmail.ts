@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { cliJson } from './cli-json.ts';
 import type { JsonQuery } from './cli-json.ts';
+import { oeGoogleRead } from './oe-google.ts';
+import type { OeGoogleRead } from './oe-google.ts';
+import { sshOeCall } from './oemail.ts';
 import { accountNames, emitChanged, isEntrypoint, publishAccounts, requiredOption, runSource, sourceStamp, sourceText, SourceError, watcherArguments, writeDiagnostic, writeRecord } from './source.ts';
 import type { Emit, SourceMessage } from './source.ts';
 import { htmlToText } from './teams.ts';
@@ -64,13 +67,23 @@ export function createGmailState(options: { account: string; since: string; expe
   return { account, floor: sourceStamp(options.since), accounts: new Set<string>(), reported: '', seen: new Map<string, string>() };
 }
 
+function emitMail(state: ReturnType<typeof createGmailState>, record: SourceMessage, emit: Emit): void {
+  if (record.sent_at < new Date(Date.parse(state.floor) - 120000).toISOString()) return;
+  if (state.seen.size >= 100000 && !state.seen.has(JSON.stringify(['gmail', state.account, record.message_id]))) throw new SourceError('gmail', 'gmail.message-limit');
+  emitChanged(state.seen, record, emit);
+}
+
+function search(state: ReturnType<typeof createGmailState>): string {
+  return `{in:inbox in:sent} after:${Math.floor(Date.parse(state.floor) / 1000) - 120}`;
+}
+
 export async function scanGmail(query: JsonQuery, state: ReturnType<typeof createGmailState>, emit: Emit, now = () => new Date().toISOString(), signal?: AbortSignal): Promise<void> {
   const started = sourceStamp(now());
   const command = (path: string[], params: Record<string, unknown>) => query(['gmail', 'users', ...path, '--params', JSON.stringify({ userId: 'me', ...params }), '--format', 'json'], signal);
   const profile = profileSchema.safeParse(await command(['getProfile'], {}));
   if (!profile.success || profile.data.emailAddress.toLowerCase() !== state.account) throw new SourceError('gmail', 'gmail.account-mismatch');
   publishAccounts('gmail', state, [state.account], emit);
-  const q = `{in:inbox in:sent} after:${Math.floor(Date.parse(state.floor) / 1000) - 120}`;
+  const q = search(state);
   const tokens = new Set<string>(), ids = new Set<string>();
   let pageToken: string | undefined;
   for (let pages = 0; ; pages++) {
@@ -81,10 +94,7 @@ export async function scanGmail(query: JsonQuery, state: ReturnType<typeof creat
     for (const item of parsed.data.messages ?? []) {
       if (ids.has(item.id)) continue;
       ids.add(item.id);
-      const record = normalize(await command(['messages', 'get'], { id: item.id, format: 'full' }), state.account, item);
-      if (record.sent_at < new Date(Date.parse(state.floor) - 120000).toISOString()) continue;
-      if (state.seen.size >= 100000 && !state.seen.has(JSON.stringify(['gmail', state.account, record.message_id]))) throw new SourceError('gmail', 'gmail.message-limit');
-      emitChanged(state.seen, record, emit);
+      emitMail(state, normalize(await command(['messages', 'get'], { id: item.id, format: 'full' }), state.account, item), emit);
     }
     pageToken = parsed.data.nextPageToken;
     if (!pageToken) break;
@@ -95,9 +105,52 @@ export async function scanGmail(query: JsonQuery, state: ReturnType<typeof creat
   state.floor = started;
 }
 
+// Through the OE agent: the agent's Gmail paths answer Google's own JSON, so pages and messages parse as above; the message
+// reads of one scan share SSH sessions.
+export async function scanOeGmail(read: OeGoogleRead, state: ReturnType<typeof createGmailState>, emit: Emit, now = () => new Date().toISOString(), signal?: AbortSignal): Promise<void> {
+  const started = sourceStamp(now());
+  const list = (pageToken?: string) => ({ path: `messages?q=${encodeURIComponent(search(state))}&maxResults=500${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}` });
+  let [profileValue, value] = await read([{ path: 'profile' }, list()], signal);
+  const profile = profileSchema.safeParse(profileValue);
+  if (!profile.success || profile.data.emailAddress.toLowerCase() !== state.account) throw new SourceError('gmail', 'gmail.account-mismatch');
+  publishAccounts('gmail', state, [state.account], emit);
+  const tokens = new Set<string>(), ids = new Set<string>(), items: { id: string; threadId: string }[] = [];
+  for (let pages = 0; ; pages++) {
+    if (pages >= 100) throw new SourceError('gmail', 'gmail.pagination-limit');
+    const parsed = pageSchema.safeParse(value);
+    if (!parsed.success) throw new SourceError('gmail', 'gmail.response-shape');
+    for (const item of parsed.data.messages ?? []) if (!ids.has(item.id)) { ids.add(item.id); items.push(item); }
+    const pageToken = parsed.data.nextPageToken;
+    if (!pageToken) break;
+    if (tokens.has(pageToken)) throw new SourceError('gmail', 'gmail.pagination-limit');
+    tokens.add(pageToken);
+    [value] = await read([list(pageToken)], signal);
+  }
+  const mails = await read(items.map((item) => ({ path: `messages/${encodeURIComponent(item.id)}?format=full` })), signal);
+  mails.forEach((mail, index) => emitMail(state, normalize(mail, state.account, items[index]!), emit));
+  emit({ source: 'gmail', accounts: [state.account], checkpoint: started });
+  state.floor = started;
+}
+
+// Several agent mailboxes in one source: each scanned as above, one checkpoint for all of them once every one is read.
+export async function scanOeGmails(mailboxes: { read: OeGoogleRead; state: ReturnType<typeof createGmailState> }[], emit: Emit, now = () => new Date().toISOString(), signal?: AbortSignal): Promise<void> {
+  const started = sourceStamp(now());
+  for (const { read, state } of mailboxes) await scanOeGmail(read, state, (record) => { if (!('checkpoint' in record)) emit(record); }, () => started, signal);
+  emit({ source: 'gmail', accounts: mailboxes.map(({ state }) => state.account).sort(), checkpoint: started });
+}
+
 export async function gmailMain(args = process.argv.slice(2)): Promise<number> {
-  const options = watcherArguments(args, { account: { type: 'string' }, executable: { type: 'string' } });
-  const state = createGmailState({ account: requiredOption(options.values, 'account'), since: options.since, expectedAccounts: options.expectedAccounts });
+  const options = watcherArguments(args, { account: { type: 'string', multiple: true }, executable: { type: 'string' }, host: { type: 'string' } });
+  const accounts = accountNames(options.values.account ?? []);
+  if (options.values.host !== undefined) {
+    // The agent can hold several Gmail grants: --account once per mailbox.
+    if (!accounts.length || options.expectedAccounts.some((name) => !accounts.includes(name))) throw new SourceError('gmail', 'gmail.account-mismatch');
+    const call = sshOeCall(requiredOption(options.values, 'host'), 'gmail');
+    const mailboxes = accounts.map((account) => ({ read: oeGoogleRead(call, 'gmail', account, 50), state: createGmailState({ account, since: options.since }) }));
+    return runSource('gmail', options, (signal) => scanOeGmails(mailboxes, writeRecord, undefined, signal));
+  }
+  if (accounts.length !== 1) throw new TypeError('source.option-required');
+  const state = createGmailState({ account: accounts[0]!, since: options.since, expectedAccounts: options.expectedAccounts });
   const executable = options.values.executable ?? 'gws';
   return runSource('gmail', options, (signal) => scanGmail((args, stop) => cliJson('gmail', executable, args, stop), state, writeRecord, undefined, signal));
 }

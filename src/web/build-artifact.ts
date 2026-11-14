@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import type { NextConfig } from 'next';
 
-export const BUILD_PARENT = resolve('C:/Users/Antonio/AppData/Local/Temp/opencode/inbox-dispatcher-v2/source-builds');
+export const BUILD_PARENT = resolve('C:/Users/Antonio/AppData/Local/Temp/opencode/everflow/source-builds');
 export const BUILD_MARKER = '.source-build.json';
 
 export interface SourceFile { path: string; sha256: string }

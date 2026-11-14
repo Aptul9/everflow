@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { Config } from '../dispatcher/config.ts';
+import type { Config } from '../core/config.ts';
 
 export interface WebInstance {
   config: Config;
@@ -10,7 +10,7 @@ export interface WebInstance {
   token: string;
 }
 
-const key = Symbol.for('inbox-dispatcher.web.instance');
+const key = Symbol.for('everflow.web.instance');
 const owner = process as NodeJS.Process & { [key]?: WebInstance };
 
 export class HttpError extends Error {
@@ -31,7 +31,10 @@ export function initialize(current: WebInstance): void {
   using db = new DatabaseSync(current.config.db.path, { readOnly: true, timeout: 30_000 });
   if (db.prepare('PRAGMA user_version').get()!.user_version !== 2
     || !db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='ticket'").get()
-    || !db.prepare('PRAGMA table_info(ticket)').all().some((column) => column.name === 'session_title')) {
+    || !db.prepare('PRAGMA table_info(ticket)').all().some((column) => column.name === 'session_title')
+    || !db.prepare('PRAGMA table_info(conversation)').all().some((column) => column.name === 'muted_until')
+    || !db.prepare('PRAGMA table_info(batch)').all().some((column) => column.name === 'cleared_at')
+    || !db.prepare('PRAGMA table_info(ticket)').all().some((column) => column.name === 'cleared_at')) {
     throw new Error('Web instance requires an initialized current database');
   }
   owner[key] = current;

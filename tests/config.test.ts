@@ -1,7 +1,7 @@
 import { existsSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { expect, test } from 'vitest';
-import { clientsFor, loadConfig, readJsonc } from '../src/dispatcher/config.ts';
+import { clientsFor, loadConfig, readJsonc } from '../src/core/config.ts';
 import { scratch } from './support.ts';
 
 function configFile(text = '') {
@@ -22,7 +22,7 @@ test('defaults to disabled tickets/chats and every approved policy value', () =>
     triage_concurrency: 3, turn_concurrency: 4, lease_seconds: 120, renew_seconds: 30,
     backoff_initial_seconds: 10, backoff_max_seconds: 1800, backoff_jitter: 0.2,
     max_attempts: 5, max_recoveries: 2, dependency_failure_threshold: 3, collect_seconds: 10, sync_seconds: 300, heartbeat_seconds: 10,
-    archive_hours: 24, reopen_days: 14, purge_days: 30, log_max_bytes: 10485760, log_files: 5,
+    archive_hours: 24, reopen_days: 2, purge_days: 30, log_max_bytes: 10485760, log_files: 5,
   });
 });
 
@@ -46,6 +46,7 @@ accounts = ["Me@Example.Invalid"]
 domains = ["Example.Invalid"]
 keywords = ["synthetic"]
 custom = "retained"
+role = "Reviewer of assigned work only"
 [sources.teams]
 account = "source@example.invalid"
 read_only = true
@@ -55,9 +56,9 @@ gchat = 120
   const cfg = loadConfig(relative(process.cwd(), config));
   expect(cfg._config_path).toBe(resolve(config));
   expect(cfg.db).toEqual({ path });
-  expect(cfg.vault).toEqual({ path: join(root, 'knowledge') });
+  expect(cfg.vault).toEqual({ path: join(root, 'knowledge'), guide: '' });
   expect(cfg.opencode).toMatchObject({ directory: join(root, 'knowledge'), model: 'synthetic/model' });
-  expect(cfg.clients).toMatchObject({ synthetic: { accounts: ['Me@Example.Invalid'], domains: ['Example.Invalid'], keywords: ['synthetic'], custom: 'retained' } });
+  expect(cfg.clients).toMatchObject({ synthetic: { accounts: ['Me@Example.Invalid'], domains: ['Example.Invalid'], keywords: ['synthetic'], custom: 'retained', role: 'Reviewer of assigned work only' } });
   expect(cfg.sources).toEqual({ teams: { account: 'source@example.invalid', read_only: true } });
   expect(cfg.windows).toMatchObject({ gchat: 120 });
   expect(existsSync(path)).toBe(false);

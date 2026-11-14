@@ -70,14 +70,14 @@ test('cookie accounts retain expired inventory, latest expiry, alternate UPN cla
   ]);
 });
 
-test('dispatcher cache uses DPAPI atomic writes, bootstrap stays unchanged and TeamsMCP target is refused', () => {
+test('everflow cache uses DPAPI atomic writes, bootstrap stays unchanged and TeamsMCP target is refused', () => {
   const { root } = scratch('phase7-auth-cache-');
   const dpapi = createDpapi();
   const bootstrap = join(root, 'bootstrap.bin');
   const state: TeamsAuthState = { version: 1, accounts: [account()] };
   fs.writeFileSync(bootstrap, dpapi.protect(Buffer.from(JSON.stringify(state))));
   const before = fs.readFileSync(bootstrap);
-  const path = join(root, 'dispatcher', 'tokens.bin');
+  const path = join(root, 'everflow', 'tokens.bin');
   const cache = protectedTeamsCache({ path, bootstrap }, dpapi);
   expect(cache.load()).toMatchObject(state);
   cache.save({ ...state, attempted: now / 1000 });
@@ -265,7 +265,7 @@ test('protected cache refuses a junction alias into the read-only bootstrap dire
   fs.mkdirSync(vendor, { recursive: true });
   const dpapi = createDpapi(), bootstrap = join(vendor, 'tokens.bin');
   fs.writeFileSync(bootstrap, dpapi.protect(Buffer.from(JSON.stringify({ version: 1, accounts: [account()] }))));
-  const before = fs.readFileSync(bootstrap), alias = join(root, 'dispatcher-cache');
+  const before = fs.readFileSync(bootstrap), alias = join(root, 'everflow-cache');
   fs.symlinkSync(vendor, alias, 'junction');
   const cache = protectedTeamsCache({ path: join(alias, 'tokens.bin'), bootstrap }, dpapi);
   expect(() => cache.save({ version: 1, accounts: [account('new@example.invalid')] })).toThrow(/auth.cache-path/);

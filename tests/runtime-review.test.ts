@@ -5,12 +5,12 @@ import { PassThrough } from 'node:stream';
 import type { ChildProcess } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, expect, test, vi } from 'vitest';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { openDb, prepareStart } from '../src/dispatcher/db.ts';
-import { claim, complete, enqueue, park } from '../src/dispatcher/jobs.ts';
-import { scheduleMaintenance, startRuntime } from '../src/dispatcher/runtime.ts';
-import { startChat } from '../src/dispatcher/chat.ts';
-import { connect } from '../src/dispatcher/opencode.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { openDb, prepareStart } from '../src/core/db.ts';
+import { claim, complete, enqueue, park } from '../src/core/jobs.ts';
+import { scheduleMaintenance, startRuntime } from '../src/core/runtime.ts';
+import { startChat } from '../src/core/chat.ts';
+import { connect } from '../src/core/opencode.ts';
 import * as native from '../src/windows/kernel.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
 import { trackSourceChild } from '../src/watchers/source.ts';
@@ -67,7 +67,7 @@ test('I1 chats-off old pre-turn reservation looks up and persists an accepted ta
   using db = openDb(f.path); prepareStart(db);
   const owner = ticket(db, 'Accepted old create');
   const store = JSON.parse(String(db.prepare("SELECT detail FROM health WHERE dependency='daemon'").get()!.detail)).store_id;
-  peer.sessions.set('ses_accepted', remoteSession('ses_accepted', f.cfg.opencode.directory, { inbox_dispatcher: { store_id: store, ticket: owner } }));
+  peer.sessions.set('ses_accepted', remoteSession('ses_accepted', f.cfg.opencode.directory, { everflow: { store_id: store, ticket: owner } }));
   const id = enqueue(db, 'start_chat', 'old-create-lookup', {}, owner);
   const job = claim(db, f.cfg, 'old-create-run')!;
   await startChat(f.cfg, db, job, { peer: connect(f.cfg) });
@@ -81,7 +81,8 @@ test('I1 chats-off old pre-turn reservation looks up and persists an accepted ta
 test.each(['sync', 'archive'] as const)('M1 prior-day completed %s due time survives a new day key', (kind) => {
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-11-06T23:59:00Z'));
   const f = fixture(); using db = openDb(f.path); prepareStart(db);
-  const owner = ticket(db, 'Maintenance'); db.prepare("UPDATE ticket SET session_id='synthetic-session' WHERE id=?").run(owner);
+  const owner = ticket(db, 'Maintenance');
+  db.prepare("UPDATE ticket SET session_id='synthetic-session',session_title=? WHERE id=?").run(`[Working] #${owner} Maintenance`, owner);
   const old = enqueue(db, kind, `${kind}:ticket:${owner}:2026-11-06`, {}, owner);
   db.prepare("UPDATE job SET state='done',next_at='2026-11-07T00:04:00.000000Z' WHERE id=?").run(old);
   vi.setSystemTime(new Date('2026-11-07T00:00:00Z')); scheduleMaintenance(db, f.cfg);
@@ -95,10 +96,10 @@ function fakeWatcher() {
   const child: any = new EventEmitter();
   Object.assign(child, { pid: 1000000101, stdout: new PassThrough(), stderr: new PassThrough(), connected: true, exitCode: null, signalCode: null });
   child.send = (value: any, callback?: () => void) => {
-    callback?.(); if (value.type !== 'dispatcher.stop') return;
+    callback?.(); if (value.type !== 'everflow.stop') return;
     child.connected = false; child.exitCode = 0; child.stdout.end(); child.stderr.end(); queueMicrotask(() => child.emit('close', 0));
   };
-  child.kill = () => { child.send({ type: 'dispatcher.stop' }); return true; };
+  child.kill = () => { child.send({ type: 'everflow.stop' }); return true; };
   return child as ChildProcess & { stdout: PassThrough; stderr: PassThrough };
 }
 const watcherIdentity = { pid: 1000000101, created: '134384000000000001', image: 'C:\\synthetic\\node.exe' };
@@ -131,20 +132,36 @@ test('I2 injected snapshot-to-identity PID reuse never enrolls or terminates the
   try {
     f.kernel.processes.mockImplementation(() => { f.setCurrent(replacement); return [{ pid: original.pid, parent: watcherIdentity.pid, exe: 'ssh.exe' }]; });
     f.setCurrent(replacement);
-    f.child.emit('message', { type: 'dispatcher.child', pid: original.pid, active: true, identity: original, owner: watcherIdentity });
+    f.child.emit('message', { type: 'everflow.child', pid: original.pid, active: true, identity: original, owner: watcherIdentity });
     owned = f.runtime.children();
   } finally { await f.runtime.close(); f.db.close(); }
   expect(owned).not.toEqual(expect.arrayContaining([expect.objectContaining({ pid: replacement.pid, created: replacement.created })]));
   expect(f.terminated).not.toEqual(expect.arrayContaining([expect.objectContaining({ created: replacement.created })]));
 });
 
+test('a child that exited before its report is neither enrolled nor logged; a live process that is not the watcher child is logged', async () => {
+  const f = await ownershipFixture();
+  const mismatches = () => fs.existsSync(f.cfg.db.path + '.log')
+    ? fs.readFileSync(f.cfg.db.path + '.log', 'utf8').split('\n').filter((line) => line.includes('identity-mismatch')).length : 0;
+  try {
+    f.setCurrent(replacement);
+    f.child.emit('message', { type: 'everflow.child', pid: original.pid, active: true, identity: original, owner: watcherIdentity });
+    expect(f.runtime.children()).not.toEqual(expect.arrayContaining([expect.objectContaining({ pid: original.pid })]));
+    expect(mismatches()).toBe(0);
+    f.kernel.childOf.mockReturnValueOnce(false);
+    f.child.emit('message', { type: 'everflow.child', pid: replacement.pid, active: true, identity: replacement, owner: watcherIdentity });
+    expect(f.runtime.children()).not.toEqual(expect.arrayContaining([expect.objectContaining({ pid: replacement.pid, created: replacement.created })]));
+    expect(mismatches()).toBe(1);
+  } finally { await f.runtime.close(); f.db.close(); }
+});
+
 test('I2 stale inactive packet cannot unregister a newer verified owned child with the same injected PID', async () => {
   const f = await ownershipFixture();
   try {
-    f.child.emit('message', { type: 'dispatcher.child', pid: original.pid, active: true, identity: original, owner: watcherIdentity });
+    f.child.emit('message', { type: 'everflow.child', pid: original.pid, active: true, identity: original, owner: watcherIdentity });
     const newer = { ...original, created: '134384000000000003' }; f.setCurrent(newer);
-    f.child.emit('message', { type: 'dispatcher.child', pid: newer.pid, active: true, identity: newer, owner: watcherIdentity });
-    f.child.emit('message', { type: 'dispatcher.child', pid: original.pid, active: false, identity: original, owner: watcherIdentity });
+    f.child.emit('message', { type: 'everflow.child', pid: newer.pid, active: true, identity: newer, owner: watcherIdentity });
+    f.child.emit('message', { type: 'everflow.child', pid: original.pid, active: false, identity: original, owner: watcherIdentity });
     expect(f.runtime.children()).toEqual(expect.arrayContaining([expect.objectContaining({ pid: newer.pid, created: newer.created })]));
   } finally { await f.runtime.close(); f.db.close(); }
 });

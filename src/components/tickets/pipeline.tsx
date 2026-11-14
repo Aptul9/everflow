@@ -1,15 +1,128 @@
 'use client';
 
-import { Bot, ChevronDown, CircleCheck, Cpu, Inbox, RotateCw, Ticket, TriangleAlert, Workflow } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { Bot, Check, ChevronDown, ChevronsUpDown, CircleCheck, CirclePause, Cpu, Inbox, LoaderCircle, RotateCw, Search, Ticket, TriangleAlert, Workflow } from 'lucide-react';
+import { Fragment, useEffect, useId, useRef, useState } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 import { groups } from '../../lib/web-types.ts';
-import type { Health, OverviewState } from '../../lib/web-types.ts';
+import type { Agent, Health, OverviewState } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Button } from '../ui/button.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 import { Time } from './ticket-card.tsx';
 
 type State = Health['state'];
 type Post = (key: string, path: string) => Promise<unknown>;
+type PausePost = (key: string, path: string, input: Record<string, string | boolean>) => Promise<unknown>;
+type Choice = OverviewState['models']['triage'];
+type ModelOption = OverviewState['models']['options']['chat'][number];
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+interface PickItem { value: string; label: string; detail?: string; group?: string | undefined; tag?: string }
+
+// Popover list in the shadcn Command look; with `search` a filter field drives it, otherwise the list itself takes the keys
+function Picker(props: { label: string; value: string; items: PickItem[]; onPick: (value: string) => void; disabled: boolean;
+  search?: string; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [active, setActive] = useState(0);
+  const listRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
+  const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const ordered = [...props.items].sort((a, b) => (a.group ?? '').localeCompare(b.group ?? ''));
+  const shown = ordered.filter((item) => words.every((word) => `${item.label} ${item.value} ${item.group ?? ''}`.toLowerCase().includes(word)));
+  const optionId = (index: number) => `${listId}-${index}`;
+  useEffect(() => { if (open) document.getElementById(optionId(active))?.scrollIntoView?.({ block: 'nearest' }); });
+  const pick = (value: string) => { setOpen(false); if (value !== props.value) props.onPick(value); };
+  const keys = (event: KeyboardEvent) => {
+    const last = shown.length - 1;
+    const move: Record<string, number> = { ArrowDown: Math.min(active + 1, last), ArrowUp: Math.max(active - 1, 0), Home: 0, End: last };
+    if (event.key in move) { event.preventDefault(); setActive(Math.max(move[event.key]!, 0)); }
+    else if (event.key === 'Enter' && shown[active]) { event.preventDefault(); pick(shown[active].value); }
+  };
+  const listKeys = props.search ? {} : { tabIndex: 0, onKeyDown: keys, 'aria-activedescendant': shown[active] ? optionId(active) : undefined };
+  return <Popover open={open} onOpenChange={(next) => {
+    setOpen(next);
+    if (next) { setQuery(''); setActive(Math.max(ordered.findIndex((item) => item.value === props.value), 0)); }
+  }}>
+    <PopoverTrigger asChild>
+      <Button variant="outline" size="sm" disabled={props.disabled} aria-haspopup="listbox" aria-label={props.label}
+        className="w-full min-w-0 justify-between gap-1 px-2 text-xs font-normal">
+        <span className="flex min-w-0 items-baseline gap-1.5">{props.children}</span>
+        <ChevronsUpDown className="size-3.5 opacity-50" aria-hidden="true" />
+      </Button>
+    </PopoverTrigger>
+    <PopoverContent align="start" className="w-(--radix-popover-trigger-width) min-w-80 p-0"
+      onOpenAutoFocus={(event) => {
+        if (!props.search) { event.preventDefault(); listRef.current?.focus(); }
+        // The list is laid out only once the popover is placed, so the current pick is scrolled to here
+        requestAnimationFrame(() => document.getElementById(optionId(active))?.scrollIntoView?.({ block: 'center' }));
+      }}>
+      {props.search && <div className="flex h-9 items-center gap-2 border-b px-2.5">
+        <Search className="size-3.5 shrink-0 opacity-50" aria-hidden="true" />
+        <input value={query} placeholder={props.search} aria-label={props.search} role="combobox" aria-expanded="true" aria-controls={listId}
+          aria-autocomplete="list" aria-activedescendant={shown[active] ? optionId(active) : undefined} onKeyDown={keys}
+          onChange={(event) => { setQuery(event.target.value); setActive(0); }}
+          className="h-full w-full min-w-0 bg-transparent text-xs outline-hidden placeholder:text-muted-foreground" />
+      </div>}
+      <div ref={listRef} id={listId} role="listbox" aria-label={props.label} {...listKeys} className="max-h-72 scroll-py-1 overflow-y-auto p-1 outline-hidden">
+        {!shown.length && <p className="py-5 text-center text-xs text-muted-foreground">No match</p>}
+        {shown.map((item, index) => <Fragment key={item.value}>
+          {item.group && item.group !== shown[index - 1]?.group
+            && <p role="presentation" className="px-2 pt-2 pb-1 text-[11px] font-medium text-muted-foreground">{item.group}</p>}
+          <div id={optionId(index)} role="option" aria-selected={item.value === props.value} data-active={index === active}
+            onMouseMove={() => setActive(index)} onClick={() => pick(item.value)}
+            className="flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-xs select-none data-[active=true]:bg-accent data-[active=true]:text-accent-foreground">
+            <Check className={cn('size-3.5 shrink-0', item.value === props.value ? 'opacity-100' : 'opacity-0')} aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">{item.label}</span>
+            {item.tag && <span className="shrink-0 rounded-sm bg-muted px-1 text-[10px] text-muted-foreground">{item.tag}</span>}
+            {item.detail && <span className="max-w-[40%] min-w-0 shrink-[3] truncate text-[11px] text-muted-foreground">{item.detail}</span>}
+          </div>
+        </Fragment>)}
+      </div>
+    </PopoverContent>
+  </Popover>;
+}
+
+// Model and effort the next triage call or the next new ticket chat starts with; empty picks the config default.
+// A model runs on the account of its provider; triage tries that account first and fails over to the others on its own.
+function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options: ModelOption[]; accounts: Record<string, string>;
+  disabled: boolean; post: PausePost; error?: string | undefined }) {
+  const { scope, choice } = props;
+  const list = props.options.some((option) => option.id === choice.model) ? props.options
+    : [{ id: choice.model, name: choice.model, efforts: EFFORTS }, ...props.options];
+  const current = list.find((option) => option.id === choice.model)!;
+  const efforts = current.efforts.length ? current.efforts : EFFORTS;
+  const save = (key: string, value: string) => props.post(`setting:${key}`, '/api/setting', { key, value });
+  const split = (id: string) => id.includes('/') ? { provider: id.slice(0, id.indexOf('/')), model: id.slice(id.indexOf('/') + 1) } : { provider: undefined, model: id };
+  const name = (provider: string) => props.accounts[provider] ?? provider;
+  const provider = split(choice.model).provider;
+  const models = list.map((option) => ({ value: option.id, label: option.name, detail: split(option.id).model,
+    group: split(option.id).provider && name(split(option.id).provider!), ...(option.id === choice.default_model ? { tag: 'default' } : {}) }));
+  const what = scope === 'triage' ? 'Triage' : 'Chat';
+  return <div className="mt-2 border-t pt-2">
+    <p className="mb-1 text-[11px] text-muted-foreground">{scope === 'triage' ? 'Next triage call' : 'Next new ticket chat'}</p>
+    <div className="grid min-w-0 gap-1.5">
+      <Picker label={`${what} model`} value={choice.model} items={models} disabled={props.disabled} search="Search models"
+        onPick={(model) => {
+          const next = list.find((option) => option.id === model)?.efforts ?? [];
+          void (async () => {
+            await save(`${scope}.model`, model === choice.default_model ? '' : model);
+            if (choice.effort && next.length && !next.includes(choice.effort)) await save(`${scope}.effort`, '');
+          })().catch(() => {});
+        }}>
+        <span className="truncate" title={choice.model}>{current.name}</span>
+      </Picker>
+      {provider && <p className="-mt-0.5 px-0.5 text-[11px] leading-snug text-muted-foreground">
+        Account: <span className="text-foreground/80">{name(provider)}</span></p>}
+      <Picker label={`${what} effort`} value={choice.effort ?? ''} disabled={props.disabled}
+        items={[{ value: '', label: 'Default effort', detail: "model's own" }, ...efforts.map((effort) => ({ value: effort, label: effort }))]}
+        onPick={(effort) => { void save(`${scope}.effort`, effort).catch(() => {}); }}>
+        <span className="text-muted-foreground">Effort</span><span className="truncate">{choice.effort ?? 'default'}</span>
+      </Picker>
+    </div>
+    {props.error && <p role="alert" className="mt-1 text-[11px] text-destructive">{props.error}</p>}
+  </div>;
+}
 
 const rank: Record<State, number> = { failing: 5, stopped: 4, retrying: 3, unknown: 2, disabled: 1, ok: 0 };
 const dot: Record<State, string> = {
@@ -24,22 +137,53 @@ function worstOf(states: State[]): State {
   return states.reduce<State>((current, next) => rank[next] > rank[current] ? next : current, 'ok');
 }
 const worst = (items: Health[]) => worstOf(items.map((item) => item.state));
+const label = (state: State) => state === 'unknown' ? 'not used yet' : state === 'disabled' ? 'off' : state;
 
 function Dot({ state, className }: { state: State; className?: string }) {
   return <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', dot[state], state === 'retrying' && 'animate-pulse', className)} />;
 }
 
-function Row({ name, item }: { name: string; item: Health }) {
+// Pausing an account holds its new messages before triage and chat forwards until it is switched back on
+function Switch(props: { on: boolean; label: string; disabled: boolean; onChange: () => void }) {
+  return <button type="button" role="switch" aria-checked={props.on} aria-label={props.label} disabled={props.disabled} onClick={props.onChange}
+    title={props.on ? 'On: new messages go to triage. Click to pause.' : 'Paused: new messages wait here. Click to resume.'}
+    className="-my-1 shrink-0 rounded-full p-1 outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50">
+    <span aria-hidden="true" className={cn('flex h-4 w-7 items-center rounded-full p-0.5 transition-colors', props.on ? 'bg-success' : 'bg-input')}>
+      <span className={cn('size-3 rounded-full bg-white shadow-xs transition-transform', props.on && 'translate-x-3')} />
+    </span>
+  </button>;
+}
+
+function Row({ name, item, toggle }: { name: string; item: Health; toggle?: { disabled: boolean; onChange: () => void; error?: string | undefined } }) {
   const hint = [item.since && item.state !== 'ok' ? `Since ${item.since}` : '', item.last_ok ? `Last ok ${item.last_ok}` : '', item.checkpoint ? `Checkpoint ${item.checkpoint}` : ''].filter(Boolean).join('\n');
+  const paused = item.paused === true;
   return <li className="min-w-0 py-1" title={hint || undefined}>
     <div className="flex min-w-0 items-center gap-2 text-xs">
-      <Dot state={item.state} />
-      <span className="min-w-0 truncate">{name}</span>
-      <span className="ml-auto shrink-0 text-muted-foreground">{item.state}</span>
+      <Dot state={paused ? 'disabled' : item.state} />
+      <span className={cn('min-w-0 truncate', paused && 'text-muted-foreground')}>{name}</span>
+      <span className={cn('ml-auto shrink-0', paused ? 'font-medium text-warning' : 'text-muted-foreground')}>
+        {paused ? `paused${item.waiting ? `, ${item.waiting} waiting` : ''}` : label(item.state)}</span>
+      {toggle && <Switch on={!paused} label={`Triage ${name}`} disabled={toggle.disabled} onChange={toggle.onChange} />}
     </div>
     {item.last_error && <p className="mt-0.5 line-clamp-2 pl-4 text-[11px] leading-snug text-destructive">{item.last_error}</p>}
-    {item.checkpoint && <p className="pl-4 text-[11px] text-muted-foreground">{item.coverage === 'recent-topics' ? 'Latest stored' : 'Checkpoint'} <Time value={item.checkpoint} /></p>}
+    {(item.checkpoint || item.clients?.length) && <p className="pl-4 text-[11px] text-muted-foreground">
+      {item.clients?.length ? <span className="font-medium text-foreground/70">{item.clients.join(', ')}</span> : null}
+      {item.clients?.length && item.checkpoint ? ' · ' : null}
+      {item.checkpoint && <>{item.coverage === 'recent-topics' ? 'Latest stored' : 'Checkpoint'} <Time value={item.checkpoint} /></>}</p>}
+    {toggle?.error && <p role="alert" className="pl-4 text-[11px] text-destructive">{toggle.error}</p>}
   </li>;
+}
+
+// Triage accounts in the order they are tried; a limited one is skipped until its retry time, so triage fails over on its own
+function TriageAccounts(props: { routes: string[]; health: Health[]; names: Record<string, string> }) {
+  if (!props.routes.length) return <p className="mt-1.5 text-xs text-muted-foreground">No providers configured.</p>;
+  return <div className="mt-1.5 min-w-0">
+    <p className="text-[11px] text-muted-foreground">{props.routes.length > 1 ? 'Accounts, automatic failover' : 'Account'}</p>
+    <ul className="divide-y divide-border/60">
+      {props.routes.map((id) => <Row key={id} name={props.names[id] ?? id} item={props.health.find((entry) => entry.dependency === `provider:${id}`)
+        ?? { dependency: `provider:${id}`, scope: 'provider', state: 'unknown', since: null, last_ok: null, last_error: null }} />)}
+    </ul>
+  </div>;
 }
 
 function Issue({ href, children }: { href: string; children: React.ReactNode }) {
@@ -54,7 +198,7 @@ function Node(props: { id: string; title: string; icon: React.ReactNode; state: 
     <div className="flex min-w-0 items-center gap-2">
       <span aria-hidden="true" className="grid size-6 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground [&_svg]:size-3.5">{props.icon}</span>
       <h3 className="min-w-0 truncate text-sm font-semibold">{props.title}</h3>
-      <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"><Dot state={props.state} />{props.status ?? props.state}</span>
+      <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"><Dot state={props.state} />{props.status ?? label(props.state)}</span>
     </div>
     {props.children}
     {props.issues?.some(Boolean) && <div className="mt-2 flex flex-wrap gap-1">{props.issues}</div>}
@@ -68,20 +212,39 @@ function Stage({ label, children, className }: { label: string; children: React.
   </div>;
 }
 
-export function Pipeline({ state }: { state: OverviewState }) {
+function Agents({ agents, kind }: { agents: Agent[]; kind: Agent['kind'] }) {
+  const list = agents.filter((agent) => agent.kind === kind);
+  if (!list.length) return null;
+  return <ul className="mt-1.5 grid gap-0.5">
+    {list.map((agent, index) => <li key={`${kind}-${agent.ticket ?? index}`} className="flex min-w-0 items-center gap-1.5 text-[11px] text-primary" title={agent.title ?? undefined}>
+      <LoaderCircle aria-hidden="true" className="size-3 shrink-0 animate-spin" />
+      <span className="shrink-0 font-medium">{agent.clients.length ? agent.clients.join(', ') : 'no client'}</span>
+      <span className="min-w-0 truncate text-muted-foreground">{agent.ticket === null ? '' : `#${agent.ticket} `}{agent.title ?? ''}</span>
+    </li>)}
+  </ul>;
+}
+
+export function Pipeline({ state, expired = false, pending = new Set(), errors = {}, post = async () => ({}) }: { state: OverviewState; expired?: boolean;
+  pending?: ReadonlySet<string>; errors?: Record<string, string>; post?: PausePost }) {
   const box = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(true);
+  // null until toggled: the diagram then follows health, folded while everything works
+  const [open, setOpen] = useState<boolean | null>(null);
   const [paths, setPaths] = useState<{ key: string; d: string; state: State; end: [number, number] }[]>([]);
   const health = state.health;
   const sources = health.filter((item) => item.scope === 'source');
   const accounts = health.filter((item) => item.scope === 'account');
   const known = new Set(sources.map((item) => item.dependency));
   const orphans = [...new Set(accounts.map((item) => item.dependency.split(':')[0]!).filter((name) => !known.has(name)))];
-  const inputs = [
+  const listed = [
     ...sources.map((source) => ({ name: source.dependency, source: source as Health | null, accounts: accounts.filter((item) => item.dependency.startsWith(`${source.dependency}:`)) })),
     ...orphans.map((name) => ({ name, source: null as Health | null, accounts: accounts.filter((item) => item.dependency.startsWith(`${name}:`)) })),
-  ].map((input) => ({ ...input, state: worst([...(input.source ? [input.source] : []), ...input.accounts]),
-    quarantine: state.problems.quarantine.filter((item) => item.source === input.name) }));
+  ].map((input) => {
+    const live = input.accounts.filter((item) => item.state !== 'disabled');
+    return { ...input, live, off: input.accounts.filter((item) => item.state === 'disabled'), state: worst([...(input.source ? [input.source] : []), ...live]),
+      quarantine: state.problems.quarantine.filter((item) => item.source === input.name) };
+  });
+  const inputs = listed.filter((input) => input.source?.state !== 'disabled');
+  const switchedOff = listed.filter((input) => input.source?.state === 'disabled').map((input) => input.name);
   const daemon = health.filter((item) => item.scope === 'daemon');
   const maintenance = health.filter((item) => item.scope === 'jobs' && item.dependency !== 'tickets');
   const providers = health.filter((item) => item.scope === 'provider');
@@ -90,7 +253,8 @@ export function Pipeline({ state }: { state: OverviewState }) {
   const triageJobs = state.problems.jobs.filter((job) => job.kind === 'triage');
   const chatJobs = state.problems.jobs.filter((job) => job.kind !== 'triage');
   const daemonState = worst([...daemon, ...maintenance]);
-  const triageState = worst(providers);
+  // A fallback provider never called yet says nothing about a stage that already works
+  const triageState = worst(providers.some((item) => item.state !== 'unknown') ? providers.filter((item) => item.state !== 'unknown') : providers);
   const chatState = state.chats_enabled ? worst(openchamber) : 'disabled';
   const ticketCount = Object.values(state.groups).reduce((sum, list) => sum + list.length, 0);
   const edges: [string, string, State][] = [
@@ -98,6 +262,32 @@ export function Pipeline({ state }: { state: OverviewState }) {
     ['daemon', 'triage', daemonState], ['triage', 'tickets', triageState], ['tickets', 'openchamber', chatState],
   ];
   const signature = JSON.stringify([edges, worstOf(inputs.map((input) => input.state))]);
+  const summary: [string, State][] = [['Inputs', worstOf(inputs.map((input) => input.state))], ['Daemon', daemonState], ['Triage', triageState], ['Chats', chatState]];
+  const { jobs, quarantine, triage } = state.problems;
+  const problems = jobs.length + quarantine.length + triage.length;
+  const healthy = problems === 0 && summary.every(([, value]) => rank[value] < rank.retrying);
+  const shown = open ?? !healthy;
+  const options = state.models.options;
+  const asked = useRef(false);
+  // Picker lists come from the daemon; ask it once per page when they are missing or older than 10 minutes
+  useEffect(() => {
+    if (!shown || asked.current || expired || !state.tickets_enabled || options.requested_at) return;
+    if (options.at && Date.now() - Date.parse(options.at) < 600_000) return;
+    asked.current = true;
+    void post('setting:refresh', '/api/setting', { refresh: true }).catch(() => {});
+  }, [shown, expired, state.tickets_enabled, options.at, options.requested_at, post]);
+  const pickerError = (scope: 'triage' | 'chat') => errors[`setting:${scope}.model`] ?? errors[`setting:${scope}.effort`] ?? options.error ?? undefined;
+  // Triage offers the chat models of its own accounts; Meridian takes only the shared effort levels
+  const triageOptions = options.chat.filter((option) => state.models.triage_routes.includes(option.id.slice(0, option.id.indexOf('/'))))
+    .map((option) => ({ ...option, efforts: option.efforts.filter((effort) => EFFORTS.includes(effort)) }));
+  const pickerDisabled = expired || !state.tickets_enabled || [...pending].some((key) => key.startsWith('setting:'));
+  const paused = accounts.filter((item) => item.paused);
+  const toggle = (source: string, item: Health) => {
+    const account = item.dependency.slice(source.length + 1);
+    const key = `input:${item.dependency}`;
+    return { disabled: expired || pending.has(key) || !state.tickets_enabled, error: errors[key],
+      onChange: () => { void post(key, '/api/input', { source, account, paused: !item.paused }).catch(() => {}); } };
+  };
 
   useEffect(() => {
     const root = box.current;
@@ -129,19 +319,28 @@ export function Pipeline({ state }: { state: OverviewState }) {
     observer.observe(root);
     for (const node of root.querySelectorAll('[data-node]')) observer.observe(node);
     return () => observer.disconnect();
-  }, [signature, open]);
+  }, [signature, shown]);
 
-  const summary: [string, State][] = [['Inputs', worstOf(inputs.map((input) => input.state))], ['Daemon', daemonState], ['Triage', triageState], ['Chats', chatState]];
-  return <section aria-label="Health" className="rounded-xl border bg-card/60 p-4">
-    <div className={cn('flex flex-wrap items-center gap-x-3 gap-y-1', open && 'mb-3')}>
+  return <section aria-label="Health" className={cn('rounded-xl border bg-card/60', shown ? 'p-4' : 'px-4 py-2')}>
+    <div className={cn('flex flex-wrap items-center gap-x-3 gap-y-1', shown && 'mb-3')}>
       <h2 className="text-sm font-semibold">Pipeline</h2>
-      {open ? <p className="hidden text-xs text-muted-foreground sm:block">Inputs flow through the daemon and triage into tickets and approved chats.</p>
-        : <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">{summary.map(([name, value]) => <li key={name} className="inline-flex items-center gap-1.5"><Dot state={value} />{name}</li>)}</ul>}
-      <Button type="button" variant="ghost" size="sm" className="ml-auto h-8 text-muted-foreground" aria-expanded={open} aria-controls={open ? 'pipeline-diagram' : undefined} onClick={() => setOpen(!open)}>
-        {open ? 'Hide' : 'Show'}<ChevronDown aria-hidden="true" className={cn('transition-transform', open && 'rotate-180')} />
+      {shown ? <p className="hidden text-xs text-muted-foreground sm:block">Inputs flow through the daemon and triage into tickets and approved chats.</p>
+        : <ul className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">{summary.map(([name, value]) => <li key={name} className="inline-flex items-center gap-1.5"><Dot state={value} />{name}</li>)}
+          <li className={cn('inline-flex items-center gap-1.5', problems > 0 && 'font-medium text-warning')}>
+            {problems > 0 ? <TriangleAlert aria-hidden="true" className="size-3.5" /> : <CircleCheck aria-hidden="true" className="size-3.5 text-success" />}
+            {problems > 0 ? `${problems} problem${problems === 1 ? '' : 's'}` : 'No problems'}
+          </li>
+          {state.agents.map((agent, index) => <li key={`agent-${index}`} className="inline-flex items-center gap-1.5 font-medium text-primary" title={agent.title ?? undefined}>
+            <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" />{agent.kind === 'triage' ? 'Triage' : `Chat #${agent.ticket}`} for {agent.clients.length ? agent.clients.join(', ') : 'no client'}
+          </li>)}
+          {paused.length > 0 && <li className="inline-flex items-center gap-1.5 font-medium text-warning"><CirclePause aria-hidden="true" className="size-3.5" />
+            Paused: {paused.map((item) => `${item.clients?.length ? item.clients.join(', ') : item.dependency.split(':').slice(1).join(':')}${item.waiting ? ` (${item.waiting} waiting)` : ''}`).join(', ')}</li>}
+        </ul>}
+      <Button type="button" variant="ghost" size="sm" className="ml-auto h-8 text-muted-foreground" aria-expanded={shown} aria-controls={shown ? 'pipeline-diagram' : undefined} onClick={() => setOpen(!shown)}>
+        {shown ? 'Hide' : 'Show'}<ChevronDown aria-hidden="true" className={cn('transition-transform', shown && 'rotate-180')} />
       </Button>
     </div>
-    {open && <div ref={box} id="pipeline-diagram" className="relative flex flex-col gap-8 lg:grid lg:grid-cols-[minmax(230px,1.4fr)_repeat(4,minmax(150px,1fr))] lg:items-center lg:gap-x-12">
+    {shown && <div ref={box} id="pipeline-diagram" className="relative flex flex-col gap-8 lg:grid lg:grid-cols-[minmax(230px,1.4fr)_repeat(4,minmax(150px,1fr))] lg:items-center lg:gap-x-12">
       <svg aria-hidden="true" className="pointer-events-none absolute inset-0 size-full overflow-visible">
         {paths.map((path) => <g key={path.key}>
           <path d={path.d} fill="none" stroke={stroke[path.state]} strokeOpacity={path.state === 'ok' ? 0.25 : 0.35} strokeWidth={6} strokeLinecap="round" />
@@ -155,13 +354,17 @@ export function Pipeline({ state }: { state: OverviewState }) {
         <div data-node="inputs" className="flex flex-col gap-2 sm:grid sm:grid-cols-2 lg:flex">
           {inputs.map((input, index) => <Node key={input.name} id={`input-${index}`} title={input.name} icon={<Inbox />} state={input.state}
             issues={[input.quarantine.length > 0 && <Issue key="q" href={`#problem-quarantine-${input.quarantine[0]!.id}`}>{input.quarantine.length} quarantined</Issue>]}>
-            {input.source?.coverage === 'recent-topics' && <p className="mt-1.5 text-[11px] text-warning">Recent topics only{input.source.observed_at && <>. Observed <Time value={input.source.observed_at} /></>}</p>}
             {(input.source?.last_error || input.accounts.length > 0) && <ul className="mt-1.5 divide-y divide-border/60">
               {input.source?.last_error && <li className="py-1"><p className="line-clamp-2 text-[11px] leading-snug text-destructive">{input.source.last_error}</p></li>}
-              {input.accounts.map((item) => <Row key={item.dependency} name={item.dependency.slice(input.name.length + 1)} item={item} />)}
+              {input.live.map((item) => <Row key={item.dependency} name={item.dependency.slice(input.name.length + 1)} item={item} toggle={toggle(input.name, item)} />)}
+              {input.off.length > 0 && <li className="py-1"><details className="group">
+                <summary className="inline-flex cursor-pointer items-center gap-1 rounded text-xs text-muted-foreground hover:text-foreground">{input.off.length} account{input.off.length === 1 ? '' : 's'} off<ChevronDown aria-hidden="true" className="size-3.5 transition-transform group-open:rotate-180" /></summary>
+                <ul className="mt-1 divide-y divide-border/60">{input.off.map((item) => <Row key={item.dependency} name={item.dependency.slice(input.name.length + 1)} item={item} />)}</ul>
+              </details></li>}
             </ul>}
           </Node>)}
           {inputs.length === 0 && <p className="rounded-lg border border-dashed px-3 py-4 text-xs text-muted-foreground">No sources enabled.</p>}
+          {switchedOff.length > 0 && <p className="px-1 text-[11px] text-muted-foreground">Off: {switchedOff.join(', ')}</p>}
         </div>
       </Stage>
 
@@ -181,10 +384,9 @@ export function Pipeline({ state }: { state: OverviewState }) {
             state.problems.triage.length > 0 && <Issue key="invalid" href={`#problem-triage-${state.problems.triage[0]!.id}`}>{state.problems.triage.length} invalid</Issue>,
             triageJobs.length > 0 && <Issue key="parked" href={`#problem-job-${triageJobs[0]!.id}`}>{triageJobs.length} parked</Issue>,
           ]}>
-          <ul className="mt-1.5 divide-y divide-border/60">
-            {providers.map((item) => <Row key={item.dependency} name={item.dependency.replace(/^provider:/, '')} item={item} />)}
-            {providers.length === 0 && <li className="py-1 text-xs text-muted-foreground">No providers configured.</li>}
-          </ul>
+          <TriageAccounts routes={state.models.triage_routes} health={providers} names={options.accounts} />
+          <Agents agents={state.agents} kind="triage" />
+          <ModelPicker scope="triage" choice={state.models.triage} options={triageOptions} accounts={options.accounts} disabled={pickerDisabled} post={post} error={pickerError('triage')} />
         </Node>
       </Stage>
 
@@ -192,7 +394,7 @@ export function Pipeline({ state }: { state: OverviewState }) {
         <Node id="tickets" title="Tickets" icon={<Ticket />} state={state.tickets_enabled ? 'ok' : 'disabled'} status={state.tickets_enabled ? `${ticketCount} today` : 'read-only'}>
           <ul className="mt-1.5 grid gap-0.5">
             {groups.map(([group, label]) => {
-              const count = group === 'skipped' ? state.skipped.length : state.groups[group].length;
+              const count = (group === 'skipped' ? state.skipped.length : 0) + state.groups[group].length;
               return <li key={group}><a href={`#col-${group}`} className="flex items-center gap-2 rounded px-1 py-0.5 text-xs hover:bg-muted">
                 <span className="min-w-0 truncate text-muted-foreground">{label}</span>
                 <span className={cn('ml-auto font-semibold tabular-nums', count > 0 && group === 'failed' && 'text-destructive', count > 0 && group === 'needs_you' && 'text-primary')}>{count}</span>
@@ -208,6 +410,8 @@ export function Pipeline({ state }: { state: OverviewState }) {
           <ul className="mt-1.5 divide-y divide-border/60">
             {openchamber.map((item) => <Row key={item.dependency} name={item.dependency === 'opencode' ? 'Server' : item.dependency.replace(/^opencode:/, '')} item={item} />)}
           </ul>
+          <Agents agents={state.agents} kind="chat" />
+          <ModelPicker scope="chat" choice={state.models.chat} options={options.chat} accounts={options.accounts} disabled={pickerDisabled} post={post} error={pickerError('chat')} />
         </Node>
       </Stage>
     </div>}
@@ -243,18 +447,19 @@ export function Problems(props: { state: OverviewState; expired: boolean; pendin
   const { jobs, quarantine, triage } = props.state.problems;
   const count = jobs.length + quarantine.length + triage.length;
   const [open, setOpen] = useState(true);
-  return <section aria-label="Problems" className={cn('rounded-xl border p-3', count > 0 ? 'border-warning/30 bg-warning-soft/40' : 'bg-card/60')}>
+  // With nothing to fix, the pipeline status line already says so
+  if (count === 0) return null;
+  return <section aria-label="Problems" className="rounded-xl border border-warning/30 bg-warning-soft/40 p-3">
     <div className="flex items-center gap-2">
-      {count > 0 ? <TriangleAlert aria-hidden="true" className="size-4 text-warning" /> : <CircleCheck aria-hidden="true" className="size-4 text-success" />}
+      <TriangleAlert aria-hidden="true" className="size-4 text-warning" />
       <h2 className="text-sm font-semibold">Problems</h2>
-      <span className={cn('rounded-full px-1.5 text-xs font-semibold tabular-nums', count > 0 ? 'bg-warning text-white' : 'bg-muted text-muted-foreground')}>{count}</span>
-      {count === 0 && <p className="text-sm text-muted-foreground">No recorded problems.</p>}
-      {count > 0 && <p className="hidden text-xs text-muted-foreground sm:block">{jobs.length} parked · {quarantine.length} quarantined · {triage.length} invalid triage</p>}
-      {count > 0 && <Button type="button" variant="ghost" size="sm" className="ml-auto h-8 text-muted-foreground" aria-expanded={open} aria-controls={open ? 'problem-list' : undefined} onClick={() => setOpen(!open)}>
+      <span className="rounded-full bg-warning px-1.5 text-xs font-semibold text-white tabular-nums">{count}</span>
+      <p className="hidden text-xs text-muted-foreground sm:block">{jobs.length} parked · {quarantine.length} quarantined · {triage.length} invalid triage</p>
+      <Button type="button" variant="ghost" size="sm" className="ml-auto h-8 text-muted-foreground" aria-expanded={open} aria-controls={open ? 'problem-list' : undefined} onClick={() => setOpen(!open)}>
         {open ? 'Hide' : 'Show'}<ChevronDown aria-hidden="true" className={cn('transition-transform', open && 'rotate-180')} />
-      </Button>}
+      </Button>
     </div>
-    {count > 0 && open && <ul id="problem-list" className="mt-2.5 grid gap-2 lg:grid-cols-2">
+    {open && <ul id="problem-list" className="mt-2.5 grid gap-2 lg:grid-cols-2">
       {jobs.map((job) => <Problem key={`job:${job.id}`} id={`problem-job-${job.id}`} stage={job.kind === 'triage' ? 'Triage' : 'Chat'}
         title={`${job.ticket === null ? 'Unbound job' : 'Job'} #${job.id} · ${job.kind}${job.ticket === null ? '' : ` · Ticket #${job.ticket}`}`}
         at={job.updated_at} error={job.last_error} detail={job.parse_error} raw={job.raw} alert={props.errors[`job:${job.id}:retry`]}>

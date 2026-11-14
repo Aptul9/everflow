@@ -21,13 +21,13 @@ function comBindings(): ComBindings {
   const koffi = win32Ffi();
   const winax = require('winax');
   const ole = koffi.load('ole32.dll'), automation = koffi.load('oleaut32.dll');
-  const GUID = koffi.struct('DispatcherGuid', { a: 'uint32_t', b: 'uint16_t', c: 'uint16_t', d: koffi.array('uint8_t', 8) });
+  const GUID = koffi.struct('EverflowGuid', { a: 'uint32_t', b: 'uint16_t', c: 'uint16_t', d: koffi.array('uint8_t', 8) });
   if (koffi.sizeof(GUID) !== 16) throw new NativeError('com.abi-layout');
   const initialize = ole.func('long __stdcall CoInitializeEx(void *reserved, uint32_t flags)');
   const uninitialize = ole.func('void __stdcall CoUninitialize()');
-  const active = automation.func('long __stdcall GetActiveObject(const DispatcherGuid *clsid, void *reserved, _Out_ void **result)');
-  const query = koffi.proto('long __stdcall DispatcherQueryInterface(void *self, const DispatcherGuid *iid, _Out_ void **result)');
-  const release = koffi.proto('uint32_t __stdcall DispatcherRelease(void *self)');
+  const active = automation.func('long __stdcall GetActiveObject(const EverflowGuid *clsid, void *reserved, _Out_ void **result)');
+  const query = koffi.proto('long __stdcall EverflowQueryInterface(void *self, const EverflowGuid *iid, _Out_ void **result)');
+  const release = koffi.proto('uint32_t __stdcall EverflowRelease(void *self)');
   const guid = (value: string) => {
     const [a, b, c, d, e] = value.split('-');
     return { a: Number.parseInt(a!, 16), b: Number.parseInt(b!, 16), c: Number.parseInt(c!, 16), d: Buffer.from(d! + e!, 'hex') };

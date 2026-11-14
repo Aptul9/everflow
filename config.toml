@@ -7,7 +7,7 @@ enabled = false
 enabled = false
 
 [db]
-path = "data/dispatcher.db"
+path = "data/everflow-v1.db"
 
 [vault]
 path = "C:/Users/Antonio/OneDrive/Documenti/Vault"
@@ -15,7 +15,7 @@ path = "C:/Users/Antonio/OneDrive/Documenti/Vault"
 [opencode]
 # Empty url: OpenChamber's own opencode server, through OpenChamber's local port with its UI password
 # (desktopLocalPort, desktopUiPassword in ~/.config/openchamber/settings.json). A url here means a plain
-# `opencode serve` with basic auth, password from INBOX_OPENCODE_PASSWORD.
+# `opencode serve` with basic auth, password from EVERFLOW_OPENCODE_PASSWORD.
 url = ""
 directory = "C:/Users/Antonio/OneDrive/Documenti/Vault"
 model = "meridian-everbright/claude-opus-5-5"
@@ -61,7 +61,7 @@ collect_seconds = 10
 sync_seconds = 300
 heartbeat_seconds = 10
 archive_hours = 24
-reopen_days = 14
+reopen_days = 2
 purge_days = 30
 log_max_bytes = 10485760
 log_files = 5
@@ -77,7 +77,7 @@ poll_seconds = 60
 enabled = false
 entrypoint = "dist/watchers/teams.js"
 poll_seconds = 30
-# An explicit profile is required. Cache and snapshot paths are dispatcher-owned beside the DB.
+# An explicit profile is required. Cache and snapshot paths are everflow-owned beside the DB.
 
 [sources.teamsrelay]
 enabled = false
@@ -105,9 +105,11 @@ account = "antonio.maritato@ext.tecnomat.it"
 
 # A receiving account names its client; for an account that is no client's (bandpey), the sender
 # domains and the addresses quoted in the text decide. Keywords pick the client's vault notes.
+# role (optional) tells triage what is Antonio's work at the client; anything outside it is skipped.
 [clients.msc]
 domains = ["msccruises.com"]
 keywords = ["msc"]
+role = "One of the Cyber Security Architects (CSA) at MSC Cruises: reviews project teams' Flows Tables and gives the CSA security position. The CSA queue is shared with Massimo Stillitano, and Simonetta Viola or Simone Fortin assigns each review. His reviews each have a page under 02_Areas/msc/tickets/ and a card on 02_Areas/msc/tickets-board.md: search the vault for the topic before deciding. His work: anything put to him by name, and on his reviews every ask that needs the CSA position, even when sent to all: a new flow or firewall opening, a certificate or access design choice, a Flows Table row, an exception. Not his: reviews with no page under 02_Areas/msc/tickets/, such as Massimo's reviews and escalations, new intake until Simonetta or Simone assigns it to him, and asks to the CSA or Cyber teams as a group (Ciao a tutti, Dear all, DL Requests) for work that is none of his reviews; on his reviews, steps only another team performs with nothing left for CSA, such as signing a certificate or applying a change already approved; Cloud Team, IT Cloud, Defense, Sensible and GRC requests where he is only copied; status updates and chases between other people."
 
 [clients.roar]
 accounts = ["antonio.maritato@roarinc.com"]

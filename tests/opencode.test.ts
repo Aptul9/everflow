@@ -1,16 +1,16 @@
 import { writeFileSync } from 'node:fs';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import type { SessionMessageInfo } from '@opencode/client';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import * as transport from '../src/dispatcher/opencode.ts';
-import { classify } from '../src/dispatcher/jobs.ts';
-import { openDb } from '../src/dispatcher/db.ts';
-import * as chat from '../src/dispatcher/chat.ts';
+import { chatDirectory, loadConfig } from '../src/core/config.ts';
+import * as transport from '../src/core/opencode.ts';
+import { classify } from '../src/core/jobs.ts';
+import { openDb } from '../src/core/db.ts';
+import * as chat from '../src/core/chat.ts';
 import { claimed, proposed, row } from './chat-support.ts';
 import { remoteSession, scriptedPeer, PEER_AT } from './opencode-support.ts';
 import { scratch } from './support.ts';
 
-beforeEach(() => vi.stubEnv('INBOX_OPENCODE_PASSWORD', ''));
+beforeEach(() => vi.stubEnv('EVERFLOW_OPENCODE_PASSWORD', ''));
 afterEach(() => vi.unstubAllEnvs());
 
 function config(url: string) {
@@ -29,7 +29,7 @@ test('uses the typed client and omits permissions while persisting a store/ticke
   const call = peer.calls.find((call) => call.method === 'POST')!;
   expect(call.body).not.toHaveProperty('permissions');
   expect(call.body).toMatchObject({ location: { directory: cfg.opencode.directory }, model: { providerID: 'synthetic-provider', id: 'model/with/slash' },
-    metadata: { inbox_dispatcher: { store_id: 'store-one', ticket: 7 } } });
+    metadata: { everflow: { store_id: 'store-one', ticket: 7 } } });
   expect(await api.findTicket('store-one', 7)).toBe(session.id);
   expect(await api.findTicket('another-store', 7)).toBeNull();
   expect(await api.get(session.id)).toMatchObject({ id: session.id });
@@ -124,10 +124,33 @@ test('transport has an explicit timeout and propagates cancellation', async () =
   await expect(api.get('ses_1', controller.signal)).rejects.toMatchObject({ cause: { name: 'AbortError' } });
 });
 
+test('a ticket chat opens in its client folder and is found there; other clients use the default folder', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg, files } = config(peer.url);
+  cfg.tickets.enabled = true;
+  cfg.chats.enabled = true;
+  const folder = `${cfg.opencode.directory}-client`;
+  cfg.clients['synthetic-client'] = { accounts: [], domains: [], keywords: [], directory: folder };
+  expect(chatDirectory(cfg, 'synthetic-client')).toBe(folder);
+  expect(chatDirectory(cfg, 'unknown')).toBe(cfg.opencode.directory);
+  expect(chatDirectory(cfg, null)).toBe(cfg.opencode.directory);
+  using db = openDb(files.path);
+  const ticket = proposed(db);
+  chat.approve(cfg, db, ticket, 'Synthetic client folder');
+  await chat.startChat(cfg, db, claimed(db, cfg));
+  const created = peer.calls.filter((call) => call.method === 'POST' && call.url.pathname === '/api/session');
+  expect(created).toHaveLength(1);
+  expect(created[0]!.body).toMatchObject({ location: { directory: folder } });
+  const session = String(row(db, 'ticket', ticket).session_id);
+  db.prepare("UPDATE ticket SET client='other' WHERE id=?").run(ticket);
+  const store = JSON.parse(String(db.prepare("SELECT detail FROM health WHERE dependency='daemon'").get()!.detail)).store_id;
+  expect(await transport.connect(cfg).findTicket(store, ticket)).toBe(session);
+});
+
 test('tag lookup scans every archived page, omits order with opaque cursors, rejects duplicates', async () => {
   await using peer = await scriptedPeer();
   const { cfg } = config(peer.url);
-  const tagged = remoteSession('ses_tagged', cfg.opencode.directory, { inbox_dispatcher: { store_id: 'durable-store', ticket: 9 } });
+  const tagged = remoteSession('ses_tagged', cfg.opencode.directory, { everflow: { store_id: 'durable-store', ticket: 9 } });
   peer.state.hook = (call, response) => {
     if (call.url.pathname !== '/api/session') return false;
     const archived = call.url.searchParams.get('archived');
@@ -267,7 +290,7 @@ test('tag lookup treats Windows directory casing/separators as the same configur
   await using peer = await scriptedPeer();
   const { cfg } = config(peer.url);
   const tagged = remoteSession('ses_normalized', cfg.opencode.directory.replaceAll('\\', '/').toUpperCase() + '/',
-    { inbox_dispatcher: { store_id: 'store-normalized', ticket: 5 } });
+    { everflow: { store_id: 'store-normalized', ticket: 5 } });
   peer.state.hook = (_call, response) => { peer.json(response, { data: [tagged], cursor: {} }); return true; };
   expect(await transport.connect(cfg).findTicket('store-normalized', 5)).toBe('ses_normalized');
 });
@@ -295,6 +318,22 @@ test('an older idle boundary cannot terminate newer streaming work or supply its
   expect(await api.turnDetail('ses_1', 'msg_target')).toMatchObject({ state: 'running', outcome: null, assistant_id: 'asst_old',
     completed_at: null, text: 'STATUS: working | Earlier output' });
   expect(await api.latestReport('ses_1')).toBeNull();
+});
+
+test('a turn cut short by a later input the session worked on is terminal and interrupted, not running forever', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg } = config(peer.url);
+  peer.sessions.set('ses_1', remoteSession('ses_1', cfg.opencode.directory));
+  const later = user('msg_later');
+  if (later.type !== 'user') throw new Error('Expected user fixture');
+  later.time = { created: PEER_AT + 700 };
+  peer.messages.set('ses_1', [user('msg_target'), answer('asst_cut', 'Half an answer', false), later]);
+  const api = transport.connect(cfg);
+  // Not worked on yet: the target may still finish
+  expect(await api.turnDetail('ses_1', 'msg_target')).toMatchObject({ state: 'running', outcome: null });
+  peer.messages.get('ses_1')!.push(answer('asst_later', 'STATUS: needs_you | Later'), { id: 'idle_later', type: 'idle', time: { created: PEER_AT + 900 }, outcome: 'succeeded' });
+  expect(await api.turnDetail('ses_1', 'msg_target')).toMatchObject({ state: 'terminal', outcome: 'interrupted', text: '',
+    error: { type: 'session.superseded' }, assistant_id: 'asst_cut', completed_at: PEER_AT + 700 });
 });
 
 test.each(['short-json', 'password-type', 'port-type', 'validation-getter', 'read-failure', 'missing-file'] as const)(

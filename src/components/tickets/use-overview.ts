@@ -19,6 +19,7 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
   const stale = useRef(false);
   const controllers = useRef(new Set<AbortController>());
   const submitting = useRef(new Set<string>());
+  const action = useRef(token);
 
   const refresh = useCallback(async () => {
     if (polling.current || !mounted.current) return;
@@ -72,7 +73,7 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
     return () => { mounted.current = false; clearInterval(timer); for (const controller of active) controller.abort(); active.clear(); };
   }, [refresh]);
 
-  const post = useCallback(async (key: string, path: string, input: Record<string, string> = {}) => {
+  const post = useCallback(async (key: string, path: string, input: Record<string, string | number | boolean | null> = {}) => {
     if (stale.current) throw new Error('Reload page before submitting again.');
     if (submitting.current.has(key)) throw new Error('Action already submitting');
     const controller = new AbortController();
@@ -81,15 +82,23 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
     setPending(new Set(submitting.current));
     setErrors((previous) => { const next = { ...previous }; delete next[key]; return next; });
     try {
-      const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-dispatcher-token': token },
+      const send = () => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-everflow-token': action.current },
         body: JSON.stringify(input), signal: controller.signal, credentials: 'same-origin', mode: 'same-origin', redirect: 'error' });
+      let response = await send();
+      // Every server start issues a new token, so a page left open across a restart holds the old one. The guard rejects
+      // before any change, so the action is sent once more with the token of the page as served now.
+      if (response.status === 403) {
+        const used = action.current, next = await currentToken(controller.signal);
+        if (next && next !== used) { action.current = next; response = await send(); }
+      }
       if (response.status === 403) { stale.current = true; if (mounted.current) setExpired(true); }
       if (!response.ok) {
         const failure = await response.json().catch(() => null) as { error?: { message?: unknown } } | null;
         throw new Error(typeof failure?.error?.message === 'string' ? failure.error.message : `Action failed (${response.status})`);
       }
-      const result = await response.json() as { ticket?: number; job?: number };
-      if (!Number.isSafeInteger(result.ticket ?? result.job) || (result.ticket ?? result.job ?? 0) <= 0) throw new Error('Invalid committed action response');
+      const result = await response.json() as { ticket?: number; job?: number; conversation?: number; input?: string; setting?: string };
+      const committed = result.ticket ?? result.job ?? result.conversation;
+      if (typeof result.input !== 'string' && typeof result.setting !== 'string' && (!Number.isSafeInteger(committed) || (committed ?? 0) <= 0)) throw new Error('Invalid committed action response');
       if (mounted.current) { setNotice('Local action saved.'); void refresh(); }
       return result;
     } catch (error) {
@@ -101,7 +110,59 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
       submitting.current.delete(key);
       if (mounted.current) setPending(new Set(submitting.current));
     }
-  }, [refresh, token]);
+  }, [refresh]);
 
   return { state, now, unreachable, expired, pending, errors, notice, post, refresh };
+}
+
+// The token in the page the server renders now; only same-origin script can read it.
+async function currentToken(signal: AbortSignal): Promise<string | null> {
+  try {
+    const response = await fetch('/', { signal, cache: 'no-store', credentials: 'same-origin', mode: 'same-origin', redirect: 'error' });
+    if (!response.ok) return null;
+    return /<meta[^>]*\sname="everflow-token"[^>]*\scontent="([0-9a-f]{64})"/.exec(await response.text())?.[1] ?? null;
+  } catch { return null; }
+}
+
+// Tab title carries the count of tickets waiting on Antonio; a chime plays when it grows.
+export function useAttention(count: number) {
+  const previous = useRef(count);
+  const audio = useRef<AudioContext | null>(null);
+
+  useEffect(() => {
+    // Browsers keep audio suspended until the page gets a gesture
+    const unlock = () => { void sound(audio)?.resume(); };
+    document.addEventListener('pointerdown', unlock);
+    document.addEventListener('keydown', unlock);
+    return () => { document.removeEventListener('pointerdown', unlock); document.removeEventListener('keydown', unlock); };
+  }, []);
+
+  useEffect(() => {
+    document.title = count > 0 ? `(${count}) Everflow` : 'Everflow';
+    if (count > previous.current) chime(sound(audio));
+    previous.current = count;
+  }, [count]);
+}
+
+function sound(audio: { current: AudioContext | null }): AudioContext | null {
+  if (typeof AudioContext === 'undefined') return null;
+  return audio.current ??= new AudioContext();
+}
+
+function chime(context: AudioContext | null) {
+  if (!context) return;
+  void context.resume();
+  const start = context.currentTime;
+  [880, 1320].forEach((frequency, index) => {
+    const at = start + index * 0.15;
+    const tone = context.createOscillator();
+    const gain = context.createGain();
+    tone.frequency.value = frequency;
+    gain.gain.setValueAtTime(0.0001, at);
+    gain.gain.exponentialRampToValueAtTime(0.2, at + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.4);
+    tone.connect(gain).connect(context.destination);
+    tone.start(at);
+    tone.stop(at + 0.45);
+  });
 }

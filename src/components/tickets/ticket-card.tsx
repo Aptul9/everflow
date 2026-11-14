@@ -1,14 +1,16 @@
 'use client';
 
-import { BookOpen, Clock, GitCommitVertical, MessageSquarePlus, MessagesSquare, Play, RotateCw, X } from 'lucide-react';
+import { BookOpen, Check, Clock, ExternalLink, GitCommitVertical, LoaderCircle, Maximize2, MessageSquarePlus, MessagesSquare, Play, RotateCw, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { SourceMessage, TicketCard as CardData, TicketDetail } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Badge } from '../ui/badge.tsx';
 import { Button } from '../ui/button.tsx';
 import { Checkbox } from '../ui/checkbox.tsx';
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '../ui/dialog.tsx';
 import { ScrollArea } from '../ui/scroll-area.tsx';
 import { ActionDialog } from './action-dialog.tsx';
+import { Inline, Markdown } from './markdown.tsx';
 
 export type Tone = 'needs' | 'working' | 'waiting' | 'failed' | 'done' | 'skipped';
 
@@ -22,7 +24,8 @@ export const tones: Record<Tone, { dot: string; badge: string; bar: string }> = 
 };
 
 function tone(ticket: CardData): Tone {
-  if (ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed') return 'done';
+  if (ticket.lifecycle === 'dismissed') return 'skipped';
+  if (ticket.lifecycle === 'done') return 'done';
   if (ticket.stage === 'Failed') return 'failed';
   if (ticket.lifecycle === 'proposed' || ticket.stage === 'Needs you') return 'needs';
   return ticket.stage === 'Waiting on them' ? 'waiting' : 'working';
@@ -102,11 +105,81 @@ function Timeline({ id, ticket, revision }: { id: string; ticket: number; revisi
   </div>;
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+export function age(now: number, at: string): string {
+  const minutes = Math.max(0, Math.floor((now - Date.parse(at)) / 60_000));
+  return minutes < 60 ? `${minutes}m` : minutes < 1_440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1_440)}d`;
+}
+
+export function Field({ label, expanded, children }: { label: string; expanded: boolean; children: React.ReactNode }) {
   return <div className="min-w-0 rounded-md bg-muted/70 px-2.5 py-1.5">
     <dt className="text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">{label}</dt>
-    <dd className="line-clamp-4 text-[13px] whitespace-pre-wrap">{children}</dd>
+    <dd className={cn('text-[13px] whitespace-pre-wrap', !expanded && 'line-clamp-4')}>{children}</dd>
   </div>;
+}
+
+export function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return <section className="space-y-1.5">
+    <h3 className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{title}</h3>
+    {children}
+  </section>;
+}
+
+// Full text of a card in a popup; the card itself stays a clamped preview
+export function Expand({ label, title, meta, children }: { label: string; title: string; meta: React.ReactNode; children: React.ReactNode }) {
+  return <Dialog>
+    <DialogTrigger asChild>
+      <Button variant="ghost" size="xs" type="button" data-shortcut="e" aria-label={label} title={`${label} (e)`} className="h-7 px-1.5 text-muted-foreground hover:text-foreground">
+        <Maximize2 aria-hidden="true" />Expand
+      </Button>
+    </DialogTrigger>
+    <DialogContent className="max-h-[calc(100dvh-2rem)] gap-4 overflow-y-auto sm:max-w-3xl">
+      <DialogHeader className="gap-1.5 pr-10 text-left">
+        <DialogDescription className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">{meta}</DialogDescription>
+        <DialogTitle className="text-lg leading-snug">{title}</DialogTitle>
+      </DialogHeader>
+      {children}
+    </DialogContent>
+  </Dialog>;
+}
+
+function Notes({ ticket }: { ticket: CardData }) {
+  if (ticket.refs.length === 0 && ticket.kb_notes.length === 0) return null;
+  return <div className="flex flex-wrap gap-1 text-[11px]">
+    {ticket.refs.length > 0 && <ul aria-label="References" className="flex flex-wrap gap-1">{ticket.refs.map((ref) => <li key={ref.id}>
+      <SafeLink url={ref.url} className="inline-flex items-center rounded border border-primary/20 bg-accent px-1.5 py-px font-medium text-accent-foreground">{ref.key}</SafeLink>
+    </li>)}</ul>}
+    {ticket.kb_notes.length > 0 && <ul aria-label="KB paths" className="flex min-w-0 flex-wrap gap-1">{ticket.kb_notes.map((path, index) => <li key={`${index}:${path}`} title={path}
+      className="inline-flex max-w-full min-w-0 items-center gap-1 rounded border bg-muted px-1.5 py-px text-muted-foreground">
+      <BookOpen aria-hidden="true" className="size-3 shrink-0" /><code className="font-mono break-all">{path}</code>
+    </li>)}</ul>}
+  </div>;
+}
+
+function TicketDetails({ ticket, now, badge }: { ticket: CardData; now: number; badge: string }) {
+  const messagesId = useId();
+  const timelineId = useId();
+  return <Expand label={`Expand ticket #${ticket.id}`} title={ticket.title} meta={<>
+    <Badge className={cn('border-transparent px-1.5 text-[11px]', badge)}>{ticket.lifecycle === 'proposed' ? 'Proposed' : ticket.stage}</Badge>
+    {ticket.confidence !== null && <span><span className="font-medium text-foreground tabular-nums">{Math.round(ticket.confidence * 100)}%</span> conf.</span>}
+    {ticket.maybe_ticket !== null && <span className="rounded border border-dashed px-1">Maybe #{ticket.maybe_ticket}</span>}
+    <span className="font-semibold text-foreground">{ticket.client ?? 'Unassigned'}</span>
+    <span>Age: {age(now, ticket.created_at)}</span>
+    <span className="font-mono">#{ticket.id}</span>
+  </>}>
+    {ticket.summary && <Markdown text={ticket.summary} className="text-sm" />}
+    <dl className="grid gap-2">
+      {ticket.lifecycle === 'proposed' && <>
+        <Field label="Ask" expanded><Markdown text={ticket.ask || '(none)'} /></Field>
+        <Field label="Proposal" expanded><Markdown text={ticket.proposal || '(none)'} /></Field>
+      </>}
+      {ticket.report_line && <Field label="Report" expanded><Markdown text={ticket.report_line} /></Field>}
+      {ticket.reason && <Field label="Why" expanded><Markdown text={ticket.reason} /></Field>}
+      {ticket.session_title && <Field label="Session" expanded>{ticket.session_title}</Field>}
+    </dl>
+    <Notes ticket={ticket} />
+    <Section title={`Messages (${ticket.messages.length})`}><MessageList id={messagesId} messages={ticket.messages} /></Section>
+    <Section title="Timeline"><Timeline id={timelineId} ticket={ticket.id} revision={ticket.timeline_revision} /></Section>
+  </Expand>;
 }
 
 export function TicketCard(props: {
@@ -115,11 +188,13 @@ export function TicketCard(props: {
   onSelect: (checked: boolean) => void;
   enabled: boolean;
   chats: boolean;
+  chatProject?: string;
   expired: boolean;
   pending: ReadonlySet<string>;
   errors: Record<string, string>;
-  post: (key: string, path: string, input?: Record<string, string>) => Promise<unknown>;
+  post: (key: string, path: string, input?: Record<string, string | number | null>) => Promise<unknown>;
   now: number;
+  onDrag?: (dragging: boolean) => void;
 }) {
   const { ticket, post } = props;
   const heading = useId();
@@ -127,24 +202,35 @@ export function TicketCard(props: {
   const timelineId = useId();
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
-  const keys = { start: `ticket:${ticket.id}:start`, chat: `ticket:${ticket.id}:chat`, dismiss: `ticket:${ticket.id}:dismiss` };
+  const keys = { start: `ticket:${ticket.id}:start`, discuss: `ticket:${ticket.id}:discuss`, dismiss: `ticket:${ticket.id}:dismiss`, close: `ticket:${ticket.id}:close`, clear: `ticket:${ticket.id}:clear` };
   const terminal = ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed';
-  const error = props.errors[keys.start] || props.errors[keys.chat] || props.errors[keys.dismiss];
-  const minutes = Math.max(0, Math.floor((props.now - Date.parse(ticket.created_at)) / 60_000));
-  const age = minutes < 60 ? `${minutes}m` : minutes < 1_440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1_440)}d`;
+  const error = props.errors[keys.start] || props.errors[keys.discuss] || props.errors[keys.dismiss] || props.errors[keys.close] || props.errors[keys.clear];
   const style = tones[tone(ticket)];
   const actions = props.enabled && !terminal;
   const starting = props.pending.has(keys.start);
-  return <article tabIndex={-1} aria-labelledby={heading} data-ticket-id={ticket.id}
-    className={cn('group/card scroll-mt-28 rounded-lg border bg-card shadow-xs transition-[box-shadow,border-color] hover:border-foreground/15 hover:shadow-sm',
+  return <article tabIndex={-1} aria-labelledby={heading} data-ticket-id={ticket.id} draggable={actions}
+    onDragStart={(event) => { event.dataTransfer?.setData('text/plain', `#${ticket.id}`); props.onDrag?.(true); }} onDragEnd={() => props.onDrag?.(false)}
+    className={cn('group/card relative scroll-mt-28 overflow-hidden rounded-lg border bg-card transition-colors hover:border-foreground/20', actions && 'cursor-grab active:cursor-grabbing',
       'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring', props.selected && 'border-primary/40 bg-accent/40')}>
+    <span data-stripe aria-hidden="true" className={cn('absolute inset-y-0 left-0 w-1', style.bar)} />
     <div className="space-y-2 p-3">
       <div className="flex min-w-0 items-center gap-2 text-xs">
-        {actions && <Checkbox checked={props.selected} onCheckedChange={(checked) => props.onSelect(checked === true)} aria-label={`Select ticket #${ticket.id}`} className="size-4.5" />}
+        {props.enabled && <Checkbox checked={props.selected} onCheckedChange={(checked) => props.onSelect(checked === true)} aria-label={`Select ticket #${ticket.id}`} className="size-4.5" />}
         <span className="min-w-0 truncate font-semibold" title={ticket.client ?? undefined}>{ticket.client ?? 'Unassigned'}</span>
-        <span className="ml-auto inline-flex shrink-0 items-center gap-0.5 text-muted-foreground"><Clock aria-hidden="true" className="size-3" /><time dateTime={ticket.created_at} title={ticket.created_at} className="tabular-nums">Age: {age}</time></span>
+        <span className="ml-auto inline-flex shrink-0 items-center gap-0.5 text-muted-foreground"><Clock aria-hidden="true" className="size-3" /><time dateTime={ticket.created_at} title={ticket.created_at} className="tabular-nums">Age: {age(props.now, ticket.created_at)}</time></span>
+        {props.enabled && terminal && <Button type="button" variant="ghost" size="icon-sm" aria-label={`Clear ticket #${ticket.id}`} title="Clear from the board (the ticket is kept)"
+          className="-my-1 -mr-1.5 size-7 shrink-0 text-muted-foreground hover:text-foreground" disabled={props.expired || props.pending.has(keys.clear)}
+          onClick={() => { void post(keys.clear, `/api/ticket/${ticket.id}/clear`).catch(() => {}); }}><X aria-hidden="true" /></Button>}
       </div>
       <h4 id={heading} className="text-sm leading-snug font-semibold"><span className="sr-only">{`Ticket #${ticket.id}:`}</span>{' '}{ticket.title}</h4>
+      {ticket.session_id && !terminal && <p title={`Session ${ticket.session_id}`} className="flex min-w-0 items-center gap-1.5 rounded-md bg-info-soft px-2 py-1 text-xs font-medium text-info">
+        {ticket.chat_running ? <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin" /> : <MessagesSquare aria-hidden="true" className="size-3.5 shrink-0" />}
+        <span className="min-w-0">{`${ticket.chat_running ? 'Chat working now' : 'Chat open in OpenChamber'}${props.chatProject ? `, project ${props.chatProject}` : ''}`}</span>
+        <a href={`openchamber://session/${encodeURIComponent(ticket.session_id)}`} aria-label={`Open the chat of ticket #${ticket.id} in OpenChamber`}
+          className="ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1 font-semibold underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring">
+          Open<ExternalLink aria-hidden="true" className="size-3" />
+        </a>
+      </p>}
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
         <Badge className={cn('border-transparent px-1.5 text-[11px]', style.badge)}>{ticket.lifecycle === 'proposed' ? 'Proposed' : ticket.stage}</Badge>
         {ticket.lifecycle === 'proposed' && ticket.stage === 'Failed' && <Badge variant="destructive" className="px-1.5 text-[11px]">Failed</Badge>}
@@ -152,42 +238,33 @@ export function TicketCard(props: {
         {ticket.maybe_ticket !== null && <span className="rounded border border-dashed px-1 text-muted-foreground">Maybe #{ticket.maybe_ticket}</span>}
         <span className="ml-auto font-mono text-muted-foreground">#{ticket.id}</span>
       </div>
-      {ticket.summary && <p className="line-clamp-3 text-[13px] whitespace-pre-wrap text-muted-foreground">{ticket.summary}</p>}
-      {ticket.lifecycle === 'proposed' && <dl className="grid gap-1.5">
-        <Field label="Ask">{ticket.ask || '(none)'}</Field>
-        <Field label="Proposal">{ticket.proposal || '(none)'}</Field>
-      </dl>}
-      {ticket.lifecycle !== 'proposed' && (ticket.report_line || ticket.session_title) && <dl className="space-y-1 text-[13px]">
-        {ticket.report_line && <div><dt className="sr-only">Report</dt><dd className="line-clamp-3 whitespace-pre-wrap">{ticket.report_line}</dd></div>}
-        {ticket.session_title && <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"><dt><MessagesSquare aria-label="Session title" className="size-3.5" /></dt><dd className="min-w-0 truncate" title={ticket.session_title}>{ticket.session_title}</dd></div>}
-      </dl>}
-      {(ticket.refs.length > 0 || ticket.kb_notes.length > 0) && <div className="flex flex-wrap gap-1 text-[11px]">
-        {ticket.refs.length > 0 && <ul aria-label="References" className="flex flex-wrap gap-1">{ticket.refs.map((ref) => <li key={ref.id}>
-          <SafeLink url={ref.url} className="inline-flex items-center rounded border border-primary/20 bg-accent px-1.5 py-px font-medium text-accent-foreground">{ref.key}</SafeLink>
-        </li>)}</ul>}
-        {ticket.kb_notes.length > 0 && <ul aria-label="KB paths" className="flex min-w-0 flex-wrap gap-1">{ticket.kb_notes.map((path, index) => <li key={`${index}:${path}`} title={path}
-          className="inline-flex max-w-full min-w-0 items-center gap-1 rounded border bg-muted px-1.5 py-px text-muted-foreground">
-          <BookOpen aria-hidden="true" className="size-3 shrink-0" /><code className="truncate font-mono">{path}</code>
-        </li>)}</ul>}
-      </div>}
+      {/* The card is a glance: the AI sum-up, or the chat's latest status while it runs; the rest is in Expand */}
+      {(ticket.lifecycle === 'active' && ticket.report_line || ticket.summary) && <p className="line-clamp-2 text-[13px] whitespace-pre-wrap">
+        <Inline text={ticket.lifecycle === 'active' && ticket.report_line || ticket.summary} />
+      </p>}
+      <TicketDetails ticket={ticket} now={props.now} badge={style.badge} />
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
     </div>
-    {actions && <div className="flex items-center gap-1.5 border-t px-3 py-2">
+    {/* Two equal columns: Start and Discuss over Done and Dismiss, so every label fits and nothing wraps alone */}
+    {actions && <div className="grid grid-cols-2 gap-1.5 border-t px-3 py-2">
       {ticket.lifecycle === 'proposed' && props.chats && <>
-        <Button type="button" size="sm" data-shortcut="s" title="Start (s)" className="h-9 flex-1 sm:h-8" disabled={props.expired || starting}
+        <Button type="button" size="sm" data-shortcut="s" data-action="start" title="Start (s)" aria-label={starting ? 'Saving Start' : 'Start'} className="h-9 min-w-0 sm:h-8" disabled={props.expired || starting}
           onClick={() => { void post(keys.start, `/api/ticket/${ticket.id}/start`).catch(() => {}); }}>
-          {starting ? <RotateCw aria-hidden="true" className="animate-spin" /> : <Play aria-hidden="true" />}{starting ? 'Saving Start' : 'Start'}
+          {starting ? <RotateCw aria-hidden="true" className="animate-spin" /> : <Play aria-hidden="true" />}<span className="truncate">{starting ? 'Saving Start' : 'Start'}</span>
         </Button>
-        <ActionDialog label="Open chat with note" display="Chat" title={`Open chat for ticket #${ticket.id}`} confirm="Approve with note" note shortcut="c" size="sm"
-          icon={<MessageSquarePlus aria-hidden="true" />} className="h-9 flex-1 sm:h-8" disabled={props.expired || props.pending.has(keys.chat)}
-          onConfirm={(note) => post(keys.chat, `/api/ticket/${ticket.id}/chat`, { note })} />
+        <ActionDialog label="Discuss" title={`Discuss ticket #${ticket.id} in OpenChamber`} confirm="Open chat" discuss shortcut="c" size="sm"
+          icon={<MessageSquarePlus aria-hidden="true" />} className="h-9 min-w-0 sm:h-8" disabled={props.expired || props.pending.has(keys.discuss)}
+          onConfirm={(note) => post(keys.discuss, `/api/ticket/${ticket.id}/discuss`, note.trim() ? { note } : {})} />
       </>}
-      <ActionDialog label="Dismiss" display={ticket.lifecycle === 'proposed' && props.chats ? null : 'Dismiss'} title={`Dismiss ticket #${ticket.id}`} confirm="Confirm dismiss" shortcut="d"
-        size={ticket.lifecycle === 'proposed' && props.chats ? 'icon-sm' : 'sm'} icon={<X aria-hidden="true" />}
-        className={cn('h-9 sm:h-8', ticket.lifecycle === 'proposed' && props.chats ? 'w-9 sm:w-8' : 'flex-1')} disabled={props.expired || props.pending.has(keys.dismiss)}
-        onConfirm={(reason) => post(keys.dismiss, `/api/ticket/${ticket.id}/dismiss`, { reason })} />
+      <ActionDialog label="Mark done" display="Done" title={`Mark ticket #${ticket.id} done`} confirm="Confirm done" safe action="done"
+        placeholder="What was done by hand (optional)" size="sm" icon={<Check aria-hidden="true" />}
+        className="h-9 min-w-0 sm:h-8" disabled={props.expired || props.pending.has(keys.close)}
+        onConfirm={(reason) => post(keys.close, `/api/ticket/${ticket.id}/close`, { reason })} />
+      <ActionDialog label="Dismiss" display="Dismiss" title={`Dismiss ticket #${ticket.id}`} confirm="Confirm dismiss" shortcut="d" action="dismiss" mute="optional"
+        size="sm" icon={<X aria-hidden="true" />} className="h-9 min-w-0 sm:h-8" disabled={props.expired || props.pending.has(keys.dismiss)}
+        onConfirm={(reason, mute) => post(keys.dismiss, `/api/ticket/${ticket.id}/dismiss`, mute === undefined ? { reason } : { reason, mute_minutes: mute })} />
     </div>}
-    <div className="flex items-center gap-1 border-t px-2 py-1">
+    <div className="flex flex-wrap items-center gap-1 border-t px-2 py-1">
       <Toggle expanded={messagesOpen} controls={messagesId} onClick={() => setMessagesOpen(!messagesOpen)} icon={<MessagesSquare aria-hidden="true" />}>Messages ({ticket.messages.length})</Toggle>
       <Toggle expanded={timelineOpen} controls={timelineId} onClick={() => setTimelineOpen(!timelineOpen)} icon={<GitCommitVertical aria-hidden="true" />}>Timeline</Toggle>
     </div>

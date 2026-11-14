@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { expect, test } from 'vitest';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { migrate, openDb, prepareStart } from '../src/dispatcher/db.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { migrate, openDb, prepareStart } from '../src/core/db.ts';
 import { createV1, scratch } from './support.ts';
 
 test('explicit scratch config drives migration/start/reopen without enabling work', async () => {

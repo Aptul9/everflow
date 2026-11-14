@@ -1,5 +1,5 @@
 import { expect, test } from 'vitest';
-import { utc } from '../src/dispatcher/time.ts';
+import { utc } from '../src/core/time.ts';
 
 test.each([
   ['2026-11-06T00:00:00Z', '2026-11-06T00:00:00.000000Z'],

@@ -14,7 +14,7 @@ test('serves the dynamic Next root, compiled assets, state and newest-first deta
   const root = await http(server.port, '/');
   expect(root.status).toBe(200);
   expect(root.headers['content-type']).toContain('text/html');
-  expect(root.text).toContain('Workdesk');
+  expect(root.text).toContain('Everflow');
   expect(root.text).toContain('Review synthetic access');
   expect(root.text).not.toContain('<script>untrusted()</script>');
   token = rootToken(root.text);
@@ -33,7 +33,9 @@ test('serves the dynamic Next root, compiled assets, state and newest-first deta
   expect(dto.groups.working.some((ticket: { stage: string }) => ticket.stage === 'Idle')).toBe(true);
   expect(dto.groups.waiting_them.map((ticket: { id: number }) => ticket.id)).toContain(fixture.waiting);
   expect(dto.groups.failed.map((ticket: { id: number }) => ticket.id)).toContain(fixture.failed);
-  expect(dto.groups.done_today.map((ticket: { id: number }) => ticket.id)).toContain(fixture.dismissed);
+  expect(dto.groups.done_today.map((ticket: { id: number }) => ticket.id)).toContain(fixture.done);
+  expect(dto.groups.done_today.map((ticket: { id: number }) => ticket.id)).not.toContain(fixture.dismissed);
+  expect(dto.groups.skipped.map((ticket: { id: number }) => ticket.id)).toContain(fixture.dismissed);
   expect(dto.groups.done_today.some((ticket: { title: string }) => ticket.title === 'Old terminal work')).toBe(false);
   expect(dto.skipped.map((batch: { outcome: string }) => batch.outcome)).toEqual(expect.arrayContaining(['not_on_us', 'backlog', 'answered']));
   expect(dto.health.map((health: { dependency: string }) => health.dependency)).toEqual(expect.arrayContaining(['daemon', 'outlook', 'teams', 'provider:synthetic', 'opencode']));
@@ -68,7 +70,7 @@ test.each(['/', '/api/state', '/not-a-route', '/_next/static/not-real.js'])('rej
   for (const host of [`evil.invalid:${server.port}`, 'localhost', `localhost:${server.port + 1}`, `127.0.0.1:${server.port}.evil.invalid`, `LOCALHOST:${server.port}`]) {
     const response = await http(server.port, path, { headers: { host } });
     expect(response.status).toBe(403);
-    expect(response.text).not.toContain('Workdesk');
+    expect(response.text).not.toContain('Everflow');
   }
   expect((await http(server.port, path, { noHost: true })).status).toBe(403);
   expect((await http(server.port, path, { headers: { host: [`127.0.0.1:${server.port}`, `localhost:${server.port}`] } })).status).toBe(403);
@@ -78,12 +80,12 @@ test('accepts exact localhost Host without trusting forwarded headers', async ()
   expect((await http(server.port, '/api/state', { headers: { host: `localhost:${server.port}`, 'x-forwarded-host': 'evil.invalid' } })).status).toBe(200);
 });
 
-test.each(['start', 'chat', 'dismiss'])('guards ticket %s with current token and exact Origin', async (action) => {
+test.each(['start', 'chat', 'discuss', 'dismiss'])('guards ticket %s with current token and exact Origin', async (action) => {
   token = rootToken((await http(server.port, '/')).text);
   const headers = actionHeaders(server.port, token);
   const path = `/api/ticket/${fixture.proposal}/${action}`;
-  for (const bad of [ { ...headers, 'x-dispatcher-token': '' }, { ...headers, 'x-dispatcher-token': 'wrong' },
-    { ...headers, 'x-dispatcher-token': 'é'.repeat(token.length) }, { ...headers, origin: '' },
+  for (const bad of [ { ...headers, 'x-everflow-token': '' }, { ...headers, 'x-everflow-token': 'wrong' },
+    { ...headers, 'x-everflow-token': 'é'.repeat(token.length) }, { ...headers, origin: '' },
     { ...headers, origin: 'null' }, { ...headers, origin: `https://127.0.0.1:${server.port}` },
     { ...headers, origin: `http://localhost:${server.port}` }, { ...headers, origin: `http://127.0.0.1:${server.port}/` } ]) {
     expect((await http(server.port, path, { method: 'POST', headers: bad, body: '{}' })).status).toBe(403);
@@ -103,7 +105,7 @@ test.each(['batch', 'job'])('validates %s action guards, JSON and ids through re
   const id = scope === 'batch' ? fixture.skipped : fixture.failedJob;
   const action = scope === 'batch' ? 'ticket' : 'retry';
   const path = `/api/${scope}/${id}/${action}`;
-  for (const bad of [{ ...headers, origin: 'http://evil.invalid' }, { ...headers, 'x-dispatcher-token': 'stale' }]) {
+  for (const bad of [{ ...headers, origin: 'http://evil.invalid' }, { ...headers, 'x-everflow-token': 'stale' }]) {
     const result = await http(server.port, path, { method: 'POST', headers: bad, body: '{}' });
     expect(result.status).toBe(403);
     expect(result.headers['access-control-allow-origin']).toBeUndefined();
@@ -125,10 +127,11 @@ test('validates note/reason string bounds without changing state and accepts mat
   })).status).toBe(200);
 });
 
-test.each(['start', 'chat', 'dismiss'])('validates %s JSON objects, sizes, media type, ids and allowed fields', async (action) => {
+test.each(['start', 'chat', 'discuss', 'dismiss'])('validates %s JSON objects, sizes, media type, ids and allowed fields', async (action) => {
   const headers = actionHeaders(server.port, rootToken((await http(server.port, '/')).text));
   const path = `/api/ticket/${fixture.proposal}/${action}`;
-  for (const body of ['{', 'null', '[]', '1', '{"extra":true}', action === 'chat' ? '{"note":false}' : '{"reason":false}']) {
+  for (const body of ['{', 'null', '[]', '1', '{"extra":true}', ['chat', 'discuss'].includes(action) ? '{"note":false}' : '{"reason":false}',
+    ...action === 'discuss' ? [JSON.stringify({ note: 'x'.repeat(8_001) })] : []]) {
     expect((await http(server.port, path, { method: 'POST', headers, body })).status).toBe(400);
   }
   expect((await http(server.port, path, { method: 'POST', headers: { ...headers, 'content-type': 'text/plain' }, body: '{}' })).status).toBe(415);
@@ -138,6 +141,24 @@ test.each(['start', 'chat', 'dismiss'])('validates %s JSON objects, sizes, media
   }
   expect((await http(server.port, '/api/ticket/999999')).status).toBe(404);
   expect((await http(server.port, `/api/ticket/999999/${action}`, { method: 'POST', headers, body: action === 'chat' ? '{"note":"instruction"}' : '{}' })).status).toBe(404);
+});
+
+test('Discuss commits a discussion chat with an optional question, once, without remote calls', async () => {
+  const headers = actionHeaders(server.port, rootToken((await http(server.port, '/')).text));
+  using db = new DatabaseSync(fixture.path);
+  const add = (title: string) => Number(db.prepare(`INSERT INTO ticket(title,summary,ask,proposal,kb_notes,created_at,last_activity_at)
+    VALUES (?,'s','a','p','[]','2026-11-06T00:00:00.000000Z','2026-11-06T00:00:00.000000Z')`).run(title).lastInsertRowid);
+  const plain = add('Discuss without question');
+  const asked = add('Discuss with question');
+  const post = (id: number, body: string) => http(server.port, `/api/ticket/${id}/discuss`, { method: 'POST', headers, body });
+  expect((await Promise.all([post(plain, '{}'), post(plain, '{}')])).map((response) => response.status)).toEqual([200, 200]);
+  expect((await post(asked, JSON.stringify({ note: 'Why UAT first?' }))).status).toBe(200);
+  for (const id of [plain, asked]) {
+    expect(db.prepare("SELECT payload FROM job WHERE kind='start_chat' AND ticket=?").all(id).map((job) => JSON.parse(String(job.payload)))).toEqual([{ discuss: true }]);
+  }
+  expect(db.prepare('SELECT lifecycle,approval_note FROM ticket WHERE id=?').get(asked)).toMatchObject({ lifecycle: 'active', approval_note: 'Why UAT first?' });
+  expect((await post(asked, '{"note":"different"}')).status).toBe(409);
+  expect(db.prepare('SELECT COUNT(*) AS n FROM turn').get()!.n).toBe(0);
 });
 
 test('commits double Start once, note approval, dismiss feedback, Make ticket and parked retry without remote calls', async () => {
@@ -152,7 +173,11 @@ test('commits double Start once, note approval, dismiss feedback, Make ticket an
   expect((await post(`/api/ticket/${second}/chat`, JSON.stringify({ note: 'Exact instruction\nSecond line' }))).status).toBe(200);
   expect(db.prepare('SELECT approval_note FROM ticket WHERE id=?').get(second)!.approval_note).toBe('Exact instruction\nSecond line');
   expect((await post(`/api/ticket/${second}/chat`, '{"note":"different"}')).status).toBe(409);
+  expect((await post(`/api/ticket/${second}/close`, '{"reason":"Done by hand"}')).status).toBe(200);
+  expect(db.prepare('SELECT lifecycle,report_line FROM ticket WHERE id=?').get(second)).toMatchObject({ lifecycle: 'done', report_line: 'Done by hand' });
+  expect((await post(`/api/ticket/${second}/close`, '{"reason":"x"}')).status).toBe(200);
   expect((await post(`/api/ticket/${fixture.active}/dismiss`, '{"reason":"Duplicate request"}')).status).toBe(200);
+  expect((await post(`/api/ticket/${fixture.active}/close`, '{}')).status).toBe(409);
   for (const batch of [fixture.skipped, fixture.backlog, fixture.answered]) expect((await post(`/api/batch/${batch}/ticket`)).status).toBe(200);
   expect((await post(`/api/batch/${fixture.skipped}/ticket`)).status).toBe(200);
   expect((await post(`/api/job/${fixture.failedJob}/retry`)).status).toBe(200);
@@ -171,7 +196,7 @@ test.each([{ tickets: false, chats: true }, { tickets: 'true', chats: true }, { 
     const root = await http(instance.port, '/');
     const headers = actionHeaders(instance.port, rootToken(root.text));
     expect(root.text).toContain(flags.tickets === true ? 'Chats off' : 'Tickets disabled');
-    for (const action of ['start', 'chat']) expect((await http(instance.port, `/api/ticket/${off.proposal}/${action}`, {
+    for (const action of ['start', 'chat', 'discuss']) expect((await http(instance.port, `/api/ticket/${off.proposal}/${action}`, {
       method: 'POST', headers, body: action === 'chat' ? '{"note":"instruction"}' : '{}',
     })).status).toBe(409);
     if (flags.tickets !== true) {

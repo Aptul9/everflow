@@ -1,9 +1,10 @@
-import type { Lifecycle } from '../dispatcher/types.ts';
-import type { Stage, TicketRef } from '../dispatcher/tickets.ts';
+import type { Lifecycle } from '../core/types.ts';
+import type { Stage, TicketRef } from '../core/tickets.ts';
+import type { ModelChoice, ModelOptions } from '../core/settings.ts';
 
 export const groups = [
   ['needs_you', 'Needs you'], ['working', 'Working'], ['waiting_them', 'Waiting on them'],
-  ['failed', 'Failed'], ['done_today', 'Done today'], ['skipped', 'Skipped'],
+  ['failed', 'Failed'], ['done_today', 'Done'], ['skipped', 'Skipped'],
 ] as const;
 export type Group = (typeof groups)[number][0];
 
@@ -34,7 +35,10 @@ export interface TicketCard {
   closed_at: string | null;
   report: string | null;
   report_line: string | null;
+  session_id: string | null;
+  chat_running: boolean;
   session_title: string | null;
+  reason: string | null;
   timeline_revision: string;
   messages: SourceMessage[];
   refs: Reference[];
@@ -57,6 +61,10 @@ export interface Health {
   checkpoint?: string | null;
   coverage?: 'recent-topics' | 'saved-history-replay';
   observed_at?: string;
+  // Account rows: paused on the page, batches held while paused, configured clients the account belongs to
+  paused?: boolean;
+  waiting?: number;
+  clients?: string[];
 }
 
 export interface ParkedJob {
@@ -74,17 +82,58 @@ export interface SkippedBatch {
   title: string | null;
   source: string;
   account: string;
-  outcome: 'not_on_us' | 'backlog' | 'answered';
+  outcome: 'not_on_us' | 'backlog' | 'answered' | 'muted';
   created_at: string;
+  reason: string | null;
   messages: SourceMessage[];
+}
+
+// A batch waiting for or in triage, shown before its ticket exists
+export interface TriageBatch {
+  id: number;
+  title: string | null;
+  source: string;
+  account: string;
+  created_at: string;
+  job: 'queued' | 'running' | 'parked' | null;
+  // Configured clients the batch belongs to; held while its account is paused
+  clients: string[];
+  held: boolean;
+  messages: SourceMessage[];
+}
+
+// An agent running right now: a triage call or a ticket chat turn
+export interface Agent {
+  kind: 'triage' | 'chat';
+  clients: string[];
+  title: string | null;
+  ticket: number | null;
+}
+
+export interface MutedConversation {
+  id: number;
+  title: string | null;
+  source: string;
+  account: string;
+  until: string;
+  forever: boolean;
 }
 
 export interface OverviewState {
   tickets_enabled: boolean;
   chats_enabled: boolean;
   day: string;
-  groups: Record<Exclude<Group, 'skipped'>, TicketCard[]>;
+  groups: Record<Group, TicketCard[]>;
   skipped: SkippedBatch[];
+  triaging: TriageBatch[];
+  agents: Agent[];
+  // Model and effort the next triage call and the next new ticket chat use, and what the pickers can offer.
+  // triage_routes: providers triage tries in order, so the account its model runs on
+  models: { triage: ModelChoice; chat: ModelChoice; options: ModelOptions; triage_routes: string[] };
+  // Folder name of the OpenChamber project that holds ticket chats, and per client where it has its own
+  chat_project: string;
+  chat_projects?: Record<string, string>;
+  muted: MutedConversation[];
   health: Health[];
   problems: {
     jobs: ParkedJob[];

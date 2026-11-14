@@ -1,8 +1,8 @@
 import { expect, test } from 'vitest';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { openDb } from '../src/dispatcher/db.ts';
-import { sourceStart } from '../src/dispatcher/ingest.ts';
-import { createSourceReader, sourceCommand, validateRuntimeConfig } from '../src/dispatcher/runtime.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { openDb } from '../src/core/db.ts';
+import { sourceStart } from '../src/core/ingest.ts';
+import { createSourceReader, sourceCommand, validateRuntimeConfig } from '../src/core/runtime.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
 import { scratch } from './support.ts';
 
@@ -23,6 +23,10 @@ test('Google source runtime validates identity settings and builds only artifact
     expect(command.args).toContain('C:\\synthetic tools\\reader.exe');
     expect(command.args).not.toContain('--yes');
     expect(command.args).not.toContain('--browser-refresh');
+    expect(command.args).not.toContain('--host');
+    const oe = sourceCommand({ ...cfg, sources: { [source]: { enabled: true, account: 'me@example.invalid', self_id: 'self', executable: 'C:/synthetic tools/reader.exe', host: 'oe-vm' } } }, db, source, receipt);
+    expect(oe.args.slice(oe.args.indexOf('--host'), oe.args.indexOf('--host') + 2)).toEqual(['--host', 'oe-vm']);
+    expect(oe.args).not.toContain('--executable');
     if (source === 'gchat') {
       for (const setting of [true, false, 'true']) {
         const enabled = sourceCommand({ ...cfg, sources: { gchat: { enabled: true, account: 'me@example.invalid', self_id: 'self', browser_refresh: setting } } }, db, 'gchat', receipt);
@@ -30,6 +34,18 @@ test('Google source runtime validates identity settings and builds only artifact
       }
     }
   }
+});
+
+test('Gmail through the OE agent passes every listed mailbox; Slack requires host, account, user and workspace', () => {
+  const f = scratch('oe-runtime-'), cfg = loadConfig(f.config), receipt = process.env.TEST_BUILD_RECEIPT!;
+  using db = openDb(f.path);
+  const gmail = sourceCommand({ ...cfg, sources: { gmail: { enabled: true, host: 'oe-vm', accounts: ['a@example.invalid', 'b@example.invalid'] } } }, db, 'gmail', receipt);
+  expect(gmail.args.filter((_, i, all) => all[i - 1] === '--account')).toEqual(['a@example.invalid', 'b@example.invalid']);
+  expect(() => validateRuntimeConfig({ ...cfg, sources: { gmail: { enabled: true, accounts: ['a@example.invalid'] } } }, receipt)).toThrow('source.google-account-required');
+  expect(() => validateRuntimeConfig({ ...cfg, sources: { slack: { enabled: true, host: 'oe-vm', account: 'a@example.invalid', self_id: 'U1' } } }, receipt)).toThrow('source.slack-options-required');
+  const slack = sourceCommand({ ...cfg, sources: { slack: { enabled: true, host: 'oe-vm', account: 'a@example.invalid', self_id: 'U1', workspace: 'T1' } } }, db, 'slack', receipt);
+  expect(slack.args.join(' ')).toContain('dist\\watchers\\slack.js');
+  expect(slack.args.slice(slack.args.indexOf('--host'))).toEqual(['--host', 'oe-vm', '--account', 'a@example.invalid', '--self-id', 'U1', '--workspace', 'T1']);
 });
 
 test('recent-topic checkpoint survives runtime reader without claiming cursor advancement', () => {

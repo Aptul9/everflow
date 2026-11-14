@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
-import * as api from '../src/dispatcher/kb-agent.ts';
-import { openDb } from '../src/dispatcher/db.ts';
-import { classify } from '../src/dispatcher/jobs.ts';
+import * as api from '../src/core/kb-agent.ts';
+import { openDb } from '../src/core/db.ts';
+import { classify } from '../src/core/jobs.ts';
 import { context, decision, kbFixture, provider, scriptedPeer, text, tools, use } from './kb-support.ts';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
@@ -48,6 +48,62 @@ test('candidate validation uses only offered ids and does not coerce strings', (
 });
 
 const run = api.assess;
+
+test('configured vault guide reaches the triage system prompt and an empty guide adds nothing', async () => {
+  const { cfg } = kbFixture();
+  using db = openDb(cfg.db.path);
+  await using peer = await scriptedPeer(() => ({ body: text(JSON.stringify(decision())) }));
+  await run(cfg, context(), [], 'new', undefined, { db, providers: { first: provider(peer.baseURL) } });
+  cfg.vault.guide = '01_Projects/<slug>.md holds one page per client engagement.';
+  await run(cfg, context(), [], 'new', undefined, { db, providers: { first: provider(peer.baseURL) } });
+  expect(peer.requests[0]!.system).not.toContain('Vault layout');
+  expect(peer.requests[1]!.system).toContain("Vault layout, from Antonio's configuration (trusted): 01_Projects/<slug>.md holds one page per client engagement.");
+});
+
+test('configured client roles reach the triage system prompt; a client without one adds nothing', async () => {
+  const { cfg } = kbFixture();
+  using db = openDb(cfg.db.path);
+  await using peer = await scriptedPeer(() => ({ body: text(JSON.stringify(decision())) }));
+  await run(cfg, context(), [], 'new', undefined, { db, providers: { first: provider(peer.baseURL) } });
+  cfg.clients = { acme: { accounts: [], domains: [], keywords: [], role: ' One of two reviewers; intake assigned by name. ' }, other: { accounts: [], domains: [], keywords: [], role: ' ' } };
+  await run(cfg, context(), [], 'new', undefined, { db, providers: { first: provider(peer.baseURL) } });
+  expect(peer.requests[0]!.system).not.toContain('role per client');
+  expect(peer.requests[1]!.system).toContain("Antonio's role per client, from his configuration (trusted). For a listed client, work outside its role is not on_us; clients not listed follow the rules above alone:\n- acme: One of two reviewers; intake assigned by name.");
+  expect(peer.requests[1]!.system).not.toContain('- other:');
+});
+
+test('the triage system prompt spells out every valid action, on_us and ticket combination', async () => {
+  const { cfg } = kbFixture();
+  using db = openDb(cfg.db.path);
+  await using peer = await scriptedPeer(() => ({ body: text(JSON.stringify(decision())) }));
+  await run(cfg, context(), [], 'new', undefined, { db, providers: { first: provider(peer.baseURL) } });
+  const system = peer.requests[0]!.system;
+  expect(system).toContain('skip: on_us false, ticket null');
+  expect(system).toContain('new: on_us true, ticket null, non-empty title');
+  expect(system).toContain('update: on_us true, ticket set to an offered candidate id, non-empty title');
+  expect(system).toMatch(/already tracked.*skip/i);
+  expect(system).toMatch(/mode is update.*different request.*is new/is);
+  expect(system).toMatch(/mentions_me true tags Antonio.*never skip/is);
+  expect(system).toMatch(/only for work Antonio himself has to do.*in Cc.*does not make every request in it his/is);
+  expect(system).toMatch(/clearly meant for another named person, or a step only another team carries out.*is skip unless the message names Antonio/is);
+  expect(system).toMatch(/group or distribution list is his when it is his team that is asked/i);
+  expect(system).toMatch(/one-to-one chat, a fault or gap reported to him on something he built or runs is an ask/i);
+  expect(system).toMatch(/ref\.addressed.*only in cc is not his work unless the text names him or asks him/is);
+  expect(system).toMatch(/light Markdown.*\*\*bold\*\*/is);
+});
+
+test('the triage prompt asks for a short sum-up and keeps evidence in the reason', async () => {
+  const { cfg } = kbFixture();
+  using db = openDb(cfg.db.path);
+  await using peer = await scriptedPeer(() => ({ body: text(JSON.stringify(decision())) }));
+  await run(cfg, context(), [], 'new', undefined, { db, providers: { first: provider(peer.baseURL) } });
+  const system = peer.requests[0]!.system;
+  expect(system).toContain('summary: a quick sum-up');
+  expect(system).toMatch(/evidence.*belong in reason/i);
+  const schema = JSON.parse(system.slice(system.indexOf('{"$schema"'), system.lastIndexOf('}') + 1));
+  expect(schema.properties.summary.description).toMatch(/two short sentences/);
+  expect(schema.properties.ask.description).toMatch(/one sentence/);
+});
 
 test('real HTTP peer searches, reads and returns strict JSON with matching tool ids and only two tools', async () => {
   const { cfg } = kbFixture();

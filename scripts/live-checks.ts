@@ -10,12 +10,12 @@ import { DatabaseSync } from 'node:sqlite';
 import { parseArgs } from 'node:util';
 import { inside, plainParents, readBuildReceipt, samePath } from '../src/web/build-artifact.ts';
 
-export const SCRATCH_ROOT = resolve('C:/Users/Antonio/AppData/Local/Temp/opencode/inbox-dispatcher-v2');
+export const SCRATCH_ROOT = resolve('C:/Users/Antonio/AppData/Local/Temp/opencode/everflow');
 export const LIVE_ROOT = join(SCRATCH_ROOT, 'live-checks');
-export const CHECKOUT = resolve('C:/Users/Antonio/Downloads/personal projects/inbox-dispatcher');
+export const CHECKOUT = resolve('C:/Users/Antonio/Downloads/personal projects/everflow');
 export const SEED_BACKUP = 'data/backups/pre-review-resume-20261104-234928.db';
 export const MANIFEST = 'run-manifest.json';
-const PROTECTED = ['data/dispatcher.db', 'data/teamsrelay.token'];
+const PROTECTED = ['data/everflow-v1.db', 'data/teamsrelay.token'];
 const SIDECARS = ['', '-wal', '-shm', '-journal'];
 
 export class GuardError extends Error {
@@ -225,20 +225,20 @@ interface Harness {
 }
 
 type Modules = {
-  config: typeof import('../src/dispatcher/config.ts');
-  opencode: typeof import('../src/dispatcher/opencode.ts');
+  config: typeof import('../src/core/config.ts');
+  opencode: typeof import('../src/core/opencode.ts');
   kernel: typeof import('../src/windows/kernel.ts');
 };
 
 function compiled(receipt: string): { root: string; modules: Modules } {
   const artifact = readBuildReceipt(receipt);
   const load = createRequire(join(artifact.root, 'package.json'));
-  return { root: artifact.root, modules: { config: load('./dist/dispatcher/config.js'), opencode: load('./dist/dispatcher/opencode.js'),
+  return { root: artifact.root, modules: { config: load('./dist/core/config.js'), opencode: load('./dist/core/opencode.js'),
     kernel: load('./dist/windows/kernel.js') } };
 }
 
 function runInput(scenario: string, runRoot: string, profile: string | undefined, seed?: string): GuardInput {
-  return { optIn: true, scenario, runRoot, config: join(runRoot, 'config.toml'), db: join(runRoot, 'dispatcher.db'),
+  return { optIn: true, scenario, runRoot, config: join(runRoot, 'config.toml'), db: join(runRoot, 'everflow.db'),
     writable: [join(runRoot, 'sessions'), join(runRoot, 'providers.jsonc'), join(runRoot, 'harness.json')],
     readOnly: [VAULT, OPENCODE_CONFIG, OPENCHAMBER_SETTINGS, SOURCE_CONFIG, ...(profile ? [profile] : [])], ...(seed ? { seed } : {}) };
 }
@@ -256,7 +256,7 @@ function configText(harness: Harness): string {
   const { options: o } = harness, q = JSON.stringify;
   return `# Owned live-check instance. Paths are relative to this file.
 [db]
-path = "dispatcher.db"
+path = "everflow.db"
 
 [vault]
 path = ${q(VAULT.replaceAll('\\', '/'))}
@@ -337,7 +337,7 @@ function ownSession(db: DatabaseSync, plan: RunPlan, ticket: number, peer: Retur
   const store = JSON.parse(String(db.prepare("SELECT detail FROM health WHERE dependency='daemon'").get()!.detail)).store_id;
   return { id: String(row.session_id), async verify() {
     const session = await peer.get(String(row.session_id));
-    const tag = session.metadata?.inbox_dispatcher as { store_id?: unknown; ticket?: unknown } | undefined;
+    const tag = session.metadata?.everflow as { store_id?: unknown; ticket?: unknown } | undefined;
     if (tag?.store_id !== store || tag?.ticket !== ticket || !(samePath(session.location.directory, join(plan.runRoot, 'sessions')))) refuse('session.not-owned');
     return session;
   } };
@@ -445,10 +445,10 @@ async function main(argv: string[]): Promise<void> {
     const id = Number(command === 'approve' ? values.ticket : values.batch);
     if (!Number.isSafeInteger(id) || id <= 0) refuse(`${command}.id`);
     const page = await http(last.port, 'GET', '/');
-    const token = /<meta name="dispatcher-token" content="([a-f0-9]{64})"/.exec(page.text)?.[1] ?? refuse(`${command}.token-missing`);
+    const token = /<meta name="everflow-token" content="([a-f0-9]{64})"/.exec(page.text)?.[1] ?? refuse(`${command}.token-missing`);
     const body = command === 'approve' ? JSON.stringify({ note: values.note ?? refuse('approve.note-required') }) : '{}';
     const result = await http(last.port, 'POST', command === 'approve' ? `/api/ticket/${id}/chat` : `/api/batch/${id}/ticket`, { origin: `http://127.0.0.1:${last.port}`,
-      'x-dispatcher-token': token, 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(body)) }, body);
+      'x-everflow-token': token, 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(body)) }, body);
     writeHarness(plan, harness, `${command}:${id}`, { status: result.status, response: result.text });
     out(result);
   } else if (command === 'remote') {

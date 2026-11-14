@@ -1,10 +1,10 @@
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { openDb } from '../src/dispatcher/db.ts';
-import * as ingestApi from '../src/dispatcher/ingest.ts';
-import * as jobs from '../src/dispatcher/jobs.ts';
-import * as api from '../src/dispatcher/tickets.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { openDb } from '../src/core/db.ts';
+import * as ingestApi from '../src/core/ingest.ts';
+import * as jobs from '../src/core/jobs.ts';
+import * as api from '../src/core/tickets.ts';
 import { scratch, snapshot } from './support.ts';
 
 const { ingest } = ingestApi;
@@ -115,27 +115,70 @@ test.each(['proposed', 'active'])('an existing %s route wins and keeps context l
   expect(db.prepare("SELECT COUNT(*) AS n FROM timeline WHERE kind='message' AND ticket=?").get(primary)?.n).toBe(1);
 });
 
-test.each(['2026-11-05T00:00:00Z', '2026-10-23T00:00:00Z'])('a done route closed at %s reopens the same approved ticket and session', (closedAt) => {
-  using db = openDb(fixture().path);
+test.each(['2026-11-05T00:00:00Z', '2026-11-04T00:00:00Z'])('new input in the chat of a ticket closed at %s goes to triage; only a reopen decision reopens the same session', (closedAt) => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
   const id = batch(db);
-  const owner = ticket(db, { lifecycle: 'done', session_id: 'keep-this-session', approved_at: OLD, closed_at: closedAt, report: 'done' });
+  const owner = ticket(db, { lifecycle: 'done', session_id: 'keep-this-session', approved_at: OLD, closed_at: closedAt, report: 'done', client: 'acme' });
   link(db, owner, conversation(db, id));
-  expect(api.route?.(db, id, AT)).toMatchObject({ ticket: owner, mode: 'forward' });
+  expect(api.route?.(db, id, AT)).toMatchObject({ ticket: owner, mode: 'reopen', candidates: [owner] });
+  expect(db.prepare('SELECT lifecycle,report FROM ticket WHERE id=?').get(owner)).toEqual({ lifecycle: 'done', report: 'done' });
+  expect(JSON.parse(String(offer(db, cfg, id).payload))).toMatchObject({ mode: 'reopen', ticket: owner, candidate_ids: [owner] });
+  expect(api.applyDecision(db, id, decision({ action: 'update', ticket: owner, reason: 'New ask on the same deploy' }))).toBe(owner);
   expect(db.prepare('SELECT lifecycle,session_id,approved_at,report FROM ticket WHERE id=?').get(owner))
     .toEqual({ lifecycle: 'active', session_id: 'keep-this-session', approved_at: OLD, report: null });
+  expect(db.prepare('SELECT ticket,state,outcome FROM batch WHERE id=?').get(id)).toEqual({ ticket: owner, state: 'pending', outcome: 'routed' });
+  expect(db.prepare("SELECT actor,body FROM timeline WHERE ticket=? AND kind='status'").get(owner)).toEqual({ actor: 'agent', body: 'Reopened by triage' });
 });
 
 test('reopening a manually closed unapproved proposal cannot manufacture approval', () => {
-  using db = openDb(fixture().path);
+  const { path, cfg } = fixture();
+  using db = openDb(path);
   const id = batch(db);
-  const owner = ticket(db, { lifecycle: 'done', closed_at: '2026-11-05T00:00:00Z' });
+  const owner = ticket(db, { lifecycle: 'done', closed_at: '2026-11-05T00:00:00Z', client: 'acme' });
   link(db, owner, conversation(db, id));
-  expect(api.route?.(db, id, AT)).toMatchObject({ ticket: owner, mode: 'update' });
-  expect(db.prepare('SELECT lifecycle,approved_at,session_id FROM ticket WHERE id=?').get(owner)).toEqual({ lifecycle: 'proposed', approved_at: null, session_id: null });
+  expect(api.route?.(db, id, AT)).toMatchObject({ ticket: owner, mode: 'reopen' });
+  offer(db, cfg, id);
+  expect(api.applyDecision(db, id, decision({ action: 'update', ticket: owner }))).toBe(owner);
+  expect(db.prepare('SELECT lifecycle,approved_at,session_id,proposal FROM ticket WHERE id=?').get(owner)).toEqual({ lifecycle: 'proposed', approved_at: null, session_id: null, proposal: 'Inspect logs' });
+  expect(db.prepare('SELECT outcome FROM batch WHERE id=?').get(id)!.outcome).toBe('proposed');
+});
+
+test('chatter in the chat of a closed ticket is skipped and the ticket stays closed; the next message is judged again', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const thanks = batch(db, { conversation_id: 'chat', text: 'grazie' });
+  const owner = ticket(db, { lifecycle: 'done', session_id: 'kept', approved_at: OLD, closed_at: '2026-11-05T12:00:00Z', report: 'done', client: 'acme',
+    summary: 'Install Rancher on the lab cluster' });
+  link(db, owner, conversation(db, thanks));
+  db.prepare("INSERT INTO timeline(ticket,at,kind,actor,body,event_key) VALUES (?,?,'status','you','done myself','close:1')").run(owner, '2026-11-05T12:00:00Z');
+  const scope = JSON.parse(String(offer(db, cfg, thanks).payload));
+  expect(scope).toMatchObject({ mode: 'reopen', ticket: owner });
+  expect(api.ticketRecord(db, owner)).toMatchObject({ id: owner, summary: 'Install Rancher on the lab cluster', closed_at: '2026-11-05T12:00:00Z',
+    closed_by: 'you', closing_note: 'done myself', timeline: [{ kind: 'status', actor: 'you', body: 'done myself' }] });
+  expect(api.applyDecision(db, thanks, decision({ on_us: false, action: 'skip', title: '', reason: 'Only thanks' }))).toBeNull();
+  expect(db.prepare('SELECT lifecycle,report FROM ticket WHERE id=?').get(owner)).toEqual({ lifecycle: 'done', report: 'done' });
+  expect(db.prepare('SELECT state,outcome,ticket FROM batch WHERE id=?').get(thanks)).toEqual({ state: 'done', outcome: 'not_on_us', ticket: null });
+  expect(db.prepare('SELECT kind FROM ticket_conversation WHERE ticket=?').get(owner)!.kind).toBe('primary');
+  const next = batch(db, { conversation_id: 'chat', message_id: 'later', text: 'one more thing' });
+  expect(api.route(db, next, AT)).toMatchObject({ ticket: owner, mode: 'reopen' });
+});
+
+test('a different request in the chat of a closed ticket becomes a new ticket and takes the chat; the old one keeps it as context', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const input = batch(db, { conversation_id: 'chat', text: 'Can you also open the firewall for the backup?' });
+  const owner = ticket(db, { lifecycle: 'done', session_id: 'kept', approved_at: OLD, closed_at: '2026-11-05T12:00:00Z', report: 'done', client: 'acme' });
+  link(db, owner, conversation(db, input));
+  offer(db, cfg, input);
+  const created = api.applyDecision(db, input, decision({ title: 'Firewall for backup' }))!;
+  expect(created).not.toBe(owner);
+  expect(db.prepare('SELECT lifecycle FROM ticket WHERE id=?').get(owner)!.lifecycle).toBe('done');
+  expect(db.prepare('SELECT ticket,kind FROM ticket_conversation ORDER BY ticket').all()).toEqual([{ ticket: owner, kind: 'context' }, { ticket: created, kind: 'primary' }]);
 });
 
 test.each([
-  { lifecycle: 'done', closed_at: '2026-10-22T23:59:59.999999Z' },
+  { lifecycle: 'done', closed_at: '2026-11-03T23:59:59.999999Z' },
   { lifecycle: 'dismissed', closed_at: '2026-11-05T00:00:00Z' },
   { lifecycle: 'done', closed_at: '2026-11-05T00:00:00Z', merged_into: 1 },
 ])('old done, dismissed and merged tickets become context instead of routing: %j', (fields) => {
@@ -188,20 +231,23 @@ test('account mapping wins over quoted domains; otherwise sender, account and qu
   expect(api.batchClients?.(db, cfg, accountDomain)).toEqual(['other']);
 });
 
-test('offered candidates are the union of open same-client, source-local shared people and recent tickets', () => {
+test('offered candidates are the union of open same-client, source-local shared people and recent tickets of the batch client', () => {
   const { path, cfg } = fixture();
   using db = openDb(path);
   const input = batch(db, { text: 'No references' });
   const sameClient = ticket(db, { created_at: OLD, lifecycle: 'active', client: 'acme' });
   const sharedBatch = batch(db, { account: 'other@other.invalid', text: 'No refs' });
-  const shared = ticket(db, { created_at: OLD, lifecycle: 'active', client: 'other' });
+  const shared = ticket(db, { created_at: OLD, lifecycle: 'done', closed_at: OLD, client: 'acme' });
   link(db, shared, conversation(db, sharedBatch));
-  const recent = ticket(db, { created_at: '2026-10-23T00:00:00Z', lifecycle: 'done', client: 'other' });
-  const stale = ticket(db, { created_at: OLD, lifecycle: 'active', client: 'other' });
+  const recent = ticket(db, { created_at: '2026-11-04T00:00:00Z', lifecycle: 'done', client: 'acme' });
+  const stale = ticket(db, { created_at: OLD, lifecycle: 'done', closed_at: OLD, client: 'acme' });
+  const foreign = [ticket(db, { created_at: OLD, lifecycle: 'active', client: 'other' }), ticket(db, { lifecycle: 'done', client: 'other' })];
+  link(db, foreign[0]!, conversation(db, sharedBatch), 'context');
   const offered = api.candidates?.(db, cfg, input, AT);
   expect(offered?.map((item: { id: number }) => item.id).sort()).toEqual([sameClient, shared, recent].sort());
   expect(offered?.find((item: { id: number }) => item.id === shared)).toMatchObject({ shared_people: true });
   expect(offered?.map((item: { id: number }) => item.id)).not.toContain(stale);
+  for (const id of foreign) expect(offered?.map((item: { id: number }) => item.id)).not.toContain(id);
 });
 
 test('shared person ids across sources are not a verified cross-source identity association', () => {
@@ -290,8 +336,24 @@ test('a rule-linked proposal gets a fresh assessment instead of bypassing triage
   const input = batch(db);
   const offered = offer(db, cfg, input);
   expect(JSON.parse(String(offered.payload))).toMatchObject({ mode: 'update', ticket: owner });
-  expect(api.applyDecision?.(db, input, decision())).toBe(owner);
+  expect(api.applyDecision?.(db, input, decision({ action: 'update', ticket: owner }))).toBe(owner);
   expect(db.prepare('SELECT proposal,lifecycle FROM ticket WHERE id=?').get(owner)).toEqual({ proposal: 'Inspect logs', lifecycle: 'proposed' });
+});
+
+test('a different request in a chat that feeds a proposed ticket becomes its own ticket, and the chat keeps its route', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const owner = ticket(db, { proposal: 'Install the fix', summary: 'Install request' });
+  const input = batch(db, { text: 'I need the Keycloak users' });
+  link(db, owner, conversation(db, input));
+  offer(db, cfg, input);
+  const separate = api.applyDecision?.(db, input, decision({ title: 'Keycloak users', proposal: 'Create the users' }))!;
+  expect(separate).not.toBe(owner);
+  expect(db.prepare('SELECT title,proposal,lifecycle FROM ticket WHERE id=?').get(separate)).toEqual({ title: 'Keycloak users', proposal: 'Create the users', lifecycle: 'proposed' });
+  expect(db.prepare('SELECT proposal,summary FROM ticket WHERE id=?').get(owner)).toEqual({ proposal: 'Install the fix', summary: 'Install request' });
+  expect(db.prepare('SELECT ticket,outcome FROM batch WHERE id=?').get(input)).toEqual({ ticket: separate, outcome: 'proposed' });
+  expect(db.prepare('SELECT ticket,kind FROM ticket_conversation ORDER BY ticket').all()).toEqual([{ ticket: owner, kind: 'primary' }]);
+  expect(api.detail(db, separate).messages.map((message) => message.text)).toEqual(['I need the Keycloak users']);
 });
 
 test.each(['forged-id', 'not-offered', 'unknown-client'])('rejects %s at the local decision boundary without partial writes', (invalid) => {
@@ -345,6 +407,64 @@ test('late assessment cannot reopen a manual close newer than its source input',
   expect(api.applyDecision?.(db, input, decision({ proposal: 'Stale' }))).toBe(owner);
   expect(db.prepare('SELECT lifecycle,proposal FROM ticket WHERE id=?').get(owner)).toEqual({ lifecycle: 'done', proposal: 'Kept proposal' });
   expect(db.prepare('SELECT outcome FROM batch').get()?.outcome).toBe('closed');
+});
+
+function chatTicket(db: DatabaseSync, input: number) {
+  const owner = ticket(db, { lifecycle: 'active', approved_at: AT, session_id: `session-${input}` });
+  link(db, owner, conversation(db, input));
+  return owner;
+}
+
+test('a same-day close keeps input its chat never saw: triage judges it against the closed ticket, and a reopen forwards it', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const seen = batch(db, { conversation_id: 'chat' });
+  const owner = chatTicket(db, seen);
+  api.route(db, seen, AT);
+  db.prepare("UPDATE batch SET state='done',outcome='forwarded' WHERE id=?").run(seen);
+  vi.setSystemTime(new Date('2026-11-06T09:01:00Z'));
+  inputTurn(db, owner, 'done', { created_at: '2026-11-06T09:01:00.000000Z' });
+  vi.setSystemTime(new Date('2026-11-06T09:03:00Z'));
+  const missed = batch(db, { conversation_id: 'chat', message_id: 'during-turn' });
+  expect(api.route(db, missed, '2026-11-06T09:03:00Z')).toMatchObject({ ticket: owner, mode: 'forward' });
+  api.close(db, owner, 'Chat closed it', '2026-11-06T09:05:00Z');
+  expect(db.prepare('SELECT state,outcome FROM batch WHERE id=?').get(missed)).toEqual({ state: 'pending', outcome: 'routed' });
+  vi.setSystemTime(new Date('2026-11-06T09:06:00Z'));
+  const triage = ingestApi.schedule(db, cfg, '2026-11-06T09:06:00Z');
+  expect(triage).toHaveLength(1);
+  expect(JSON.parse(String(db.prepare('SELECT payload FROM job WHERE id=?').get(triage[0]!)!.payload))).toMatchObject({ mode: 'reopen', ticket: owner, batch: missed });
+  expect(db.prepare('SELECT lifecycle FROM ticket WHERE id=?').get(owner)!.lifecycle).toBe('done');
+  db.prepare("UPDATE ticket SET client='acme' WHERE id=?").run(owner);
+  api.applyDecision(db, missed, decision({ action: 'update', ticket: owner }));
+  db.prepare("UPDATE job SET state='done' WHERE id=?").run(triage[0]!);
+  expect(db.prepare('SELECT lifecycle FROM ticket WHERE id=?').get(owner)!.lifecycle).toBe('active');
+  const scheduled = ingestApi.schedule(db, cfg, '2026-11-06T09:07:00Z');
+  expect(scheduled).toHaveLength(1);
+  expect(JSON.parse(String(db.prepare('SELECT payload FROM job WHERE id=?').get(scheduled[0]!)!.payload)).batch_ids).toEqual([missed]);
+});
+
+test('a close keeps dropping unseen input of an earlier day, of a dismissed ticket and input a chat input already carried', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  vi.setSystemTime(new Date('2026-11-06T09:00:00Z'));
+  const old = batch(db, { conversation_id: 'old-chat' });
+  const owner = chatTicket(db, old);
+  api.route(db, old, '2026-11-06T09:00:00Z');
+  api.close(db, owner, '', '2026-11-07T09:00:00Z');
+  expect(db.prepare('SELECT outcome FROM batch WHERE id=?').get(old)!.outcome).toBe('closed');
+  vi.setSystemTime(new Date('2026-11-07T10:00:00Z'));
+  const dropped = batch(db, { conversation_id: 'dismissed-chat' });
+  const other = chatTicket(db, dropped);
+  api.route(db, dropped, '2026-11-07T10:00:00Z');
+  api.dismiss(db, other, '', '2026-11-07T10:05:00Z');
+  expect(db.prepare('SELECT outcome FROM batch WHERE id=?').get(dropped)!.outcome).toBe('closed');
+  expect(ingestApi.schedule(db, cfg, '2026-11-07T10:10:00Z')).toEqual([]);
+  vi.setSystemTime(new Date('2026-11-07T11:00:00Z'));
+  const carried = batch(db, { conversation_id: 'carried-chat' });
+  const third = chatTicket(db, carried);
+  inputTurn(db, third, 'done', { created_at: '2026-11-07T11:01:00.000000Z' });
+  db.prepare("UPDATE ticket SET lifecycle='done',closed_at='2026-11-07T11:05:00.000000Z' WHERE id=?").run(third);
+  expect(api.route(db, carried, '2026-11-07T11:06:00Z')).toMatchObject({ ticket: third, mode: 'closed' });
 });
 
 test('late assessment follows a corrected current route rather than its old proposal target', () => {
@@ -881,11 +1001,27 @@ test('source-local people shared through a context relation are offered without 
   using db = openDb(path);
   const input = batch(db, { text: 'No references' });
   const historical = batch(db, { text: 'No references' });
-  const context = ticket(db, { created_at: OLD, client: 'other', lifecycle: 'active', approved_at: OLD });
+  const context = ticket(db, { created_at: OLD, client: 'acme', lifecycle: 'active', approved_at: OLD });
   link(db, context, conversation(db, historical), 'context');
   expect(api.candidates(db, cfg, input, AT)).toMatchObject([{ id: context, shared_people: true }]);
   expect(api.route(db, input, AT)).toMatchObject({ mode: 'new', ticket: null });
   expect(db.prepare('SELECT approved_at,session_id FROM ticket WHERE id=?').get(context)).toEqual({ approved_at: OLD, session_id: null });
+});
+
+test('triage candidates stay inside the batch client and stop at 30, best matches first', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const input = batch(db, { text: 'No references' });
+  const foreign = ticket(db, { client: 'other', lifecycle: 'active', approved_at: AT, last_activity_at: AT });
+  const old = ticket(db, { client: 'acme', lifecycle: 'done', created_at: OLD, closed_at: '2026-11-03T00:00:00.000000Z' });
+  const own = Array.from({ length: 35 }, (_, i) => ticket(db, { client: 'acme', lifecycle: 'active', approved_at: OLD,
+    last_activity_at: `2026-11-05T${String(i % 24).padStart(2, '0')}:00:00.000000Z` }));
+  const offered = api.candidates(db, cfg, input, AT).map((candidate) => candidate.id);
+  expect(offered).toHaveLength(api.MAX_CANDIDATES);
+  expect(offered).not.toContain(foreign);
+  expect(offered).not.toContain(old);
+  expect(offered.every((id) => own.includes(id))).toBe(true);
+  expect(offered[0]).toBe(own[23]);
 });
 
 const CORRECTION_INPUT = '2026-11-06T01:00:00.123000Z';
@@ -912,7 +1048,8 @@ function correctionSetup(db: DatabaseSync, cfg: ReturnType<typeof loadConfig>, t
   const target = ticket(db, { lifecycle: proposedTarget ? 'proposed' : 'active', approved_at: proposedTarget ? null : OLD,
     approval_note: proposedTarget ? null : 'Existing approval', session_id: proposedTarget ? null : 'reopened-target-session',
     closed_at: CORRECTION_CLOSED, report_at: CORRECTION_CLOSED, report: 'waiting_them', report_line: 'Retained target report', report_message_id: 'retained-report-id' });
-  const reportTurn = inputTurn(db, target, 'done');
+  // The target chat's last input postdates the target's own pre-close input, so its chat saw that input
+  const reportTurn = inputTurn(db, target, 'done', { created_at: '2026-11-06T01:30:00.000000Z' });
   db.prepare('UPDATE ticket SET report_turn=? WHERE id=?').run(reportTurn, target);
   link(db, target, conversation(db, oldTarget));
   link(db, from, conversation(db, first));
@@ -1037,11 +1174,12 @@ test.each(['relink', 'merge'] as const)('I1 %s intent cannot bypass a later targ
   using db = openDb(path);
   const state = correctionSetup(db, cfg);
   correct(db, kind, state);
-  db.prepare("UPDATE ticket SET closed_at='2026-11-06T04:00:00Z',report_at='2026-11-06T04:00:00Z' WHERE id=?").run(state.target);
-  expect(ingestApi.schedule(db, cfg, '2026-11-06T05:00:00Z')).toEqual([]);
+  // A close on a later day than the corrected input: same-day unseen input would reopen the chat instead
+  db.prepare("UPDATE ticket SET closed_at='2026-11-07T04:00:00Z',report_at='2026-11-07T04:00:00Z' WHERE id=?").run(state.target);
+  expect(ingestApi.schedule(db, cfg, '2026-11-07T05:00:00Z')).toEqual([]);
   for (const id of state.inputs) expect(db.prepare('SELECT state,outcome FROM batch WHERE id=?').get(id)).toEqual({ state: 'done', outcome: 'closed' });
   expect(db.prepare('SELECT closed_at,report_at FROM ticket WHERE id=?').get(state.target))
-    .toEqual({ closed_at: '2026-11-06T04:00:00Z', report_at: '2026-11-06T04:00:00Z' });
+    .toEqual({ closed_at: '2026-11-07T04:00:00Z', report_at: '2026-11-07T04:00:00Z' });
 });
 
 function rejectedTitleScope(db: DatabaseSync, job: jobs.Job, input: number, owner: number, response: unknown) {
@@ -1110,7 +1248,7 @@ test('R1 historical-message title edit fences another batch before effects and p
   const staleEffects = vi.fn(() => { api.applyDecision(db, input, stale); });
   expect(jobs.complete(db, job, staleEffects)).toBe(false);
   expect(staleEffects).not.toHaveBeenCalled();
-  const fresh = decision({ title: 'Current title assessment', proposal: 'Fresh current-title assessment' });
+  const fresh = decision({ action: 'update', ticket: owner, title: 'Current title assessment', proposal: 'Fresh current-title assessment' });
   expect(jobs.complete(db, freshJob, () => { api.applyDecision(db, input, fresh); })).toBe(true);
   expect(db.prepare('SELECT proposal FROM ticket WHERE id=?').get(owner)?.proposal).toBe('Fresh current-title assessment');
   expect(correctionMarkers(db, owner)).toEqual(markers);
@@ -1132,7 +1270,7 @@ test.each(['Original title', null, ''])('R1 unchanged shared title %j is explici
   const job = jobs.claim(db, cfg, 'unchanged-shared-title', AT)!;
   expect(Object.hasOwn(job.payload, 'conversation_title')).toBe(true);
   expect(job.payload.conversation_title).toBe(title);
-  expect(jobs.complete(db, job, () => { api.applyDecision(db, input, decision({ proposal: 'Unchanged-title assessment' })); })).toBe(true);
+  expect(jobs.complete(db, job, () => { api.applyDecision(db, input, decision({ action: 'update', ticket: owner, proposal: 'Unchanged-title assessment' })); })).toBe(true);
   expect(db.prepare('SELECT proposal FROM ticket WHERE id=?').get(owner)?.proposal).toBe('Unchanged-title assessment');
 });
 

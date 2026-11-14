@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { openDb } from '../src/dispatcher/db.ts';
-import * as api from '../src/dispatcher/ingest.ts';
-import * as jobs from '../src/dispatcher/jobs.ts';
-import * as tickets from '../src/dispatcher/tickets.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { openDb } from '../src/core/db.ts';
+import * as api from '../src/core/ingest.ts';
+import * as jobs from '../src/core/jobs.ts';
+import * as tickets from '../src/core/tickets.ts';
 import { scratch, snapshot } from './support.ts';
 
 const { ingest, sourceStart } = api;
@@ -267,7 +267,7 @@ test.each([['outlook', '2026-11-05T23:55:00Z'], ['teams', '2026-11-05T23:58:00Z'
   },
 );
 
-test('only all-own batches become answered; a mixed batch ending own still needs assessment', () => {
+test('a batch whose newest message is own becomes answered; a reply followed by their message still needs assessment', () => {
   const { path, cfg } = enabledFixture();
   using db = openDb(path);
   ingest(db, line({ sender_is_me: true }));
@@ -275,9 +275,39 @@ test('only all-own batches become answered; a mixed batch ending own still needs
   expect(db.prepare('SELECT state,outcome FROM batch').get()).toEqual({ state: 'done', outcome: 'answered' });
   ingest(db, line({ conversation_id: 'C2', message_id: 'question', sent_at: '2026-11-05T23:50:00Z' }));
   ingest(db, line({ conversation_id: 'C2', message_id: 'answer', sender_is_me: true, sent_at: '2026-11-05T23:54:00Z' }));
+  expect(api.schedule?.(db, cfg, AT)).toEqual([]);
+  expect(db.prepare('SELECT state,outcome FROM batch ORDER BY id DESC LIMIT 1').get()).toEqual({ state: 'done', outcome: 'answered' });
+  expect(db.prepare('SELECT COUNT(*) AS n FROM message WHERE batch=2').get()?.n).toBe(2);
+  ingest(db, line({ conversation_id: 'C3', message_id: 'reply', sender_is_me: true, sent_at: '2026-11-05T23:50:00Z' }));
+  ingest(db, line({ conversation_id: 'C3', message_id: 'followup', sent_at: '2026-11-05T23:54:00Z' }));
   expect(api.schedule?.(db, cfg, AT)).toHaveLength(1);
   expect(db.prepare('SELECT state,outcome FROM batch ORDER BY id DESC LIMIT 1').get()).toEqual({ state: 'pending', outcome: 'triage' });
-  expect(db.prepare('SELECT COUNT(*) AS n FROM message WHERE batch=2').get()?.n).toBe(2);
+});
+
+test('my reply on a chat whose ticket is still proposed dismisses it, outside triage feedback', () => {
+  const { path, cfg } = enabledFixture();
+  using db = openDb(path);
+  ingest(db, line({ message_id: 'question', sent_at: '2026-11-05T23:40:00Z' }));
+  const proposed = Number(db.prepare("INSERT INTO ticket(title,lifecycle,created_at) VALUES ('Proposed','proposed',?)").run(AT).lastInsertRowid);
+  db.prepare('INSERT INTO ticket_conversation VALUES (?,1,\'primary\',\'rule\',?)').run(proposed, AT);
+  ingest(db, line({ message_id: 'answer', sender_is_me: true, sent_at: '2026-11-05T23:54:00Z' }));
+  expect(api.schedule?.(db, cfg, AT)).toEqual([]);
+  expect(db.prepare('SELECT lifecycle,report_line FROM ticket WHERE id=?').get(proposed)).toEqual({ lifecycle: 'dismissed', report_line: tickets.ANSWERED_MYSELF });
+  expect(tickets.feedback(db)).toMatchObject({ dismiss_count: 0, dismiss_reasons: [] });
+  tickets.dismiss(db, Number(db.prepare("INSERT INTO ticket(title,lifecycle,created_at) VALUES ('Wrong','proposed',?)").run(AT).lastInsertRowid), 'not mine', AT);
+  expect(tickets.feedback(db)).toMatchObject({ dismiss_count: 1, dismiss_reasons: [{ reason: 'not mine' }] });
+});
+
+test('a mixed batch ending own on a running ticket chat still reaches that chat', () => {
+  const { path, cfg } = enabledFixture();
+  using db = openDb(path);
+  ingest(db, line({ message_id: 'question', sent_at: '2026-11-05T23:50:00Z' }));
+  ingest(db, line({ message_id: 'answer', sender_is_me: true, sent_at: '2026-11-05T23:54:00Z' }));
+  const owner = Number(db.prepare("INSERT INTO ticket(title,lifecycle,approved_at,session_id,created_at) VALUES ('Active','active',?,'existing-session',?)").run(AT, AT).lastInsertRowid);
+  db.prepare('INSERT INTO ticket_conversation VALUES (?,1,\'primary\',\'you\',?)').run(owner, AT);
+  expect(api.schedule?.(db, cfg, AT)).toHaveLength(1);
+  expect(db.prepare('SELECT outcome,ticket FROM batch').get()).toEqual({ outcome: 'forward', ticket: owner });
+  expect(db.prepare('SELECT kind FROM job').get()?.kind).toBe('forward');
 });
 
 test('tickets off leaves input durable without automatic batching, routing or triage', () => {

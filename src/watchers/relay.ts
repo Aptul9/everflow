@@ -2,12 +2,12 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { posix } from 'node:path';
 import { accountNames, emitChanged, isEntrypoint, publishAccounts, requiredOption, runSource, sourceStamp, sourceText, SourceError, trackSourceChild, watcherArguments, writeDiagnostic, writeRecord } from './source.ts';
-import type { Emit, SourceMessage } from './source.ts';
+import type { Emit, Source, SourceMessage } from './source.ts';
 
 export interface RelayOptions { host: string; root: string; owner: string; maxRows?: number; maxAccounts?: number; timeoutMs?: number; maxBytes?: number }
 export type RelayQuery = (path: string, sql: string, signal?: AbortSignal) => Promise<Record<string, any>[]>;
 export type SshSpawn = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
-export interface RelaySnapshot { accounts: { slot: number; email: string; scanAt: number; messages: SourceMessage[] }[]; errors: { code: string; account: string }[] }
+export interface RelaySnapshot { accounts: { slot: number; email: string; scanAt: number; muted: string[]; messages: SourceMessage[] }[]; errors: { code: string; account: string }[] }
 export function shellQuote(value: string): string {
   if (value.includes('\0')) throw new SourceError('teamsrelay', 'relay.invalid-argument');
   return "'" + value.replaceAll("'", "'\"'\"'") + "'";
@@ -23,10 +23,21 @@ export function relayCommand(path: string, sql: string): string {
 }
 
 export async function sshQuery(options: RelayOptions, path: string, sql: string, signal?: AbortSignal, spawnProcess: SshSpawn = spawn): Promise<Record<string, any>[]> {
-  if (!options.host || options.host.startsWith('-') || !/^[a-z0-9_.@:[\]-]+$/i.test(options.host)) throw new SourceError('teamsrelay', 'relay.invalid-host');
-  const command = relayCommand(path, sql), timeout = options.timeoutMs ?? 60000, maxBytes = options.maxBytes ?? 8 * 1024 * 1024;
-  if (!Number.isSafeInteger(timeout) || timeout < 1 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 64 * 1024 * 1024) throw new SourceError('teamsrelay', 'relay.invalid-limit');
-  if (signal?.aborted) throw new SourceError('teamsrelay', 'relay.aborted');
+  const output = await sshRun('teamsrelay', 'relay', options, relayCommand(path, sql), signal, spawnProcess);
+  try {
+    const value: unknown = JSON.parse(output.toString('utf8'));
+    if (!Array.isArray(value) || value.some((row) => !row || typeof row !== 'object' || Array.isArray(row))) throw new Error('shape');
+    return value;
+  } catch { throw new SourceError('teamsrelay', 'relay.response-json'); }
+}
+
+// One owned, bounded SSH command; error codes carry the caller's prefix (relay.timeout, oemail.timeout, ...).
+export async function sshRun(source: Source, prefix: string, options: { host: string; timeoutMs?: number; maxBytes?: number }, command: string,
+  signal?: AbortSignal, spawnProcess: SshSpawn = spawn): Promise<Buffer> {
+  if (!options.host || options.host.startsWith('-') || !/^[a-z0-9_.@:[\]-]+$/i.test(options.host)) throw new SourceError(source, `${prefix}.invalid-host`);
+  const timeout = options.timeoutMs ?? 60000, maxBytes = options.maxBytes ?? 8 * 1024 * 1024;
+  if (!Number.isSafeInteger(timeout) || timeout < 1 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 64 * 1024 * 1024) throw new SourceError(source, `${prefix}.invalid-limit`);
+  if (signal?.aborted) throw new SourceError(source, `${prefix}.aborted`);
   const child = spawnProcess('ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', options.host, command], { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const chunks: Buffer[] = [];
   let size = 0, failure: unknown, closed = false, escalation: ReturnType<typeof setTimeout> | undefined;
@@ -36,32 +47,28 @@ export async function sshQuery(options: RelayOptions, path: string, sql: string,
     escalation ??= setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }, 2000);
     child.kill();
   };
-  const aborted = () => stop(new SourceError('teamsrelay', 'relay.aborted'));
+  const aborted = () => stop(new SourceError(source, `${prefix}.aborted`));
   const stdout = (bytes: Buffer) => {
     size += bytes.length;
-    if (size > maxBytes) stop(new SourceError('teamsrelay', 'relay.result-limit'));
+    if (size > maxBytes) stop(new SourceError(source, `${prefix}.result-limit`));
     else if (!failure) chunks.push(Buffer.from(bytes));
   };
   // stderr is drained but never copied into diagnostics or records.
   const stderr = () => {};
-  const failed = () => { failure ??= new SourceError('teamsrelay', 'relay.ssh-start'); };
+  const failed = () => { failure ??= new SourceError(source, `${prefix}.ssh-start`); };
   const exit = new Promise<number | null>((resolve) => {
     child.once('close', (code) => { closed = true; resolve(code); });
   });
   child.stdout?.on('data', stdout); child.stderr?.on('data', stderr); child.once('error', failed);
-  const timer = setTimeout(() => stop(new SourceError('teamsrelay', 'relay.timeout')), timeout);
+  const timer = setTimeout(() => stop(new SourceError(source, `${prefix}.timeout`)), timeout);
   signal?.addEventListener('abort', aborted, { once: true });
   if (signal?.aborted) aborted();
   try {
     try { if (!closed) await trackSourceChild(child); } catch (error) { stop(error); }
     const code = await exit;
     if (failure !== undefined) throw failure;
-    if (code !== 0) throw new SourceError('teamsrelay', 'relay.ssh-failed', undefined, code ?? undefined);
-    try {
-      const value: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      if (!Array.isArray(value) || value.some((row) => !row || typeof row !== 'object' || Array.isArray(row))) throw new Error('shape');
-      return value;
-    } catch { throw new SourceError('teamsrelay', 'relay.response-json'); }
+    if (code !== 0) throw new SourceError(source, `${prefix}.ssh-failed`, undefined, code ?? undefined);
+    return Buffer.concat(chunks);
   } finally {
     clearTimeout(timer); if (escalation) clearTimeout(escalation);
     signal?.removeEventListener('abort', aborted);
@@ -96,7 +103,8 @@ function normalize(email: string, slot: number, raw: Record<string, any>): Sourc
     message_id: `${email}/${raw.chat};messageid=${raw.mid}`, sender: String(raw.author || ''), sender_name: String(raw.author || ''), sender_is_me: raw.mine === true || raw.mine === 1,
     sent_at: new Date(Number(raw.mid)).toISOString(), text: deleted ? '' : text,
     attachments: deleted ? [] : files.map((file: any) => ({ name: file && typeof file === 'object' ? String(file.name || file.title || '?') : String(file ?? '?'), size: null })),
-    ref: { chat: raw.chat, id: raw.mid, account: email, relay_slot: slot, ...(quote ? { quote } : {}), ...(deleted ? { deleted: true } : {}) } };
+    ref: { chat: raw.chat, id: raw.mid, account: email, relay_slot: slot, ...(quote ? { quote } : {}), ...(deleted ? { deleted: true } : {}),
+      ...(extra.mentionsMe === true ? { mentions_me: true } : {}) } };
 }
 
 export async function readRelay(options: RelayOptions, floor: number, signal?: AbortSignal, input?: RelayQuery): Promise<RelaySnapshot> {
@@ -117,7 +125,7 @@ export async function readRelay(options: RelayOptions, floor: number, signal?: A
   for (const slot of ids) {
     signal?.throwIfAborted();
     try {
-      const rows = await query(posix.join(options.root, String(slot), 'messages.db'), `SELECT json_object('state',json((SELECT json_group_object(k,v) FROM state WHERE k IN ('me','last_scan_ts','state'))),'messages',json((SELECT json_group_array(json_object('chat',chat,'mid',mid,'author',author,'text',text,'mine',mine,'extra',extra)) FROM (SELECT chat,mid,author,substr(text,1,2000) AS text,mine,extra FROM chat_messages WHERE mid GLOB '[0-9]*' AND mid NOT GLOB '*[^0-9]*' AND CAST(mid AS INTEGER)>=${floor} ORDER BY CAST(mid AS INTEGER),chat LIMIT ${maxRows + 1})))) AS snapshot`, signal);
+      const rows = await query(posix.join(options.root, String(slot), 'messages.db'), `SELECT json_object('state',json((SELECT json_group_object(k,v) FROM state WHERE k IN ('me','last_scan_ts','state'))),'muted',json((SELECT json_group_array(name) FROM chats WHERE muted=1)),'messages',json((SELECT json_group_array(json_object('chat',chat,'mid',mid,'author',author,'text',text,'mine',mine,'extra',extra)) FROM (SELECT chat,mid,author,substr(text,1,2000) AS text,mine,extra FROM chat_messages WHERE mid GLOB '[0-9]*' AND mid NOT GLOB '*[^0-9]*' AND CAST(mid AS INTEGER)>=${floor} ORDER BY CAST(mid AS INTEGER),chat LIMIT ${maxRows + 1})))) AS snapshot`, signal);
       if (rows.length !== 1) throw new SourceError('teamsrelay', 'relay.saved-shape');
       const saved = jsonObject(rows[0]!.snapshot), state = jsonObject(saved.state), me = jsonObject(state.me || '{}');
       const email = accountNames([me.email])[0]!;
@@ -125,7 +133,8 @@ export async function readRelay(options: RelayOptions, floor: number, signal?: A
       if (!Number.isSafeInteger(scanAt) || scanAt <= 0) throw new SourceError('teamsrelay', 'relay.scan-state');
       if (!Array.isArray(saved.messages)) throw new SourceError('teamsrelay', 'relay.saved-shape');
       if (saved.messages.length > maxRows) throw new SourceError('teamsrelay', 'relay.result-limit');
-      snapshot.accounts.push({ slot, email, scanAt, messages: saved.messages.map((message: any) => normalize(email, slot, message)) });
+      if (!Array.isArray(saved.muted) || saved.muted.some((name: unknown) => typeof name !== 'string' || !name)) throw new SourceError('teamsrelay', 'relay.saved-shape');
+      snapshot.accounts.push({ slot, email, scanAt, muted: [...saved.muted as string[]].sort(), messages: saved.messages.map((message: any) => normalize(email, slot, message)) });
     } catch (error) {
       snapshot.errors.push({ code: error instanceof SourceError ? error.code : 'relay.store-unavailable', account: `slot:${slot}` });
     }
@@ -133,12 +142,19 @@ export async function readRelay(options: RelayOptions, floor: number, signal?: A
   return snapshot;
 }
 export function createRelayState(since: string, expectedAccounts: string[] = []) {
-  return { floor: Date.parse(sourceStamp(since)), accounts: new Set(accountNames(expectedAccounts)), seen: new Map<string, string>(), reported: '' };
+  return { floor: Date.parse(sourceStamp(since)), accounts: new Set(accountNames(expectedAccounts)), seen: new Map<string, string>(), reported: '', muted: new Map<string, string>() };
 }
 
 export async function scanRelay(relay: { snapshot(floor: number, signal?: AbortSignal): Promise<RelaySnapshot> }, state: ReturnType<typeof createRelayState>, emit: Emit, now: () => string = () => new Date().toISOString(), signal?: AbortSignal): Promise<void> {
   const result = await relay.snapshot(state.floor, signal);
   publishAccounts('teamsrelay', state, result.accounts.map((account) => account.email), emit);
+  // Before the messages, so a batch of a muted chat never sees it unmuted
+  for (const account of result.accounts) {
+    const list = JSON.stringify(account.muted);
+    if (state.muted.get(account.email) === list) continue;
+    emit({ source: 'teamsrelay', account: account.email, muted: account.muted });
+    state.muted.set(account.email, list);
+  }
   for (const account of result.accounts) for (const message of account.messages) {
     signal?.throwIfAborted();
     if (Date.parse(message.sent_at) >= state.floor) emitChanged(state.seen, message, emit);

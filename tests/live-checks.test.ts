@@ -13,7 +13,7 @@ function fixture() {
   const base = fs.mkdtempSync(join(SCRATCH, 'live-guard-'));
   const checkout = join(base, 'synthetic checkout');
   fs.mkdirSync(join(checkout, 'data', 'backups'), { recursive: true });
-  for (const name of ['data/dispatcher.db', 'data/dispatcher.db-wal', 'data/dispatcher.db-shm', 'data/teamsrelay.token']) {
+  for (const name of ['data/everflow-v1.db', 'data/everflow-v1.db-wal', 'data/everflow-v1.db-shm', 'data/teamsrelay.token']) {
     fs.writeFileSync(join(checkout, name), 'Synthetic forbidden fixture, never real state');
   }
   fs.writeFileSync(join(checkout, SEED_BACKUP), 'Synthetic seed fixture');
@@ -39,12 +39,12 @@ function refused(input: GuardInput, code: string) {
 
 test('protected state, sidecars and Windows spelling aliases are refused before any filesystem call', () => {
   const f = fixture();
-  const held = join(f.checkout, 'data', 'dispatcher.db');
+  const held = join(f.checkout, 'data', 'everflow-v1.db');
   const cases: [Partial<GuardInput>, string][] = [
     [{ db: held }, 'db.protected'],
     [{ db: held.toUpperCase() }, 'db.protected'],
     [{ db: held.replaceAll('\\', '/') }, 'db.protected'],
-    [{ db: join(f.checkout, 'data', 'DISPATCHER.DB-WAL').slice(0, -4) }, 'db.protected'],
+    [{ db: join(f.checkout, 'data', 'EVERFLOW-V1.DB-WAL').slice(0, -4) }, 'db.protected'],
     [{ config: held + '-wal' }, 'config.protected'],
     [{ config: held + '-shm' }, 'config.protected'],
     [{ writable: [held + '-journal'] }, 'writable.protected'],
@@ -53,17 +53,17 @@ test('protected state, sidecars and Windows spelling aliases are refused before 
     [{ db: held + ' ' }, 'db.trailing-alias'],
     [{ db: held + '::$DATA' }, 'db.stream-alias'],
     [{ db: join(f.checkout, 'data', 'DISPAT~1.DB') }, 'db.short-name-alias'],
-    [{ db: join(f.checkout, 'DATA~1', 'dispatcher.db') }, 'db.short-name-alias'],
-    [{ db: `${f.runRoot}\\..\\..\\..\\synthetic checkout\\data\\dispatcher.db` }, 'db.traversal'],
+    [{ db: join(f.checkout, 'DATA~1', 'everflow-v1.db') }, 'db.short-name-alias'],
+    [{ db: `${f.runRoot}\\..\\..\\..\\synthetic checkout\\data\\everflow-v1.db` }, 'db.traversal'],
     [{ db: `\\\\?\\${held}` }, 'db.device-or-unc'],
-    [{ db: 'relative/dispatcher.db' }, 'db.not-absolute'],
+    [{ db: 'relative/everflow.db' }, 'db.not-absolute'],
     [{ db: join(f.checkout, 'data', 'other.db') }, 'db.checkout-data'],
     [{ readOnly: [f.checkout] }, 'read-only.checkout-ancestor'],
     [{ readOnly: [f.base] }, 'read-only.checkout-ancestor'],
-    [{ db: join(CHECKOUT, 'data', 'dispatcher.db') }, 'db.protected'],
+    [{ db: join(CHECKOUT, 'data', 'everflow-v1.db') }, 'db.protected'],
     [{ readOnly: [join(CHECKOUT, 'data', 'teamsrelay.token')] }, 'read-only.protected'],
-    [{ seed: join(CHECKOUT, 'data', 'dispatcher.db') }, 'seed.not-named-backup'],
-    [{ seed: join(f.checkout, 'data', 'dispatcher.db') }, 'seed.not-named-backup'],
+    [{ seed: join(CHECKOUT, 'data', 'everflow-v1.db') }, 'seed.not-named-backup'],
+    [{ seed: join(f.checkout, 'data', 'everflow-v1.db') }, 'seed.not-named-backup'],
     [{ seed: join(f.checkout, 'data', 'backups', 'other.db') }, 'seed.not-named-backup'],
     [{ config: join(f.liveRoot, 'outside run.toml') }, 'config.outside-run-root'],
     [{ liveRoot: 'C:/Windows/Temp/live-checks', runRoot: 'C:/Windows/Temp/live-checks/run' }, 'live-root.outside-scratch'],
@@ -123,7 +123,7 @@ test('harness CLI refuses without opt-in and refuses protected run roots before 
   const code = (result: ReturnType<typeof run>) => { expect(result.status).toBe(1); return JSON.parse(result.stderr.trim()).error as string; };
   expect(code(run('status', '--scenario', 'cli-guard', '--run-root', join(CHECKOUT, 'data')))).toBe('live-checks.opt-in-required');
   expect(code(run('status', '--opt-in', '--scenario', 'cli-guard', '--run-root', join(CHECKOUT, 'data')))).toBe('run-root.checkout-data');
-  expect(code(run('status', '--opt-in', '--scenario', 'cli-guard', '--run-root', join(CHECKOUT, 'data', 'dispatcher.db')))).toBe('run-root.protected');
+  expect(code(run('status', '--opt-in', '--scenario', 'cli-guard', '--run-root', join(CHECKOUT, 'data', 'everflow-v1.db')))).toBe('run-root.protected');
   expect(code(run('status', '--opt-in', '--scenario', 'cli-guard', '--run-root', join(SCRATCH, 'live-checks-absent', 'run')))).toBe('run-root.outside-live-root');
 });
 

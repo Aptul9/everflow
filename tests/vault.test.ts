@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
-import { vaultRead as read, vaultSearch as search } from '../src/dispatcher/vault.ts';
+import { VAULT_LIMITS, vaultRead as read, vaultSearch as search } from '../src/core/vault.ts';
 import { scratch } from './support.ts';
 
 afterEach(() => vi.restoreAllMocks());
@@ -153,16 +153,27 @@ test.each(['outside', 'inside', 'root', 'ancestor'])('rejects junction at %s eve
   }
 });
 
-test('search has a global entry/file/byte bound and read never splits a UTF-8 character', () => {
+test('search has a per-note and global byte bound and read never splits a UTF-8 character', () => {
   const { vault, note } = fixture();
-  for (let index = 0; index < 300; index++) note(`many/note-${index}.md`, `${'x'.repeat(32_768)}never-read-tail`);
+  note('big/note.md', `${'x'.repeat(VAULT_LIMITS.searchNoteBytes)}never-read-tail`);
   note('unicode.md', 'ééé');
   expect(read(vault, 'unicode.md', 3)).toMatchObject({ text: 'é', truncated: true });
   const scanned = vi.spyOn(fs, 'readSync');
   expect(search(vault, 'never-read-tail', 50)).toEqual([]);
   const bytesRequested = scanned.mock.calls.reduce((sum, call) => sum + Number((call as readonly unknown[])[3]), 0);
-  expect(bytesRequested).toBeLessThanOrEqual(1_048_576);
-  expect(scanned.mock.calls.length).toBeLessThanOrEqual(256);
+  expect(bytesRequested).toBeLessThanOrEqual(VAULT_LIMITS.searchBytes);
+  expect(scanned.mock.calls.length).toBeLessThanOrEqual(VAULT_LIMITS.files);
+});
+
+test('search covers a vault larger than the old 256-file bound and ranks numbered folders in order', () => {
+  const { vault, note } = fixture();
+  for (let index = 0; index < 400; index++) note(`00_bulk/note-${index}.md`, `# Bulk ${index}\n${'y'.repeat(4_000)}\n`);
+  note('05_Daily/2026-11-08.md', '# Day\nAcme bip-group ticket mention\n');
+  note('01_Projects/acme.md', '# Acme\nClient domain bip-group.com, contact via Teams.\n');
+  expect(search(vault, 'bip-group', 1)).toMatchObject([{ path: '01_Projects/acme.md', line: 2 }]);
+  expect(search(vault, 'bip-group', 10).map((hit) => hit.path)).toEqual(['01_Projects/acme.md', '05_Daily/2026-11-08.md']);
+  expect(search(vault, 'acme teams', 10).map((hit) => hit.path)).toEqual(['01_Projects/acme.md']);
+  expect(search(vault, 'deploy restart', 10)).toMatchObject([{ path: '01_Projects/deploy.md', line: 1 }]);
 });
 
 test('small notes do not consume unread bytes from the global search budget', () => {

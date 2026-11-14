@@ -3,11 +3,13 @@ import { join } from 'node:path';
 import sqlite, { DatabaseSync } from 'node:sqlite';
 import { setImmediate } from 'node:timers/promises';
 import { afterEach, expect, test, vi } from 'vitest';
-import { migrate, openDb } from '../src/dispatcher/db.ts';
-import { ingest } from '../src/dispatcher/ingest.ts';
+import { migrate, openDb } from '../src/core/db.ts';
+import { ingest } from '../src/core/ingest.ts';
 import { createV1, OLD_AT, scratch, snapshot } from './support.ts';
 
 const retained = ['cursor', 'conversation', 'person', 'message', 'triage_log'] as const;
+// Columns added after v1 start empty on every retained row.
+const migrated = (rows: ReturnType<typeof snapshot>) => ({ ...rows, conversation: rows.conversation!.map((row) => ({ ...row, muted_until: null })) });
 const dropped = ['draft', 'approval_request', 'approval_event', 'send_attempt', 'work_item', 'work_item_conversation', 'prompt_submission'] as const;
 const originalTables = [...retained, 'batch', ...dropped];
 
@@ -75,9 +77,9 @@ test('backs up every v1 row before preserving source identities and historical b
 
   {
     using db = openDb(path);
-    expect(snapshot(db, retained)).toEqual(rows);
+    expect(snapshot(db, retained)).toEqual(migrated(rows));
     expect(db.prepare('SELECT * FROM batch ORDER BY id').all())
-      .toEqual(batches.map((batch) => ({ ...batch, outcome: 'historical', ticket: null })));
+      .toEqual(batches.map((batch) => ({ ...batch, outcome: 'historical', ticket: null, cleared_at: null })));
     expect(db.prepare('SELECT COUNT(*) AS n FROM ticket').get()?.n).toBe(0);
     expect(db.prepare('SELECT COUNT(*) AS n FROM job').get()?.n).toBe(0);
     expect(db.prepare('SELECT COUNT(*) AS n FROM turn').get()?.n).toBe(0);
@@ -94,7 +96,7 @@ test('backs up every v1 row before preserving source identities and historical b
   const backups = readdirSync(root).filter((name) => name.includes('.pre-v2-'));
   expect(await migrate(path)).toBeNull();
   using reopened = openDb(path);
-  expect(snapshot(reopened, retained)).toEqual(rows);
+  expect(snapshot(reopened, retained)).toEqual(migrated(rows));
   expect(readdirSync(root).filter((name) => name.includes('.pre-v2-'))).toEqual(backups);
 });
 
@@ -224,7 +226,7 @@ test('version 0 format rollback does not wrap an already scoped identity twice',
   await migrate(path);
   using db = openDb(path);
   expect(db.prepare('PRAGMA user_version').get()?.user_version).toBe(2);
-  expect(snapshot(db, retained)).toEqual(before);
+  expect(snapshot(db, retained)).toEqual(migrated(before));
 });
 
 test.each([0, 1])('identical source replay immediately after v%s migration preserves every retained row and historical batch', async (version) => {

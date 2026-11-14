@@ -365,11 +365,11 @@ test.each(['protect', 'unprotect'] as const)('failed native DPAPI %s captures st
 
 test('real DPAPI scratch round trip never returns plaintext as protected bytes', () => {
   const dpapi = createDpapi();
-  const clear = Buffer.from('synthetic dispatcher native fixture');
+  const clear = Buffer.from('synthetic everflow native fixture');
   const protectedBytes = dpapi.protect(clear);
   expect(protectedBytes.equals(clear)).toBe(false);
   expect(dpapi.unprotect(protectedBytes)).toEqual(clear);
-  expect(clear.toString()).toBe('synthetic dispatcher native fixture');
+  expect(clear.toString()).toBe('synthetic everflow native fixture');
 });
 
 function cookieFixture() {

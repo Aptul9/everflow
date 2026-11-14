@@ -9,8 +9,8 @@ const buildReceipt = values['build-receipt'] ?? process.env.TEST_BUILD_RECEIPT;
 const artifact = readBuildReceipt(buildReceipt);
 process.chdir(artifact.root);
 const { startServer } = await import(pathToFileURL(artifact.server).href) as typeof import('../src/server.ts');
-const { openDb } = await import(pathToFileURL(join(artifact.root, 'dist', 'dispatcher', 'db.js')).href) as typeof import('../src/dispatcher/db.ts');
-const scratch = 'C:/Users/Antonio/AppData/Local/Temp/opencode/inbox-dispatcher-v2';
+const { openDb } = await import(pathToFileURL(join(artifact.root, 'dist', 'core', 'db.js')).href) as typeof import('../src/core/db.ts');
+const scratch = 'C:/Users/Antonio/AppData/Local/Temp/opencode/everflow';
 if (!values.root || !isAbsolute(values.root)) throw new Error('Explicit absolute --root inside approved scratch required');
 const root = resolve(values.root);
 const inside = relative(resolve(scratch), root);
@@ -31,6 +31,7 @@ writeFileSync(configPath, '[db]\npath = "showcase.db"\n[tickets]\nenabled = true
   ticket.run('Waiting for vendor', 'Synthetic client', '', '', '', 'active', 'waiting_them', 'Written reply pending.', null, now, now, null);
   ticket.run('Failed collection', 'Synthetic client', '', '', '', 'active', null, null, null, now, now, null);
   ticket.run('Dismissed duplicate', 'Synthetic client', '', '', '', 'dismissed', 'done', 'Duplicate', null, now, now, now);
+  ticket.run('Closed by hand', 'Synthetic client', '', '', '', 'done', 'done', 'Closed by hand', null, now, now, now);
   db.prepare("UPDATE ticket SET approved_at=? WHERE lifecycle='active'").run(now);
   db.prepare('UPDATE ticket SET maybe_ticket=1 WHERE id=2').run();
   db.prepare("INSERT INTO ticket_ref(ticket,kind,key,url,seen_in) VALUES (1,'jira','TEST-123','https://example.invalid/browse/TEST-123','message')").run();

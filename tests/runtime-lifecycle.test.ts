@@ -6,17 +6,17 @@ import { finished } from 'node:stream/promises';
 import { pathToFileURL } from 'node:url';
 import { expect, test, vi } from 'vitest';
 import { isolatedEnvironment } from '../scripts/build.ts';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { openDb, prepareStart } from '../src/dispatcher/db.ts';
-import { enqueue, complete } from '../src/dispatcher/jobs.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { openDb, prepareStart } from '../src/core/db.ts';
+import { enqueue, complete } from '../src/core/jobs.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
 import { createKernel, sameProcess, spawnedIdentity } from '../src/windows/kernel.ts';
 import type { ProcessIdentity } from '../src/windows/kernel.ts';
 import { runSource } from '../src/watchers/source.ts';
 import { scratch } from './support.ts';
-import { bounded } from '../src/dispatcher/daemon.ts';
+import { bounded } from '../src/core/daemon.ts';
 
-const module = resolve('src/dispatcher/runtime.ts');
+const module = resolve('src/core/runtime.ts');
 const runtime: Record<string, any> = existsSync(module) ? await import(pathToFileURL(module).href) : {};
 
 function verifyCleanupTarget(packet: { identity: ProcessIdentity; owner: ProcessIdentity }, expectedOwner: ProcessIdentity,
@@ -64,7 +64,7 @@ test('source lifecycle accepts only the owned stop IPC message and removes its l
     await ready.promise;
     process.emit('message', { type: 'unrelated.stop' }, undefined);
     expect(closed).toBe(false);
-    process.emit('message', { type: 'dispatcher.stop' }, undefined);
+    process.emit('message', { type: 'everflow.stop' }, undefined);
     await Promise.race([pending, delay(100).then(() => undefined)]);
     expect(closed).toBe(true);
   } finally { controller.abort(); await pending; }
@@ -90,7 +90,7 @@ test('relay owner disconnect aborts and observes its actual synthetic SSH child 
         errorListeners:target?.listenerCount('error'),closeListeners:target?.listenerCount('close'),
         stdoutListeners:target?.stdout.listenerCount('data'),stderrListeners:target?.stderr.listenerCount('data')})+'\\n');}
     },{},fallback.signal);process.exitCode=code;if(process.connected)process.disconnect();`);
-  const child = fork(script, [], { cwd: artifact.root, env: { ...isolatedEnvironment(artifact.root, process.env), INBOX_DISPATCHER_SOURCE_OWNER: String(process.pid) }, execArgv: [], windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  const child = fork(script, [], { cwd: artifact.root, env: { ...isolatedEnvironment(artifact.root, process.env), EVERFLOW_SOURCE_OWNER: String(process.pid) }, execArgv: [], windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   using kernel = createKernel();
   const watcherIdentity = spawnedIdentity(child, (pid) => kernel.processIdentity(pid));
   let output = '', stderr = '';
@@ -108,9 +108,9 @@ test('relay owner disconnect aborts and observes its actual synthetic SSH child 
       child.on('message', (value: any) => { if (value.type === 'fixture.ssh') { clearTimeout(timeout); resolve(value.pid); } });
     });
     const packet = await bounded(new Promise<any>((resolve) => {
-      const existing = messages.find((value) => value.type === 'dispatcher.child' && value.pid === pid && value.active === true);
+      const existing = messages.find((value) => value.type === 'everflow.child' && value.pid === pid && value.active === true);
       if (existing) { resolve(existing); return; }
-      const received = (value: any) => { if (value.type === 'dispatcher.child' && value.pid === pid && value.active === true) { child.off('message', received); resolve(value); } };
+      const received = (value: any) => { if (value.type === 'everflow.child' && value.pid === pid && value.active === true) { child.off('message', received); resolve(value); } };
       child.on('message', received);
     }), 5000, 'fixture.child-registration');
     candidate = packet.identity;

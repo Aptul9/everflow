@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Everflow: one Teams message, from arrival to report",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [1400, 720],
+    "views": [
+      {
+        "id": "arrival",
+        "label": "Arrival",
+        "focus": ["teams", "store", "triage"],
+        "note": "Messages wait without a batch. Once the conversation is quiet for 120 seconds, its new messages become one batch and one triage job."
+      },
+      {
+        "id": "triage",
+        "label": "Triage",
+        "focus": ["triage", "vault", "store", "page"],
+        "note": "Triage reads the batch, 40 earlier messages with times, title, client hints and candidate tickets, and returns one decision."
+      },
+      {
+        "id": "start",
+        "label": "Start",
+        "focus": ["page", "store", "chat"],
+        "note": "Nothing opens before Start. Start approves the ticket, and a job creates its chat and sends the brief."
+      },
+      {
+        "id": "report",
+        "label": "Report",
+        "focus": ["collector", "chat", "store"],
+        "note": "The collector waits for the turn to finish, reads the final STATUS line, renames the chat and stores the report on the ticket."
+      }
+    ]
+  },
+  "participants": [
+    { "id": "teams", "type": "external", "label": "Teams watcher" },
+    { "id": "store", "type": "database", "label": "SQLite, job queue" },
+    { "id": "triage", "type": "backend", "label": "Triage, Haiku" },
+    { "id": "vault", "type": "database", "label": "Vault" },
+    { "id": "page", "type": "frontend", "label": "Local page" },
+    { "id": "chat", "type": "cloud", "label": "OpenChamber chat" },
+    { "id": "collector", "type": "backend", "label": "Collector" }
+  ],
+  "segments": [
+    { "from": 148, "to": 248, "label": "Arrival and quiet window" },
+    { "from": 264, "to": 394, "label": "Triage and proposal" },
+    { "from": 410, "to": 480, "label": "Start" },
+    { "from": 496, "to": 626, "label": "Report" }
+  ],
+  "messages": [
+    { "from": "teams", "to": "store", "y": 172, "label": "New message, no batch yet", "variant": "emphasis" },
+    { "from": "teams", "to": "store", "y": 202, "label": "More messages, same conversation" },
+    { "from": "store", "to": "triage", "y": 232, "label": "Quiet 120 s: one batch, one job" },
+    { "from": "triage", "to": "vault", "y": 288, "label": "vault_search, vault_read", "variant": "dashed" },
+    { "from": "vault", "to": "triage", "y": 318, "label": "Note text, read-only" },
+    { "from": "triage", "to": "store", "y": 348, "label": "Decision: new, update or skip" },
+    { "from": "store", "to": "page", "y": 378, "label": "Proposal under Needs you" },
+    { "from": "page", "to": "store", "y": 434, "label": "Start: ticket approved", "variant": "emphasis" },
+    { "from": "store", "to": "chat", "y": 464, "label": "New chat, then the brief", "variant": "emphasis" },
+    { "from": "collector", "to": "chat", "y": 520, "label": "Turn finished? every 10 s" },
+    { "from": "chat", "to": "collector", "y": 550, "label": "Last line: STATUS | one line" },
+    { "from": "collector", "to": "chat", "y": 580, "label": "Title: [Stage] #id title" },
+    { "from": "collector", "to": "store", "y": 610, "label": "Ticket report and stage" }
+  ],
+  "activations": [
+    { "participant": "triage", "from": 226, "to": 354, "type": "backend" },
+    { "participant": "chat", "from": 458, "to": 556, "type": "cloud" },
+    { "participant": "collector", "from": 514, "to": 616, "type": "backend" }
+  ]
+}

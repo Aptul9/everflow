@@ -1,15 +1,15 @@
 import { createHash } from 'node:crypto';
+import { basename } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import type { Config } from '../dispatcher/config.ts';
-import { batchMessages, detail, feedback } from '../dispatcher/tickets.ts';
-import type { Message } from '../dispatcher/tickets.ts';
-import { utc } from '../dispatcher/time.ts';
-import type { Health, OverviewState, Reference, SourceMessage, TicketCard, TicketDetail } from '../lib/web-types.ts';
+import type { Config } from '../core/config.ts';
+import { chatDirectory, clientsFor, sourceAccounts, sourceEnabled } from '../core/policy.ts';
+import { batchClients, batchMessages, batchPaused, boardColumn, detail, feedback, MUTE_FOREVER, pausedInputs } from '../core/tickets.ts';
+import type { Column, Message, Stage } from '../core/tickets.ts';
+import { modelChoice, readModelOptions } from '../core/settings.ts';
+import { calendarDay, utc } from '../core/time.ts';
+import type { Health, OverviewState, Reference, SkippedBatch, SourceMessage, TicketCard, TicketDetail, TriageBatch } from '../lib/web-types.ts';
 
-export function calendarDay(at: string | Date): string {
-  const date = new Date(at);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-}
+export { calendarDay };
 
 function message(row: Message): SourceMessage {
   let deleted = false;
@@ -30,7 +30,8 @@ export function ticketDetail(db: DatabaseSync, id: number): TicketDetail {
     summary: row.summary, ask: row.ask, proposal: row.proposal, confidence: row.confidence, maybe_ticket: row.maybe_ticket,
     kb_notes: (JSON.parse(row.kb_notes) as unknown[]).filter((value): value is string => typeof value === 'string'),
     created_at: row.created_at, last_activity_at: row.last_activity_at, closed_at: row.closed_at, report: row.report,
-    report_line: row.report_line, session_title: row.session_title, timeline_revision: representation(timeline).etag, messages, refs };
+    report_line: row.report_line, session_id: row.session_id, chat_running: !!row.chat_running_at, session_title: row.session_title, reason: timeline.find((event) => event.kind === 'triage')?.body ?? null,
+    timeline_revision: representation(timeline).etag, messages, refs };
   return { ticket, messages, refs, timeline };
 }
 
@@ -50,14 +51,25 @@ function health(db: DatabaseSync, cfg: Config): Health[] {
       state: row.state as Health['state'], since: row.since as string, last_ok: row.last_ok as string | null, last_error: row.last_error as string | null,
       ...(coverage ? { coverage } : {}), ...(typeof detail.observed_at === 'string' ? { observed_at: detail.observed_at } : {}) });
   }
-  for (const account of db.prepare(`SELECT source,account FROM conversation UNION SELECT source,account FROM cursor ORDER BY source,account`).all()) {
+  for (const source of sources) {
+    if (!sourceEnabled(cfg, source)) result.set(source, { ...result.get(source)!, state: 'disabled' });
+  }
+  const paused = pausedInputs(db);
+  const waiting = new Map(db.prepare(`SELECT c.source||':'||lower(c.account) AS input,COUNT(*) AS n FROM batch b JOIN conversation c ON c.id=b.conversation
+    WHERE b.state='pending' AND b.outcome IN ('pending','triage','routed') GROUP BY input`).all().map((row) => [String(row.input), Number(row.n)]));
+  for (const account of db.prepare(`SELECT source,account FROM conversation UNION SELECT source,account FROM cursor WHERE account<>'*' ORDER BY source,account`).all()) {
     const dependency = `${account.source}:${account.account}`;
+    const key = `${account.source}:${String(account.account).toLowerCase()}`;
     const checkpoint = db.prepare('SELECT since FROM cursor WHERE source=? AND account=?').get(account.source!, account.account!);
     const row = result.get(dependency);
     const source = result.get(String(account.source));
+    const allowed = sourceAccounts(cfg, String(account.source));
+    const off = !sourceEnabled(cfg, String(account.source)) || allowed && !allowed.has(String(account.account).toLowerCase());
     result.set(dependency, { ...(row ?? { dependency, scope: 'account', state: 'unknown', since: null, last_ok: null, last_error: null }),
+      ...(off ? { state: 'disabled' as const } : {}),
       ...(source?.coverage ? { coverage: source.coverage } : {}),
-      checkpoint: checkpoint ? String(checkpoint.since) : null });
+      checkpoint: checkpoint ? String(checkpoint.since) : null,
+      paused: paused.has(key), waiting: paused.has(key) ? waiting.get(key) ?? 0 : 0, clients: clientsFor(cfg, String(account.account), []) });
   }
   if (!cfg.tickets.enabled) result.set('tickets', { dependency: 'tickets', scope: 'jobs', state: 'disabled', since: null, last_ok: null, last_error: null });
   return [...result.values()].sort((a, b) => a.dependency.localeCompare(b.dependency));
@@ -65,24 +77,47 @@ function health(db: DatabaseSync, cfg: Config): Health[] {
 
 export function readState(db: DatabaseSync, cfg: Config, at = new Date()): OverviewState {
   const day = calendarDay(at);
-  const groups: OverviewState['groups'] = { needs_you: [], working: [], waiting_them: [], failed: [], done_today: [] };
-  const tickets = db.prepare('SELECT id FROM ticket ORDER BY id').all().map((row) => ticketDetail(db, Number(row.id)).ticket)
+  const groups: OverviewState['groups'] = { needs_you: [], working: [], waiting_them: [], failed: [], done_today: [], skipped: [] };
+  // Finished cards and skipped batches leave the board at the end of the local day they finished
+  const midnight = new Date(at);
+  midnight.setHours(0, 0, 0, 0);
+  const shownSince = utc(midnight.toISOString());
+  const finished = (row: { lifecycle?: unknown }) => row.lifecycle === 'done' || row.lifecycle === 'dismissed';
+  // Only cards on the board get their detail built: the page polls this every 10 s and closed tickets pile up
+  const tickets = db.prepare('SELECT id,lifecycle,closed_at,cleared_at FROM ticket ORDER BY id').all()
+    .filter((row) => !finished(row) || row.closed_at && row.cleared_at === null && utc(String(row.closed_at)) >= shownSince)
+    .map((row) => ticketDetail(db, Number(row.id)).ticket)
     .sort((a, b) => Number(b.lifecycle === 'proposed') - Number(a.lifecycle === 'proposed')
       || utc(b.last_activity_at ?? b.created_at).localeCompare(utc(a.last_activity_at ?? a.created_at)) || b.id - a.id);
-  for (const ticket of tickets) {
-    if (ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed') {
-      if (ticket.closed_at && calendarDay(ticket.closed_at) === day) groups.done_today.push(ticket);
-    } else if (ticket.stage === 'Failed') groups.failed.push(ticket);
-    else if (ticket.stage === 'Needs you') groups.needs_you.push(ticket);
-    else if (ticket.stage === 'Waiting on them') groups.waiting_them.push(ticket);
-    else groups.working.push(ticket);
-  }
-  const skipped = db.prepare(`SELECT b.id,c.title,c.source,c.account,b.outcome,b.created_at FROM batch b JOIN conversation c ON c.id=b.conversation
-    WHERE b.outcome IN ('not_on_us','backlog','answered') ORDER BY b.created_at DESC,b.id DESC`).all().map((row) => ({
+  // Same column function as the session title, so card and title never disagree
+  const group: Record<Column, keyof OverviewState['groups']> = { 'Needs you': 'needs_you', Working: 'working', 'Waiting on them': 'waiting_them',
+    Failed: 'failed', Done: 'done_today', Skipped: 'skipped' };
+  for (const ticket of tickets) groups[group[boardColumn(ticket.stage as Stage, ticket.lifecycle)]].push(ticket);
+  const skipped = db.prepare(`SELECT b.id,c.title,c.source,c.account,b.outcome,b.created_at,
+    (SELECT t.reason FROM triage_log t WHERE t.batch=b.id ORDER BY t.id DESC LIMIT 1) AS reason FROM batch b JOIN conversation c ON c.id=b.conversation
+    WHERE b.outcome IN ('not_on_us','backlog','answered','muted') AND b.cleared_at IS NULL AND COALESCE(b.done_at,b.created_at)>=?
+    ORDER BY b.created_at DESC,b.id DESC`).all(shownSince).map((row) => ({
     id: Number(row.id), title: row.title as string | null, source: String(row.source), account: String(row.account),
-    outcome: row.outcome as 'not_on_us' | 'backlog' | 'answered', created_at: String(row.created_at),
+    outcome: row.outcome as SkippedBatch['outcome'], created_at: String(row.created_at), reason: row.reason as string | null,
     messages: batchMessages(db, Number(row.id)).reverse().map(message),
   }));
+  const paused = pausedInputs(db);
+  const triaging = db.prepare(`SELECT b.id,c.title,c.source,c.account,b.created_at,
+    (SELECT j.state FROM job j WHERE j.kind='triage' AND json_extract(j.payload,'$.batch')=b.id AND j.state IN ('queued','running','parked') ORDER BY j.id DESC LIMIT 1) AS job
+    FROM batch b JOIN conversation c ON c.id=b.conversation
+    WHERE b.state='pending' AND b.ticket IS NULL AND b.outcome IN ('pending','triage') ORDER BY b.created_at DESC,b.id DESC`).all().map((row) => ({
+    id: Number(row.id), title: row.title as string | null, source: String(row.source), account: String(row.account), created_at: String(row.created_at),
+    job: row.job as TriageBatch['job'], clients: batchClients(db, cfg, Number(row.id)), held: !row.job && batchPaused(db, Number(row.id), paused),
+    messages: batchMessages(db, Number(row.id)).reverse().map(message),
+  }));
+  const agents: OverviewState['agents'] = [
+    ...triaging.filter((batch) => batch.job === 'running').map((batch) => ({ kind: 'triage' as const, clients: batch.clients, title: batch.title, ticket: null })),
+    ...tickets.filter((ticket) => ticket.chat_running && ticket.lifecycle === 'active').map((ticket) => ({ kind: 'chat' as const,
+      clients: ticket.client ? [ticket.client] : [], title: ticket.title, ticket: ticket.id })),
+  ];
+  const muted = db.prepare('SELECT id,title,source,account,muted_until FROM conversation WHERE muted_until > ? ORDER BY muted_until,id').all(utc(at.toISOString()))
+    .map((row) => ({ id: Number(row.id), title: row.title as string | null, source: String(row.source), account: String(row.account),
+      until: String(row.muted_until), forever: row.muted_until === MUTE_FOREVER }));
   const jobs = db.prepare("SELECT id,kind,ticket,last_error,updated_at,payload FROM job WHERE state='parked' ORDER BY updated_at DESC,id DESC").all().map((row) => {
     const evidence = (JSON.parse(String(row.payload)) as { assessment_error?: { raw?: unknown; parse_error?: unknown } }).assessment_error;
     return { id: Number(row.id), kind: String(row.kind), ticket: row.ticket === null ? null : Number(row.ticket),
@@ -91,10 +126,13 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
   });
   const quarantine = db.prepare('SELECT id,source,line,error,at,truncated FROM quarantine WHERE replayed_at IS NULL ORDER BY at DESC,id DESC').all()
     .map((row) => ({ id: Number(row.id), source: String(row.source), line: String(row.line), error: String(row.error), at: String(row.at), truncated: row.truncated === 1 }));
-  const triage = db.prepare("SELECT id,batch,at,reason,raw FROM triage_log WHERE action='invalid' ORDER BY at DESC,id DESC").all()
+  const triage = db.prepare(`SELECT id,batch,at,reason,raw FROM triage_log t WHERE action='invalid'
+    AND NOT EXISTS (SELECT 1 FROM triage_log v WHERE v.batch=t.batch AND v.id>t.id AND v.action IN ('new','update','skip')) ORDER BY at DESC,id DESC`).all()
     .map((row) => ({ id: Number(row.id), batch: row.batch === null ? null : Number(row.batch), at: String(row.at),
       raw: row.raw as string | null, parse_error: row.reason as string | null }));
-  return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped,
+  return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped, triaging, agents,
+    models: { triage: modelChoice(db, cfg, 'triage'), chat: modelChoice(db, cfg, 'chat'), options: readModelOptions(db), triage_routes: cfg.triage.providers }, chat_project: basename(cfg.opencode.directory || ''),
+    chat_projects: Object.fromEntries(Object.keys(cfg.clients).map((client) => [client, basename(chatDirectory(cfg, client))])), muted,
     health: health(db, cfg), problems: { jobs, quarantine, triage }, feedback: feedback(db) };
 }
 

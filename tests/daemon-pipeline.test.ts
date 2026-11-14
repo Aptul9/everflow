@@ -3,10 +3,10 @@ import fs from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test } from 'vitest';
-import { openDb } from '../src/dispatcher/db.ts';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { approve } from '../src/dispatcher/approval.ts';
-import { enqueue } from '../src/dispatcher/jobs.ts';
+import { openDb } from '../src/core/db.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { approve } from '../src/core/approval.ts';
+import { enqueue } from '../src/core/jobs.ts';
 import { createKernel } from '../src/windows/kernel.ts';
 import { daemonFixture, sourceRecord } from './daemon-support.ts';
 import { scriptedPeer as chatPeer } from './opencode-support.ts';
@@ -134,7 +134,7 @@ test.each(['native', 'forward'])('P07 built chain retains terminal report/refere
     expect(f.read((db) => db.prepare("SELECT raw FROM triage_log WHERE action='new'").get())?.raw).toContain('02_Areas/workflow.md');
     const store = f.read((db) => JSON.parse(String(db.prepare("SELECT detail FROM health WHERE dependency='daemon'").get()!.detail)).store_id);
     expect(f.peer.calls.find((call) => call.method === 'POST' && call.url.pathname === '/api/session')?.body.metadata)
-      .toEqual({ inbox_dispatcher: { store_id: store, ticket: Number(f.proposed.id) } });
+      .toEqual({ everflow: { store_id: store, ticket: Number(f.proposed.id) } });
     expect(f.read((db) => db.prepare('SELECT key FROM ticket_ref ORDER BY id').all().map((row) => row.key))).toContain('ABC-71');
     f.peer.finish(String(first.session_id), String(first.prompt_id), 'STATUS: working | First input complete');
     await f.until(() => f.read((db) => db.prepare("SELECT id FROM turn WHERE id=? AND state='done'").get(first.id!)), 'first collection');

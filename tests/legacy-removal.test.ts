@@ -47,5 +47,5 @@ test('shipped application and build scripts have no Python bridge, source write 
   const cli = fs.readFileSync(join(artifact.root, 'src/cli.ts'), 'utf8');
   expect(cli).not.toMatch(/case\s+['"](?:draft|reply)['"]|(?:draft|reply):\s*\d/);
   // OpenCode prompt HTTP and node:http sendResponse are unrelated to mail/Teams delivery.
-  expect(fs.readFileSync(join(artifact.root, 'src/dispatcher/opencode.ts'), 'utf8')).toContain('client.session.prompt');
+  expect(fs.readFileSync(join(artifact.root, 'src/core/opencode.ts'), 'utf8')).toContain('client.session.prompt');
 });

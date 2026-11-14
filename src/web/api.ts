@@ -1,9 +1,10 @@
 import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
-import { approve } from '../dispatcher/approval.ts';
-import { transaction } from '../dispatcher/db.ts';
-import { retry } from '../dispatcher/jobs.ts';
-import { dismiss, makeTicket, TicketError } from '../dispatcher/tickets.ts';
+import { approve } from '../core/approval.ts';
+import { transaction } from '../core/db.ts';
+import { retry } from '../core/jobs.ts';
+import { requestModelOptions, saveSetting } from '../core/settings.ts';
+import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, MUTE_MAX_MINUTES, muteBatch, muteTicket, pauseInput, TicketError } from '../core/tickets.ts';
 import { HttpError, instance, withDatabase } from './instance.ts';
 import type { WebInstance } from './instance.ts';
 import { readState, representation, ticketDetail } from './state.ts';
@@ -11,7 +12,16 @@ import { readState, representation, ticketDetail } from './state.ts';
 export const MAX_BODY_BYTES = 32_768;
 const empty = z.strictObject({});
 const note = z.strictObject({ note: z.string().max(8_000).refine((value) => value.trim().length > 0, 'Note is required') });
-const reason = z.strictObject({ reason: z.string().max(2_000).optional() });
+const question = z.strictObject({ note: z.string().max(8_000).optional() });
+// null mutes until unmuted. Hours are still taken from a page served by an older build.
+const minutes = z.number().int().min(1).max(MUTE_MAX_MINUTES).nullable();
+const hours = z.number().int().min(1).max(8_760).nullable();
+const reason = z.strictObject({ reason: z.string().max(2_000).optional(), mute_minutes: minutes.optional(), mute_hours: hours.optional() })
+  .refine((input) => input.mute_minutes === undefined || input.mute_hours === undefined, 'Mute in minutes or hours, not both');
+const muteFor = z.strictObject({ minutes: minutes.optional(), hours: hours.optional() })
+  .refine((input) => (input.minutes === undefined) !== (input.hours === undefined), 'Mute minutes required');
+const inMinutes = (value: number | null | undefined, legacyHours: number | null | undefined) =>
+  value !== undefined ? value : legacyHours === undefined ? undefined : legacyHours === null ? null : legacyHours * 60;
 
 export function allowedHost(host: string | undefined | null, port: number): boolean {
   return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
@@ -19,7 +29,7 @@ export function allowedHost(host: string | undefined | null, port: number): bool
 
 export function guardPost(headers: Pick<Headers, 'get'>, current: WebInstance): void {
   const host = headers.get('host');
-  const supplied = Buffer.from(headers.get('x-dispatcher-token') ?? '', 'utf8');
+  const supplied = Buffer.from(headers.get('x-everflow-token') ?? '', 'utf8');
   const expected = Buffer.from(current.token, 'utf8');
   if (!allowedHost(host, current.port) || headers.get('origin') !== `http://${host}`
     || supplied.byteLength !== expected.byteLength || !timingSafeEqual(supplied, expected)) {
@@ -91,20 +101,57 @@ export function ticketGet(request: Request, id: string): Response {
   } catch (error) { return errorResponse(error); }
 }
 
-export async function actionPost(request: Request, scope: 'ticket' | 'batch' | 'job', id: string, action: string): Promise<Response> {
+const settingBody = z.union([z.strictObject({ key: z.string().min(1).max(64), value: z.string().max(200) }), z.strictObject({ refresh: z.literal(true) })]);
+
+// Saves a model/effort choice, or asks the daemon to refresh the picker options
+export async function settingPost(request: Request): Promise<Response> {
+  try {
+    const current = instance();
+    guardPost(request.headers, current);
+    const input = await body(request, settingBody) as { key: string; value: string } | { refresh: true };
+    const result = withDatabase(true, (db) => ({ setting: 'refresh' in input ? requestModelOptions(db) : saveSetting(db, input.key, input.value) }));
+    return Response.json(result, { headers: { 'cache-control': 'no-store' } });
+  } catch (error) { return errorResponse(error); }
+}
+
+const pauseBody = z.strictObject({ source: z.string().min(1).max(64), account: z.string().min(1).max(320), paused: z.boolean() });
+
+// Pauses a source account (its new input waits before triage and chat forwards) or switches it back on
+export async function inputPost(request: Request): Promise<Response> {
+  try {
+    const current = instance();
+    guardPost(request.headers, current);
+    const input = await body(request, pauseBody) as { source: string; account: string; paused: boolean };
+    const result = withDatabase(true, (db) => ({ input: pauseInput(db, input.source, input.account, input.paused), paused: input.paused }));
+    return Response.json(result, { headers: { 'cache-control': 'no-store' } });
+  } catch (error) { return errorResponse(error); }
+}
+
+export async function actionPost(request: Request, scope: 'ticket' | 'batch' | 'job' | 'conversation', id: string, action: string): Promise<Response> {
   try {
     const current = instance();
     guardPost(request.headers, current);
     const value = validId(id);
-    const schema = scope === 'ticket' && action === 'chat' ? note : scope === 'ticket' && action === 'dismiss' ? reason : empty;
-    const input = await body(request, schema) as { note?: string; reason?: string };
+    const schema = scope === 'ticket' && action === 'chat' ? note : scope === 'ticket' && action === 'discuss' ? question : scope === 'ticket' && ['dismiss', 'close'].includes(action) ? reason : scope === 'batch' && action === 'mute' ? muteFor : empty;
+    const input = await body(request, schema) as { note?: string; reason?: string; mute_minutes?: number | null; mute_hours?: number | null; minutes?: number | null; hours?: number | null };
     if (!current.config.tickets.enabled) throw new HttpError(409, 'tickets.disabled', 'Tickets disabled');
-    if (scope === 'ticket' && ['start', 'chat'].includes(action) && !current.config.chats.enabled) throw new HttpError(409, 'chats.disabled', 'Chats off');
+    if (scope === 'ticket' && ['start', 'chat', 'discuss'].includes(action) && !current.config.chats.enabled) throw new HttpError(409, 'chats.disabled', 'Chats off');
     const result = withDatabase(true, (db) => transaction(db, () => {
       if (scope === 'ticket' && action === 'start') return { ticket: approve(current.config, db, value) };
       if (scope === 'ticket' && action === 'chat') return { ticket: approve(current.config, db, value, input.note!) };
-      if (scope === 'ticket' && action === 'dismiss') return { ticket: dismiss(db, value, input.reason ?? '') };
+      if (scope === 'ticket' && action === 'discuss') return { ticket: approve(current.config, db, value, input.note ?? '', true) };
+      if (scope === 'ticket' && action === 'dismiss') {
+        dismiss(db, value, input.reason ?? '');
+        const muted = inMinutes(input.mute_minutes, input.mute_hours);
+        if (muted !== undefined) muteTicket(db, value, muted);
+        return { ticket: value };
+      }
+      if (scope === 'ticket' && action === 'close') return { ticket: close(db, value, input.reason ?? '') };
+      if (scope === 'ticket' && action === 'clear') return { ticket: clearTicket(db, value) };
       if (scope === 'batch' && action === 'ticket') return { ticket: makeTicket(db, value) };
+      if (scope === 'batch' && action === 'mute') return { conversation: muteBatch(db, value, inMinutes(input.minutes, input.hours)!) };
+      if (scope === 'batch' && action === 'clear') return { batch: clearBatch(db, value) };
+      if (scope === 'conversation' && action === 'unmute') return { conversation: mute(db, value, 0) };
       if (scope === 'job' && action === 'retry') {
         const job = db.prepare('SELECT state FROM job WHERE id=?').get(value);
         if (!job) throw new HttpError(404, 'job.not-found', `Job ${value} not found`);
@@ -114,6 +161,8 @@ export async function actionPost(request: Request, scope: 'ticket' | 'batch' | '
       }
       throw new HttpError(404, 'action.not-found', 'Action not found');
     }));
+    // The daemon's retitle worker, registered process-wide (this route runs in Next's module graph)
+    (globalThis as Record<symbol, (() => void) | undefined>)[Symbol.for('everflow.retitle.wake')]?.();
     return Response.json(result, { headers: { 'cache-control': 'no-store' } });
   } catch (error) { return errorResponse(error); }
 }

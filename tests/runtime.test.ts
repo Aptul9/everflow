@@ -3,17 +3,17 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { loadConfig } from '../src/dispatcher/config.ts';
-import { openDb, prepareStart } from '../src/dispatcher/db.ts';
-import { ingest, sourceStart } from '../src/dispatcher/ingest.ts';
-import * as jobs from '../src/dispatcher/jobs.ts';
-import { prepareTurn, sync } from '../src/dispatcher/chat.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { openDb, prepareStart } from '../src/core/db.ts';
+import { ingest, sourceStart } from '../src/core/ingest.ts';
+import * as jobs from '../src/core/jobs.ts';
+import { prepareTurn, sync } from '../src/core/chat.ts';
 import { isolatedEnvironment } from '../scripts/build.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
 import { scratch, snapshot } from './support.ts';
 
 // Missing implementation still produces assertion RED, rather than a transform/import failure.
-const path = resolve('src/dispatcher/runtime.ts');
+const path = resolve('src/core/runtime.ts');
 const runtime: Record<string, any> = existsSync(path) ? await import(pathToFileURL(path).href) : {};
 const AT = '2026-11-06T10:00:00.000000Z';
 const message = (extra = {}) => ({ source: 'teams', account: 'me@example.invalid', conversation_id: 'synthetic-chat',
@@ -146,7 +146,7 @@ test('reader failure observes owned child terminal state before propagating its 
   if (!runtime.readWatcher) return;
   const artifact = readBuildReceipt(process.env.TEST_BUILD_RECEIPT), program = join(root, 'synthetic-failed-reader.mjs');
   writeFileSync(program, `process.stdout.write(${JSON.stringify(JSON.stringify(message()) + '\n')});const timer=setInterval(()=>{},1000);
-    process.on('message',value=>{if(value?.type==='dispatcher.stop')setTimeout(()=>{clearInterval(timer);process.disconnect();},150);});`);
+    process.on('message',value=>{if(value?.type==='everflow.stop')setTimeout(()=>{clearInterval(timer);process.disconnect();},150);});`);
   const child = spawn(process.execPath, [program], { cwd: artifact.root, env: isolatedEnvironment(artifact.root, process.env), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   const exited = new Promise<void>((resolve) => child.once('close', () => resolve()));
   try {
@@ -212,6 +212,7 @@ test('maintenance uses per-ticket/day keys and due-only rearm without unfinished
   const { path, cfg } = fixture();
   using db = openDb(path);
   const ticket = owner(db);
+  db.prepare('UPDATE ticket SET session_title=? WHERE id=?').run(`[Working] #${ticket} Synthetic`, ticket);
   expect(runtime.scheduleMaintenance).toBeTypeOf('function');
   if (!runtime.scheduleMaintenance) return;
   runtime.scheduleMaintenance(db, cfg, AT);
@@ -230,6 +231,22 @@ test('maintenance uses per-ticket/day keys and due-only rearm without unfinished
   expect(db.prepare("SELECT state FROM job WHERE kind='sync'").get()?.state).toBe('queued');
   runtime.scheduleMaintenance(db, cfg, '2026-11-07T10:00:00Z');
   expect(db.prepare("SELECT COUNT(*) AS n FROM job WHERE kind='sync' AND state IN ('queued','running')").get()?.n).toBe(1);
+});
+
+test('a rearmed sync starts its backoff over and the interval no longer chases stale titles', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const ticket = owner(db);
+  runtime.scheduleMaintenance(db, cfg, AT);
+  const sync = () => db.prepare("SELECT state,next_at,failures,attempts,error_class FROM job WHERE kind='sync' AND ticket=?").get(ticket)!;
+  // Earlier failures of the day, then a successful run with its next sync a minute out
+  db.prepare("UPDATE job SET state='done',next_at=?,failures=9,attempts=2,error_class='dependency',last_error='Transport: fetch failed' WHERE ticket=?").run('2026-11-06T10:01:00.000000Z', ticket);
+  // A stage change waits for the retitle worker, not for this interval
+  db.prepare("UPDATE ticket SET lifecycle='done',report='done',closed_at=? WHERE id=?").run('2026-11-06T10:00:15.000000Z', ticket);
+  runtime.scheduleMaintenance(db, cfg, '2026-11-06T10:00:20Z');
+  expect(sync().state).toBe('done');
+  runtime.scheduleMaintenance(db, cfg, '2026-11-06T10:01:00Z');
+  expect({ ...sync() }).toEqual({ state: 'queued', next_at: '2026-11-06T10:01:00.000000Z', failures: 0, attempts: 0, error_class: null });
 });
 
 test('purge changes only old unowned not_on_us text and commits completion under the same lease', async () => {

@@ -219,7 +219,7 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# dispatcher state
+# everflow state
 data/
 
 # Node/Next output

@@ -3,8 +3,8 @@ import { createOutlookState, openOutlook, outlookRecord, outlookSinceFilter, raw
 import { createComSession } from '../src/windows/com.ts';
 import type { OutlookPort } from '../src/watchers/outlook.ts';
 import type { SourceRecord } from '../src/watchers/source.ts';
-import { ingest, sourceStart } from '../src/dispatcher/ingest.ts';
-import { openDb } from '../src/dispatcher/db.ts';
+import { ingest, sourceStart } from '../src/core/ingest.ts';
+import { openDb } from '../src/core/db.ts';
 
 const since = '2026-11-04T10:00:00.000Z';
 const now = '2026-11-04T11:00:00.000Z';
