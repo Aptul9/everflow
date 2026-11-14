@@ -46,6 +46,7 @@ accounts = ["Me@Example.Invalid"]
 domains = ["Example.Invalid"]
 keywords = ["synthetic"]
 custom = "retained"
+role = "Reviewer of assigned work only"
 [sources.teams]
 account = "source@example.invalid"
 read_only = true
@@ -57,7 +58,7 @@ gchat = 120
   expect(cfg.db).toEqual({ path });
   expect(cfg.vault).toEqual({ path: join(root, 'knowledge'), guide: '' });
   expect(cfg.opencode).toMatchObject({ directory: join(root, 'knowledge'), model: 'synthetic/model' });
-  expect(cfg.clients).toMatchObject({ synthetic: { accounts: ['Me@Example.Invalid'], domains: ['Example.Invalid'], keywords: ['synthetic'], custom: 'retained' } });
+  expect(cfg.clients).toMatchObject({ synthetic: { accounts: ['Me@Example.Invalid'], domains: ['Example.Invalid'], keywords: ['synthetic'], custom: 'retained', role: 'Reviewer of assigned work only' } });
   expect(cfg.sources).toEqual({ teams: { account: 'source@example.invalid', read_only: true } });
   expect(cfg.windows).toMatchObject({ gchat: 120 });
   expect(existsSync(path)).toBe(false);

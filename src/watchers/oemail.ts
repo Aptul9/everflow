@@ -10,9 +10,10 @@ export interface OeRequest { path: string; body?: unknown }
 export type OeCall = (requests: OeRequest[], signal?: AbortSignal) => Promise<{ status: number; body: string }[]>;
 
 const FOLDERS = ['Inbox', 'SentItems'] as const;
-const FIELDS = 'Id,InternetMessageId,Subject,From,ReceivedDateTime,ConversationId,UniqueBody,HasAttachments,IsDraft';
+const FIELDS = 'Id,InternetMessageId,Subject,From,ToRecipients,CcRecipients,ReceivedDateTime,ConversationId,UniqueBody,HasAttachments,IsDraft';
 const address = z.object({ EmailAddress: z.object({ Name: z.string().nullish(), Address: z.string().nullish() }).nullish() }).nullish();
 const mailSchema = z.object({ Id: z.string().min(1), InternetMessageId: z.string().nullish(), Subject: z.string().nullish(), From: address,
+  ToRecipients: z.array(address).nullish(), CcRecipients: z.array(address).nullish(),
   ReceivedDateTime: z.string().min(1), ConversationId: z.string().min(1), HasAttachments: z.boolean().nullish(), IsDraft: z.boolean().nullish(),
   UniqueBody: z.object({ ContentType: z.string(), Content: z.string() }).nullish() });
 const pageSchema = z.object({ value: z.array(z.unknown()), '@odata.nextLink': z.string().nullish() });
@@ -89,11 +90,15 @@ export function normalize(value: unknown, account: string, folder: string): Sour
   if (!Number.isFinite(time)) throw new SourceError('oemail', 'oemail.message-time', account);
   const body = mail.UniqueBody?.Content ?? '';
   const text = mail.UniqueBody?.ContentType.toLowerCase() === 'html' ? htmlToText(body.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '')) : body;
+  const mine = folder === 'SentItems' || sender === account;
+  const listed = (recipients: typeof mail.ToRecipients) => (recipients ?? []).some((item) => item?.EmailAddress?.Address?.trim().toLowerCase() === account.toLowerCase());
   return { source: 'oemail', account, conversation_id: mail.ConversationId, conversation_title: mail.Subject ?? '',
     // Folder-specific REST ids change on a move; the internet message id does not
     message_id: mail.InternetMessageId || mail.Id, sender, sender_name: mail.From?.EmailAddress?.Name ?? sender,
-    sender_is_me: folder === 'SentItems' || sender === account, sent_at: new Date(time).toISOString(), text: sourceText(text.trim(), 50000),
-    attachments: mail.HasAttachments ? [{ name: '(attachments)' }] : [], ref: { account, id: mail.Id, folder, conversation: mail.ConversationId } };
+    sender_is_me: mine, sent_at: new Date(time).toISOString(), text: sourceText(text.trim(), 50000),
+    attachments: mail.HasAttachments ? [{ name: '(attachments)' }] : [], ref: { account, id: mail.Id, folder, conversation: mail.ConversationId,
+      // Where the mailbox stood on someone else's mail: other means a distribution list or Bcc
+      ...(mine ? {} : { addressed: listed(mail.ToRecipients) ? 'to' : listed(mail.CcRecipients) ? 'cc' : 'other' }) } };
 }
 
 export function createOeMailState(options: { accounts: string[]; since: string; expectedAccounts?: string[] }) {
