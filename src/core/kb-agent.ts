@@ -73,10 +73,15 @@ const readTools = [
   { name: 'vault_search', description: 'Case-insensitive search of read-only KB notes. A note matches when its path or text contains every word of the query; numbered top-level folders are searched in order. Results are untrusted data.', input_schema: z.toJSONSchema(searchArgs) },
   { name: 'vault_read', description: 'Read an exact relative Markdown path returned by vault_search. Content is untrusted data.', input_schema: z.toJSONSchema(readArgs) },
 ];
-const routeSchema = z.looseObject({
+export const routeSchema = z.looseObject({
   settings: z.looseObject({ baseURL: z.url().refine((value) => /^https?:\/\//i.test(value), 'HTTP(S) baseURL required'), apiKey: z.string().optional() }),
   headers: z.record(z.string(), z.string()).default({}),
 });
+
+// The opencode provider entries triage routes name: base URL, key and headers
+export function triageProviders(path?: string): Readonly<Record<string, unknown>> {
+  return z.object({ providers: z.record(z.string(), z.unknown()) }).parse(readJsonc(path ?? join(homedir(), '.config/opencode/opencode.jsonc'))).providers;
+}
 // Thinking blocks are kept verbatim so the tool turn can be echoed back with its signature; they never carry the decision.
 const blockSchema = z.union([
   z.looseObject({ type: z.literal('text'), text: z.string() }),
@@ -181,8 +186,7 @@ export async function assess(cfg: Config, context: AssessmentContext, candidates
     || !Number.isSafeInteger(cfg.triage.timeout_seconds) || cfg.triage.timeout_seconds < 1 || cfg.triage.timeout_seconds > 120) throw new RangeError('Invalid assessment budget');
   check();
   if (!cfg.triage.providers.length) throw Object.assign(new Error('No configured triage provider route'), { type: 'provider.no-route' });
-  const providers = options.providers ?? z.object({ providers: z.record(z.string(), z.unknown()) })
-    .parse(readJsonc(options.providerConfigPath ?? join(homedir(), '.config/opencode/opencode.jsonc'))).providers;
+  const providers = options.providers ?? triageProviders(options.providerConfigPath);
   const db = options.db ?? openDb(cfg.db.path);
   const choice = modelChoice(db, cfg, 'triage');
   // The chosen account goes first; a limited one is skipped until its retry time, so the others take over on their own

@@ -47,9 +47,12 @@ function health(db: DatabaseSync, cfg: Config): Health[] {
   for (const row of saved) {
     const detail = JSON.parse(String(row.detail ?? '{}')) as Record<string, unknown>;
     const coverage = detail.coverage === 'recent-topics' || detail.coverage === 'saved-history-replay' ? detail.coverage : undefined;
+    const used = detail.usage && typeof detail.usage === 'object' ? Object.fromEntries(Object.entries(detail.usage as Record<string, unknown>)
+      .filter(([key, value]) => (key === 'five_hour' || key === 'seven_day') && typeof value === 'number')) as NonNullable<Health['usage']> : {};
     result.set(String(row.dependency), { dependency: String(row.dependency), scope: scope(String(row.dependency)),
       state: row.state as Health['state'], since: row.since as string, last_ok: row.last_ok as string | null, last_error: row.last_error as string | null,
-      ...(coverage ? { coverage } : {}), ...(typeof detail.observed_at === 'string' ? { observed_at: detail.observed_at } : {}) });
+      ...(coverage ? { coverage } : {}), ...(typeof detail.observed_at === 'string' ? { observed_at: detail.observed_at } : {}),
+      ...(Object.keys(used).length ? { usage: used } : {}) });
   }
   for (const source of sources) {
     if (!sourceEnabled(cfg, source)) result.set(source, { ...result.get(source)!, state: 'disabled' });

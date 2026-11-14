@@ -61,6 +61,8 @@ export interface Health {
   checkpoint?: string | null;
   coverage?: 'recent-topics' | 'saved-history-replay';
   observed_at?: string;
+  // Triage accounts on Meridian: share of the 5-hour and 7-day windows used, 0..1
+  usage?: { five_hour?: number; seven_day?: number };
   // Account rows: paused on the page, batches held while paused, configured clients the account belongs to
   paused?: boolean;
   waiting?: number;

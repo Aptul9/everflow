@@ -42,6 +42,15 @@ test('a healthy Google Chat source shows no coverage warning: recent-topic reads
   expect(screen.getByRole('region', { name: 'Health' }).textContent).not.toMatch(/Recent topics|Observed/);
 });
 
+test('a triage account checked through Meridian shows its 5-hour and 7-day usage', () => {
+  const state = uiState();
+  state.health = state.health.filter((item) => item.dependency !== 'provider:first');
+  state.health.push(Object.assign({ dependency: 'provider:first', scope: 'provider' as const, state: 'ok' as const, since: null, last_ok: null, last_error: null },
+    { usage: { five_hour: 0.464, seven_day: 0.16 } }));
+  board(state);
+  expect(screen.getByRole('region', { name: 'Health' }).textContent).toContain('5h 46% · 7d 16%');
+});
+
 test('switched-off sources and accounts fold away and unused dependencies say so', () => {
   const state = uiState();
   const at = '2026-11-06T06:00:00.000000Z';
