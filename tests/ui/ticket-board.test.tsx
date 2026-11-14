@@ -35,11 +35,11 @@ test('a long column shows eight cards, then more on demand and back to eight', a
   expect(within(screen.getByRole('region', { name: 'Needs you (2)' })).queryByRole('button', { name: /^Show/ })).toBeNull();
 });
 
-test('Google Chat recent-topic coverage is explicit on the health page', () => {
+test('a healthy Google Chat source shows no coverage warning: recent-topic reads are its normal state', () => {
   const state = uiState();
   state.health.push(Object.assign({ dependency: 'gchat', scope: 'source' as const, state: 'ok' as const, since: null, last_ok: null, last_error: null }, { coverage: 'recent-topics' as const, observed_at: '2026-11-07T10:00:00Z' }));
   board(state);
-  expect(screen.getByRole('region', { name: 'Health' }).textContent).toContain('Recent topics only');
+  expect(screen.getByRole('region', { name: 'Health' }).textContent).not.toMatch(/Recent topics|Observed/);
 });
 
 test('switched-off sources and accounts fold away and unused dependencies say so', () => {
