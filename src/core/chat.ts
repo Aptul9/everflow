@@ -9,7 +9,7 @@ import type { Job } from './jobs.ts';
 import { connect } from './opencode.ts';
 import type { Peer, TurnDetail } from './opencode.ts';
 import { modelChoice } from './settings.ts';
-import { addRefs, batchMessages, extractRefs, ownContext, route, stage, stageTitle, TicketError } from './tickets.ts';
+import { addRefs, batchMessages, boardColumn, extractRefs, ownContext, route, stage, stageTitle, TicketError } from './tickets.ts';
 import type { Message, Ticket } from './tickets.ts';
 import { utc } from './time.ts';
 import type { ErrorClass, Report, TurnKind } from './types.ts';
@@ -21,6 +21,7 @@ export interface ChatOptions {
   clock?: () => string;
   restartAt?: string;
   buildReceipt?: string;
+  log?: (event: { source: string; code: string; [key: string]: unknown }) => void;
 }
 
 export interface Turn {
@@ -393,8 +394,8 @@ function projectedTitle(db: DatabaseSync, job: Job, pending: PendingReport): str
   const report = apply ? pending.status.report : owner.report;
   const lifecycle = apply && report === 'done' ? 'done' : owner.lifecycle;
   const tail = ids(currentJob(db, job).payload.pending_batch_ids);
-  return `[${stage(db, owner.id, { exclude_job: job.id, ...(pending.turn === null ? {} : { exclude_turn: pending.turn }),
-    report, lifecycle, pending: lifecycle === 'active' && tail.length > 0 })}] #${owner.id} ${owner.title}`;
+  return `[${boardColumn(stage(db, owner.id, { exclude_job: job.id, ...(pending.turn === null ? {} : { exclude_turn: pending.turn }),
+    report, lifecycle, pending: lifecycle === 'active' && tail.length > 0 }), lifecycle)}] #${owner.id} ${owner.title}`;
 }
 
 function savePending(db: DatabaseSync, job: Job, field: string, value: unknown, now: () => string): boolean {
@@ -601,6 +602,8 @@ async function alignTitle(db: DatabaseSync, job: Job, ticket: number, peer: Peer
   if ((owner.lifecycle === 'done' || owner.lifecycle === 'dismissed') && owner.session_title === title) return true;
   if ((await peer.get(owner.session_id, options.signal)).title !== title) {
     if (!owns(db, job, now())) return false;
+    // Stage marks and session events rename first; a stale title with no mark left means one of them missed this change
+    if (!db.prepare('SELECT 1 FROM stage_dirty WHERE ticket=?').get(ticket)) options.log?.({ source: 'jobs', code: 'title.repaired', job: job.id });
     await peer.rename(owner.session_id, title, options.signal);
     if ((await peer.get(owner.session_id, options.signal)).title !== title) throw Object.assign(new Error('OpenCode title PATCH was not observed'), { status: 503 });
   }

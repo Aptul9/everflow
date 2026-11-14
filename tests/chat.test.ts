@@ -527,7 +527,7 @@ test.each(['global', 'ticket'] as const)('%s sync renames the session after page
   db.prepare("UPDATE ticket SET lifecycle='active',report=NULL WHERE id=?").run(f.ticket);
   vi.setSystemTime(new Date('2026-11-06T03:00:00Z'));
   await sync('after-reopen');
-  expect(title()).toBe(`[Idle] #${f.ticket} Synthetic ticket`);
+  expect(title()).toBe(`[Working] #${f.ticket} Synthetic ticket`);
   // Dismissed tickets are no longer synced for reports, but their title still follows
   dismiss(db, f.ticket, 'Not mine');
   vi.setSystemTime(new Date('2026-11-06T04:00:00Z'));
@@ -538,7 +538,7 @@ test.each(['global', 'ticket'] as const)('%s sync renames the session after page
   expect(queuedSync()).toBe(1);
   db.prepare("UPDATE job SET state='done' WHERE state='queued'").run();
   await sync('after-dismiss');
-  expect(title()).toBe(`[Dismissed] #${f.ticket} Synthetic ticket`);
+  expect(title()).toBe(`[Skipped] #${f.ticket} Synthetic ticket`);
   db.prepare("UPDATE job SET state='done' WHERE kind='sync' AND state='queued'").run();
   vi.setSystemTime(new Date('2026-11-07T04:00:00Z'));
   scheduleMaintenance(db, f.cfg);

@@ -26,6 +26,33 @@ CREATE INDEX IF NOT EXISTS batch_ticket ON batch(ticket);
 CREATE INDEX IF NOT EXISTS turn_ticket ON turn(ticket);
 CREATE INDEX IF NOT EXISTS timeline_ticket ON timeline(ticket);`;
 
+// Any write that can move a ticket's card to another column marks it; the daemon's retitle worker drains the marks.
+// Triggers rather than call sites, so page actions, the runtime and the chat's own ticket CLI are all covered.
+const mark = "INSERT OR REPLACE INTO stage_dirty(ticket,at) VALUES (%s,strftime('%Y-%m-%dT%H:%M:%fZ','now'))";
+const stageMarks = `
+CREATE TABLE IF NOT EXISTS stage_dirty (ticket INTEGER PRIMARY KEY, at TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS stage_dirty_ticket AFTER UPDATE OF lifecycle,report,chat_running_at,title,session_id,merged_into ON ticket
+  WHEN NEW.lifecycle IS NOT OLD.lifecycle OR NEW.report IS NOT OLD.report OR NEW.chat_running_at IS NOT OLD.chat_running_at
+    OR NEW.title IS NOT OLD.title OR NEW.session_id IS NOT OLD.session_id OR NEW.merged_into IS NOT OLD.merged_into
+  BEGIN ${mark.replace('%s', 'NEW.id')}; END;
+CREATE TRIGGER IF NOT EXISTS stage_dirty_job_insert AFTER INSERT ON job WHEN NEW.ticket IS NOT NULL
+  BEGIN ${mark.replace('%s', 'NEW.ticket')}; END;
+CREATE TRIGGER IF NOT EXISTS stage_dirty_job_state AFTER UPDATE OF state ON job WHEN NEW.ticket IS NOT NULL AND NEW.state IS NOT OLD.state
+  BEGIN ${mark.replace('%s', 'NEW.ticket')}; END;
+CREATE TRIGGER IF NOT EXISTS stage_dirty_turn_insert AFTER INSERT ON turn
+  BEGIN ${mark.replace('%s', 'NEW.ticket')}; END;
+CREATE TRIGGER IF NOT EXISTS stage_dirty_turn_state AFTER UPDATE OF state ON turn WHEN NEW.state IS NOT OLD.state
+  BEGIN ${mark.replace('%s', 'NEW.ticket')}; END;`;
+
+function refineStageMarks(db: DatabaseSync): void {
+  if (hasTable(db, 'stage_dirty')) { db.exec(stageMarks); return; }
+  // First start with marks: every chat gets its title checked once, which moves existing titles to column names
+  transaction(db, () => {
+    db.exec(stageMarks);
+    db.exec(`INSERT OR IGNORE INTO stage_dirty(ticket,at) SELECT id,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM ticket WHERE session_id IS NOT NULL`);
+  });
+}
+
 // Source accounts paused on the page: their new input waits, untriaged and unforwarded, until switched back on
 const inputPauseTable = `CREATE TABLE IF NOT EXISTS input_pause (
   source TEXT NOT NULL, account TEXT NOT NULL, paused_at TEXT NOT NULL, PRIMARY KEY (source, account));`;
@@ -261,6 +288,7 @@ export function openDb(path: string): DatabaseSync {
     refineConversation(db);
     refineBatch(db);
     db.exec(lookupIndexes);
+    refineStageMarks(db);
     db.exec('PRAGMA journal_mode = WAL');
     return db;
   } catch (error) {

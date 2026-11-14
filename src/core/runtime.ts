@@ -16,7 +16,7 @@ import { ingest, IngestError, schedule, sourceStart } from './ingest.ts';
 import { claim, complete, defer, enqueue, fail, hasPendingInput, healthError, healthOk, owns, startRenewal } from './jobs.ts';
 import type { Job } from './jobs.ts';
 import { handleTriage } from './kb-agent.ts';
-import { stageTitle } from './tickets.ts';
+import { startRetitler, startSessionEvents } from './retitle.ts';
 import { connect } from './opencode.ts';
 import type { Peer } from './opencode.ts';
 import { storeModelOptions, takeModelRequest } from './settings.ts';
@@ -288,24 +288,21 @@ export function replayQuarantine(db: DatabaseSync, selection: number | 'all', at
 export function scheduleMaintenance(db: DatabaseSync, cfg: Config, at?: string): void {
   transaction(db, () => {
     const now = utc(at), day = now.slice(0, 10);
-    // A dismissed ticket gets a sync only until its session title says so
-    for (const row of db.prepare(`SELECT id,lifecycle,session_title FROM ticket WHERE approved_at IS NOT NULL AND session_id IS NOT NULL
-      AND (lifecycle<>'dismissed' OR COALESCE(session_title,'') NOT LIKE '[Dismissed]%') ORDER BY id`).all()) {
+    // A dismissed ticket gets a sync only until its session title says so. Titles otherwise move through stage marks and OpenCode
+    // events (retitle.ts); this interval only repairs what those missed.
+    for (const row of db.prepare(`SELECT id,lifecycle FROM ticket WHERE approved_at IS NOT NULL AND session_id IS NOT NULL
+      AND (lifecycle<>'dismissed' OR COALESCE(session_title,'') NOT LIKE '[Skipped]%') ORDER BY id`).all()) {
       const ticket = Number(row.id);
       if (hasPendingInput(db, ticket)) continue;
-      // A stage change (page action, report, reopen) is due in the session title now, not at the next sync; an input in flight writes it itself
-      const retitle = row.session_title !== stageTitle(db, ticket)
-        && !db.prepare("SELECT 1 FROM job WHERE ticket=? AND state='running' AND kind IN ('collect','start_chat','forward')").get(ticket);
       for (const kind of row.lifecycle === 'dismissed' ? ['sync'] as const : ['sync', 'archive'] as const) {
         if (db.prepare("SELECT 1 FROM job WHERE kind=? AND ticket=? AND state IN ('queued','running')").get(kind, ticket)) continue;
-        const due = kind === 'sync' && retitle;
         const latest = db.prepare("SELECT next_at FROM job WHERE kind=? AND ticket=? AND state='done' ORDER BY updated_at DESC,id DESC LIMIT 1").get(kind, ticket);
-        if (latest && utc(String(latest.next_at)) > now && !due) continue;
+        if (latest && utc(String(latest.next_at)) > now) continue;
         const key = `${kind}:ticket:${ticket}:${day}`;
         const existing = db.prepare('SELECT id,state,next_at FROM job WHERE key=?').get(key);
         if (!existing) enqueue(db, kind, key, {}, ticket);
         // A done run succeeded: its retry backoff starts over, so one blip later in the day waits seconds, not the day's failure count
-        else if (existing.state === 'done' && (due || utc(String(existing.next_at)) <= now)) db.prepare(`UPDATE job SET state='queued',payload='{}',attempts=0,failures=0,
+        else if (existing.state === 'done' && utc(String(existing.next_at)) <= now) db.prepare(`UPDATE job SET state='queued',payload='{}',attempts=0,failures=0,
           error_class=NULL,last_error=NULL,next_at=?,updated_at=? WHERE id=? AND state='done'`).run(now, now, existing.id!);
       }
     }
@@ -352,6 +349,8 @@ export interface RuntimeOptions {
   buildReceipt: string; runId: string; restartAt?: string; metadata?: Record<string, unknown>;
   handlers?: Partial<Record<Job['kind'], Handler>>; spawnWatcher?: (command: ReturnType<typeof sourceCommand>) => ChildProcess;
   onChildren?: (children: OwnedProcess[]) => void; onHeartbeat?: () => void; onError?: (error: unknown) => void;
+  // Session titles follow stage marks and the OpenCode event stream; the server turns it on when chats are on
+  titles?: boolean;
 }
 
 function directory(path: string): void {
@@ -400,7 +399,7 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
         const controller = new AbortController();
         stage = 'runtime.renewal';
         const renewal = startRenewal(cfg, job, () => controller.abort());
-        const jobOptions = { signal: controller.signal, buildReceipt: options.buildReceipt, ...(options.restartAt ? { restartAt: options.restartAt } : {}) };
+        const jobOptions = { signal: controller.signal, buildReceipt: options.buildReceipt, log, ...(options.restartAt ? { restartAt: options.restartAt } : {}) };
         const done = Promise.resolve().then(() => (options.handlers?.[job.kind] ?? runJob)(cfg, db, job, jobOptions))
           .catch((error: unknown) => { if (!controller.signal.aborted) fail(db, cfg, job, error); log({ source: 'jobs', code: 'job.failed', job: job.id }); })
           .finally(() => {
@@ -412,7 +411,18 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
           });
         inFlight.set(job.id, { controller, done });
       }
-    } catch (error) { fatal(error, stage); } finally { ticking = false; }
+    } catch (error) { fatal(error, stage); } finally { ticking = false; watchSessions(); }
+  }
+  // Marks written by another process (the chat's ticket CLI) are picked up at the next tick. OpenCode is not contacted
+  // before the first approved chat exists, so the event stream starts with it.
+  const retitler = options.titles ? startRetitler(cfg, db, { log }) : undefined;
+  let events: ReturnType<typeof startSessionEvents> | undefined;
+  function watchSessions() {
+    if (!retitler || stopped) return;
+    if (!events && db.prepare('SELECT 1 FROM ticket WHERE session_id IS NOT NULL AND approved_at IS NOT NULL LIMIT 1').get()) {
+      events = startSessionEvents(cfg, db, { wake: retitler.wake, log, due: () => queueMicrotask(tick) });
+    }
+    retitler.wake();
   }
   const interval = setInterval(tick, cfg.jobs.collect_seconds * 1000);
   const beat = () => {
@@ -424,6 +434,7 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
   interval.unref(); heartbeatTimer.unref();
   const close = () => closing ??= (async () => {
     stopped = true; clearInterval(interval); clearInterval(heartbeatTimer);
+    retitler?.close(); await events?.close();
     for (const active of inFlight.values()) active.controller.abort();
     for (const { child } of watchers) if (child.connected) child.send({ type: 'everflow.stop' }, () => {});
     try { await bounded(Promise.allSettled(watchers.map((watcher) => watcher.done)), 5000, 'source.stop-timeout'); }
