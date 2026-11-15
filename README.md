@@ -8,8 +8,8 @@ Tickets and chats are disabled by default. Source collection has its own switche
 
 ## Prerequisites
 
-- Windows x64 and Node.js `26.4.0`, including its npm distribution. The lockfile pins TypeScript `7.0.2`, Next.js `16.4.5`, `koffi` `3.3.7` and `winax` `3.6.10`.
-- MSVC C++ build tools with a Windows SDK. The recorded toolchain uses Visual Studio 2026 Build Tools. Native compilation also requires a node-gyp-compatible Python interpreter. It is build tooling only. The application, watchers, CLI and tests use TypeScript/Node.
+- Windows x64 or Linux x64, and Node.js `26.4.0`, including its npm distribution. The lockfile pins TypeScript `7.0.2`, Next.js `16.4.5`, `koffi` `3.3.7` and `winax` `3.6.10` (optional, Windows only). On Linux the Outlook and Teams desktop sources are unavailable; relay, OE mail, Google and Slack sources run, see [Linux host](#linux-host-oe-vm).
+- On Windows, MSVC C++ build tools with a Windows SDK. The recorded toolchain uses Visual Studio 2026 Build Tools. Native compilation also requires a node-gyp-compatible Python interpreter. It is build tooling only. The application, watchers, CLI and tests use TypeScript/Node.
 - Network access to the lockfile's dependency downloads during the private build. Source-specific access is separate and unnecessary for the disabled synthetic instance below.
 - For live triage, an explicit read-only knowledge-base root, model and ordered provider ids in `[triage]`. Provider routes come from `triage.provider_config_path` or the existing OpenCode JSONC settings. No provider is installed, started or selected automatically.
 - For approved chats, an already running OpenChamber server and its existing settings. An empty `opencode.url` reads `~/.config/openchamber/settings.json` for `desktopLocalPort` and `desktopUiPassword`. An explicit HTTP(S) `opencode.url` uses that server instead, with optional `EVERFLOW_OPENCODE_PASSWORD`. `opencode.directory` identifies the session directory. A nonempty model uses `provider/model` form.
@@ -28,7 +28,7 @@ This is the clean setup and production-build command. No checkout dependency ins
 
 The build supplies only named root inputs, including this README, and approved TypeScript/TSX/CSS source and the historical SQL test fixture. It excludes the default instance configuration, environment files, Git metadata, documentation trees, databases and user state. Source links, junctions and hard links are rejected. Dependency links and output traces must remain inside the stage. Project, Turbopack and tracing roots are pinned to that stage.
 
-Dependencies, npm configuration, profile, cache, node-gyp headers and temporary files are private to the stage. Build output currently lives under `C:/Users/Antonio/AppData/Local/Temp/opencode/everflow/source-builds`, as declared in [build-artifact.ts](src/web/build-artifact.ts). The final JSON line contains `buildReceipt`, an absolute path to a completed `build-receipt.json`. A prepared stage is not a runnable artifact.
+Dependencies, npm configuration, profile, cache, node-gyp headers and temporary files are private to the stage. Build output lives under `C:/Users/Antonio/AppData/Local/Temp/opencode/everflow/source-builds` on Windows and `~/.local/share/everflow/source-builds` of the building account on Linux (home from the user database, not `$HOME`), as declared in [build-artifact.ts](src/web/build-artifact.ts). The native verification step runs on Windows only. The final JSON line contains `buildReceipt`, an absolute path to a completed `build-receipt.json`. A prepared stage is not a runnable artifact.
 
 No checkout `dist` or `.next` is required. Do not invoke Next.js directly in the checkout. Staging is not an OS sandbox or a complete filesystem/network audit.
 
@@ -309,9 +309,33 @@ poll_seconds = 60
 
 The original three sources remain independent. Tesco is absent from the recorded relay inventory. Synthetic fixtures do not establish real-source acceptance; read-only scratch checks and their observed limits are recorded separately.
 
+## Linux host (oe-vm)
+
+The same build runs on Linux. [kernel.ts](src/posix/kernel.ts) gives the daemon, runtime and watchers process identities from `/proc/<pid>/stat` (start time in clock ticks) and `/proc/<pid>/exe`; a child that exited before its identity was read is a zombie and reads as exited. The instance lock is an abstract Unix socket named after the database, released by the kernel with its last owner. Outlook, Teams desktop and DPAPI stay Windows-only and fail with `native.windows-x64-required`.
+
+Three settings serve a host that is not the desktop:
+
+- `[web] public_origin = "https://<host>"`: a reverse proxy in front of the loopback port serves the page under that HTTPS address. Host `<host>` and Origin `https://<host>` are then accepted next to the loopback ones; the action token is unchanged. The proxy owns authentication: the daemon has none.
+- `[opencode] openchamber_port`: with an empty `url`, the chats go to an `openchamber serve` web server on that loopback port, signed in with `OPENCHAMBER_UI_PASSWORD` from the environment, instead of the desktop settings file.
+- `host = "local"` under a relay, OE mail, Gmail/Chat-through-agent or Slack source: the command that would run over SSH runs in a local `/bin/bash`, for an instance on the OE host itself. The account needs the same access the SSH user had (Docker for the agent key, read access to the relay stores).
+
+The oe-vm instance is declared in [deploy/vm](deploy/vm) and deployed by [ci-cd.yml](.github/workflows/ci-cd.yml):
+
+| File | Role |
+|---|---|
+| `config.toml`, `providers.jsonc` | Instance config and triage routes, installed into `~aptul4ever/everflow/instance` on every deploy |
+| `everflow.service`, `run.sh` | systemd user unit of `aptul4ever`; the daemon runs `_run` in the foreground on the build pinned in `build.txt`, restarts on failure |
+| `Caddyfile`, `compose.yml` | `everflow-caddy`: TLS (TLS-ALPN through sslh) and basic auth for `https://everflow.217-76-49-98.sslip.io`, proxy to `127.0.0.1:8789` |
+| `receive.sh` | Forced command of the pipeline key: verifies the archive, builds, installs the files above, pins, restarts, rolls back when the page does not answer |
+| `bootstrap.sh` | One-time root setup: Docker group, Node `26.4.0` in `~/.local/lib/node26`, sslh SNI line, deploy key |
+
+Pull requests run the build and the test gate on Linux ([gate.ts](scripts/gate.ts)). A push to `main` deploys only when the commit belongs to a merged pull request; a direct push fails the `guard` job and stays undeployed. Secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`, `EVERFLOW_USER`, `EVERFLOW_PASSWORD` (page login; only its bcrypt hash reaches the VM). Variable: `DEPLOY_DOMAIN`.
+
+On the VM, as `aptul4ever`: `systemctl --user status everflow`, `journalctl --user -u everflow`, logs beside the database in `~/everflow/instance`. Rollback: put the previous receipt path into `~/everflow/instance/build.txt` and `systemctl --user restart everflow`, or revert the commit on `main` through a pull request.
+
 ## Local request security
 
-The server binds only `127.0.0.1`. Before Next.js routing, Host must be exactly `127.0.0.1:<port>` or `localhost:<port>`. Each server start creates a fresh action token. POST requires `x-everflow-token` and an Origin matching that exact local Host. Reload the page after restart or a rejected token. No CORS access is granted. Source/model text is rendered as escaped React text, never raw HTML. Assets and fonts are local.
+The server binds only `127.0.0.1`. Before Next.js routing, Host must be exactly `127.0.0.1:<port>` or `localhost:<port>`, or the host of `[web] public_origin`. Each server start creates a fresh action token. POST requires `x-everflow-token` and an Origin matching that exact Host (`https://` for the public one). Reload the page after restart or a rejected token. No CORS access is granted. Source/model text is rendered as escaped React text, never raw HTML. Assets and fonts are local.
 
 The Host/Origin/token controls protect local page actions. They do not constrain normal approved-chat tools or grant outward-send/shared-write approval.
 

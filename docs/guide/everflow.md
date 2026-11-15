@@ -117,6 +117,19 @@ Everything runs through `scripts\everflow.ps1 <command>` in the repository.
 - The page listens on `127.0.0.1` only, and its buttons need the token of the current server start. After a restart the page has to be reloaded.
 - The `config.toml` in the repository has every switch off and is not the running configuration.
 
+### On oe-vm
+
+A second instance runs on oe-vm (Contabo, Ubuntu), so clients can move off the laptop one at a time; roar is the first. A client moved there leaves the source lists of the laptop instance, so no message is collected twice.
+
+| Item | Where |
+|---|---|
+| Page | `https://everflow.217-76-49-98.sslip.io`, behind a login (basic auth in Caddy); the daemon itself still listens on `127.0.0.1:8789` |
+| Configuration | `deploy/vm/config.toml` in the repository, installed on every deploy; never edited on the VM |
+| Process | systemd user unit `everflow` of `aptul4ever`, restarted after a crash and at boot |
+| Sources | relay and OE mail read locally (`host = "local"`), no SSH |
+| Triage and chats | the VM's own Meridian (`127.0.0.1:3456`) and OpenChamber web server (`127.0.0.1:3000`) |
+| Deploy | a merged pull request on `main` runs the pipeline: build and tests, then build on the VM, restart, check the page, roll back if it does not answer |
+
 ## Known limits
 
 - Outlook has not been checked live. Classic Outlook was closed during the live checks, so only the not-running error was seen.
