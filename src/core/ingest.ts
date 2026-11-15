@@ -87,6 +87,19 @@ export function sourceStart(db: DatabaseSync, cfg: Pick<Config, 'start'>, source
   });
 }
 
+// For a source whose config lists exactly the accounts it reads, an account taken off that list stops being known, so its
+// checkpoints do not wait for it; added back later, it starts from that moment like any new account.
+export function retireAccounts(db: DatabaseSync, source: string, read: readonly string[]): string[] {
+  parse(sourceSchema, source);
+  const keep = new Set(read.map((account) => account.trim().toLowerCase()));
+  return transaction(db, () => {
+    const gone = db.prepare("SELECT account FROM cursor WHERE source=? AND account<>'*'").all(source)
+      .map((row) => String(row.account)).filter((account) => !keep.has(account.toLowerCase()));
+    for (const account of gone) db.prepare('DELETE FROM cursor WHERE source=? AND account=?').run(source, account);
+    return gone;
+  });
+}
+
 export function ingest(db: DatabaseSync, record: unknown): boolean {
   if (!record || typeof record !== 'object' || Array.isArray(record)) throw new IngestError('record must be an object');
   if ('checkpoint' in record) {
