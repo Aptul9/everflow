@@ -327,7 +327,8 @@ The oe-vm instance is declared in [deploy/vm](deploy/vm) and deployed by [ci-cd.
 | `everflow.service`, `run.sh` | systemd user unit of `aptul4ever`; the daemon runs `_run` in the foreground on the build pinned in `build.txt`, restarts on failure |
 | `Caddyfile`, `compose.yml` | `everflow-caddy`: TLS (TLS-ALPN through sslh) and basic auth for `https://everflow.217-76-49-98.sslip.io`, proxy to `127.0.0.1:8789` |
 | `receive.sh` | Forced command of the pipeline key: verifies the archive, builds, installs the files above, pins, restarts, rolls back when the page does not answer |
-| `bootstrap.sh` | One-time root setup: Docker group, Node `26.4.0` in `~/.local/lib/node26`, sslh SNI line, deploy key |
+| `bootstrap.sh` | One-time root setup: Docker group, Node `26.4.0` in `~/.local/lib/node26`, sslh SNI line, deploy key, relay key |
+| `relay-read.sh` | Forced command of the loopback root key behind the `everflow-relay` SSH alias: read-only `sqlite3` on `/opt/teamsrelay/data` only, since some slot folders are root-only |
 
 Pull requests run the build and the test gate on Linux ([gate.ts](scripts/gate.ts)). A push to `main` deploys only when the commit belongs to a merged pull request; a direct push fails the `guard` job and stays undeployed. Secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`, `EVERFLOW_USER`, `EVERFLOW_PASSWORD` (page login; only its bcrypt hash reaches the VM). Variable: `DEPLOY_DOMAIN`.
 

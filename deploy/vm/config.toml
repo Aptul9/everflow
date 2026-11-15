@@ -48,11 +48,12 @@ enabled = false
 [sources.gmail]
 enabled = false
 
-# Everflow runs on the OE host itself: "local" runs the relay and agent reads in a local bash, no SSH
+# Everflow runs on the OE host itself. Relay: the everflow-relay SSH alias (root on loopback, read-only sqlite3 only,
+# bootstrap.sh), because some slot folders are root-only. OE mail: "local", a local bash with the docker group.
 [sources.teamsrelay]
 enabled = true
 poll_seconds = 30
-host = "local"
+host = "everflow-relay"
 data_dir = "/opt/teamsrelay/data"
 owner = "aptul99@gmail.com"
 accounts = ["antonio.maritato@roarinc.com"]
