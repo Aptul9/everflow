@@ -43,10 +43,13 @@ export function loginKey(db: string): Buffer {
   return key;
 }
 
+// No parameter properties here: scripts/hash-password.ts loads this file through Node's type stripping
 export class Sessions {
+  private readonly key: Buffer;
   private readonly account: string;
-  constructor(private readonly key: Buffer, account: Account) {
+  constructor(key: Buffer, account: Account) {
     if (key.length < 32) throw new Error('login.key');
+    this.key = key;
     this.account = createHash('sha256').update(account.user.toLowerCase() + '\0' + account.hash).digest('hex');
   }
   private sign(expires: number): string { return b64(createHmac('sha256', this.key).update(`v1.${expires}.${this.account}`).digest()); }
@@ -62,7 +65,10 @@ export class Sessions {
 // Failed sign-ins per client: 5 in 15 minutes lock that client for 15 minutes; 30 from everyone lock the form for all.
 export class Limiter {
   private readonly failures = new Map<string, number[]>();
-  constructor(private readonly perClient = 5, private readonly overall = 30, private readonly windowMs = 15 * 60 * 1000) {}
+  private readonly perClient: number;
+  private readonly overall: number;
+  private readonly windowMs: number;
+  constructor(perClient = 5, overall = 30, windowMs = 15 * 60 * 1000) { this.perClient = perClient; this.overall = overall; this.windowMs = windowMs; }
   private recent(key: string, now: number): number[] {
     const kept = (this.failures.get(key) ?? []).filter((at) => now - at < this.windowMs);
     if (kept.length) this.failures.set(key, kept); else this.failures.delete(key);

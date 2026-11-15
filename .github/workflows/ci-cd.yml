@@ -24,6 +24,8 @@ jobs:
       - name: Shell scripts
         run: |
           for f in deploy/vm/*.sh; do sh -n "$f"; done
+          # the deploy job runs this straight through Node's type stripping, outside the build
+          EVERFLOW_PASSWORD=synthetic node scripts/hash-password.ts | grep -Eq '^scrypt\$32768\$8\$1\$'
           docker run --rm -v "$PWD/deploy/vm/Caddyfile:/etc/caddy/Caddyfile:ro" -e EVERFLOW_DOMAIN=everflow.example.invalid \
             caddy:2.11.8-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
           d=$(mktemp -d) && cp deploy/vm/compose.yml deploy/vm/Caddyfile "$d" && printf "EVERFLOW_DOMAIN='x'\n" > "$d/.env"
