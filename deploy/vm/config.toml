@@ -23,9 +23,9 @@ directory = "/home/aptul4ever/everflow-chats"
 model = "meridian-auto/claude-opus-5-5"
 
 [triage]
-# Routes in providers.jsonc beside this file: the VM Meridian on 127.0.0.1:3456, one profile per Claude account
-provider_config_path = "providers.jsonc"
-providers = ["meridian-roar", "meridian-notarify", "meridian-everbright"]
+# Routes from ~/.config/opencode/opencode.jsonc, the laptop's file mirrored by instructions setup/oracle-vm/push-opencode.ps1;
+# same order as the laptop instance
+providers = ["meridian-everbright", "meridian-notarify", "meridian-roar"]
 model = "claude-haiku-5-5"
 
 [start]
@@ -33,7 +33,7 @@ lookback_minutes = 0
 
 [web]
 port = 8789
-# Caddy (deploy/vm/Caddyfile) serves the page here with basic auth; the daemon itself stays on 127.0.0.1
+# Caddy (deploy/vm/Caddyfile) serves the page here over TLS; the daemon asks for its own sign-in under this host and stays on 127.0.0.1
 public_origin = "https://everflow.217-76-49-98.sslip.io"
 
 [sources.outlook]

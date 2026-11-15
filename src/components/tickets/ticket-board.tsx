@@ -1,6 +1,6 @@
 'use client';
 
-import { Bell, BellOff, ChevronDown, ChevronUp, Clock, FilePlus, Keyboard, LoaderCircle, MessagesSquare, CirclePause, RefreshCw, Search, TriangleAlert, WifiOff, X } from 'lucide-react';
+import { Bell, BellOff, ChevronDown, ChevronUp, Clock, FilePlus, Keyboard, LoaderCircle, LogOut, MessagesSquare, CirclePause, RefreshCw, Search, TriangleAlert, WifiOff, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { groups } from '../../lib/web-types.ts';
 import type { Group, OverviewState, SkippedBatch, TicketCard as CardData, TriageBatch } from '../../lib/web-types.ts';
@@ -133,7 +133,7 @@ function MutedChats(props: { state: OverviewState; expired: boolean; pending: Re
   </section>;
 }
 
-export function TicketBoard(props: { initialState: OverviewState; initialEtag: string; token: string; initialNow?: number }) {
+export function TicketBoard(props: { initialState: OverviewState; initialEtag: string; token: string; initialNow?: number; signOut?: boolean }) {
   const { state, now, unreachable, expired, pending, errors, notice, post } = useOverview(props.initialState, props.initialEtag, props.token, props.initialNow);
   useAttention(state.groups.needs_you.length + state.groups.failed.length);
   const [query, setQuery] = useState('');
@@ -235,6 +235,10 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
             placeholder="Title, client, reference, session" className="h-10 bg-card pr-9 pl-8 sm:h-9" />
           {!query && <Kbd aria-hidden="true" className="pointer-events-none absolute top-1/2 right-2 hidden -translate-y-1/2 sm:inline-flex">/</Kbd>}
         </div>
+        {props.signOut && <Button variant="ghost" size="sm" className="text-muted-foreground"
+          onClick={() => { void fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).finally(() => window.location.assign('/login')); }}>
+          <LogOut aria-hidden="true" />Sign out
+        </Button>}
       </div>
     </header>
 

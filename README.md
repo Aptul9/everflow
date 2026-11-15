@@ -315,7 +315,7 @@ The same build runs on Linux. [kernel.ts](src/posix/kernel.ts) gives the daemon,
 
 Three settings serve a host that is not the desktop:
 
-- `[web] public_origin = "https://<host>"`: a reverse proxy in front of the loopback port serves the page under that HTTPS address. Host `<host>` and Origin `https://<host>` are then accepted next to the loopback ones; the action token is unchanged. The proxy owns authentication: the daemon has none.
+- `[web] public_origin = "https://<host>"`: a reverse proxy in front of the loopback port serves the page under that HTTPS address. Host `<host>` and Origin `https://<host>` are then accepted next to the loopback ones; the action token is unchanged. Requests under that host need a signed-in session; see [Sign-in](#sign-in). Loopback requests stay as before.
 - `[opencode] openchamber_port`: with an empty `url`, the chats go to an `openchamber serve` web server on that loopback port, signed in with `OPENCHAMBER_UI_PASSWORD` from the environment, instead of the desktop settings file.
 - `host = "local"` under a relay, OE mail, Gmail/Chat-through-agent or Slack source: the command that would run over SSH runs in a local `/bin/bash`, for an instance on the OE host itself. The account needs the same access the SSH user had (Docker for the agent key, read access to the relay stores).
 
@@ -323,16 +323,20 @@ The oe-vm instance is declared in [deploy/vm](deploy/vm) and deployed by [ci-cd.
 
 | File | Role |
 |---|---|
-| `config.toml`, `providers.jsonc` | Instance config and triage routes, installed into `~aptul4ever/everflow/instance` on every deploy |
+| `config.toml` | Instance config, installed into `~aptul4ever/everflow/instance` on every deploy; triage routes come from the VM `opencode.jsonc`, the laptop's file mirrored by the instructions repo `setup/oracle-vm/push-opencode.ps1` |
 | `everflow.service`, `run.sh` | systemd user unit of `aptul4ever`; the daemon runs `_run` in the foreground on the build pinned in `build.txt`, restarts on failure |
-| `Caddyfile`, `compose.yml` | `everflow-caddy`: TLS (TLS-ALPN through sslh) and basic auth for `https://everflow.217-76-49-98.sslip.io`, proxy to `127.0.0.1:8789` |
-| `receive.sh` | Forced command of the pipeline key: verifies the archive, builds, installs the files above, pins, restarts, rolls back when the page does not answer |
+| `Caddyfile`, `compose.yml` | `everflow-caddy`: TLS (TLS-ALPN through sslh) for `https://everflow.217-76-49-98.sslip.io`, proxy to `127.0.0.1:8789` |
+| `receive.sh` | Forced command of the pipeline key: verifies the archive, builds, installs the files above and the sign-in account (`login.env`), pins, restarts, rolls back when the page does not answer |
 | `bootstrap.sh` | One-time root setup: Docker group, Node `26.4.0` in `~/.local/lib/node26`, sslh SNI line, deploy key, relay key |
 | `relay-read.sh` | Forced command of the loopback root key behind the `everflow-relay` SSH alias: read-only `sqlite3` on `/opt/teamsrelay/data` only, since some slot folders are root-only |
 
-Pull requests run the build and the test gate on Linux ([gate.ts](scripts/gate.ts)). A push to `main` deploys only when the commit belongs to a merged pull request; a direct push fails the `guard` job and stays undeployed. The `main` ruleset in [main-ruleset.json](deploy/github/main-ruleset.json) (pull request required, `Build and test` green and up to date, no force push, no deletion, no bypass) needs a paid GitHub plan on this private repository, where the API answers 403 on the free plan; apply it with `gh api repos/Aptul9/everflow/rulesets --input deploy/github/main-ruleset.json`. Merged branches are deleted automatically. Secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`, `EVERFLOW_USER`, `EVERFLOW_PASSWORD` (page login; only its bcrypt hash reaches the VM). Variable: `DEPLOY_DOMAIN`.
+Pull requests run the build and the test gate on Linux ([gate.ts](scripts/gate.ts)). A push to `main` deploys only when the commit belongs to a merged pull request; a direct push fails the `guard` job and stays undeployed. The `main` ruleset in [main-ruleset.json](deploy/github/main-ruleset.json) (pull request required, `Build and test` green and up to date, no force push, no deletion, no bypass) needs a paid GitHub plan on this private repository, where the API answers 403 on the free plan; apply it with `gh api repos/Aptul9/everflow/rulesets --input deploy/github/main-ruleset.json`. Merged branches are deleted automatically. Secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`, `EVERFLOW_USER`, `EVERFLOW_PASSWORD` (page sign-in; only its scrypt hash reaches the VM, as `EVERFLOW_LOGIN_HASH` in `~/everflow/instance/login.env`). Variable: `DEPLOY_DOMAIN`.
 
 On the VM, as `aptul4ever`: `systemctl --user status everflow`, `journalctl --user -u everflow`, logs beside the database in `~/everflow/instance`. Rollback: put the previous receipt path into `~/everflow/instance/build.txt` and `systemctl --user restart everflow`, or revert the commit on `main` through a pull request.
+
+## Sign-in
+
+With `[web] public_origin` set, the daemon refuses to start unless `EVERFLOW_LOGIN_USER` and `EVERFLOW_LOGIN_HASH` are in its environment; the hash comes from `EVERFLOW_PASSWORD=... node scripts/hash-password.ts` (scrypt, N 32768). Under the public host every request except `GET /login`, `/_next/static/*` and the icons needs the `everflow_session` cookie: a page request goes to `/login?next=<path>`, an API request gets 401 with `x-everflow-login: required`, and the board then opens the sign-in screen by itself. `POST /api/login` (JSON `email`, `password`, same Origin) answers 204 with the cookie: HttpOnly, Secure, SameSite=Lax, 30 days, HMAC-SHA256 over its expiry and the account, key in `<db>.login-key` (0600), so sessions survive restarts and a changed account or password ends them all. The email is compared case-insensitively and the hash is checked on every attempt. Five failed attempts from one client in 15 minutes lock that client for 15 minutes (429 with `Retry-After`), thirty from all clients lock the form; the client is the last `X-Forwarded-For` entry, which Caddy sets. `POST /api/logout` clears the cookie; the board shows Sign out under the public host only. Loopback requests (the VM itself, the deploy health check) need no session.
 
 ## Local request security
 

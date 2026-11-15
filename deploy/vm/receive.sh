@@ -1,6 +1,7 @@
 #!/bin/sh
 # Forced command of the pipeline deploy key in ~aptul4ever/.ssh/authorized_keys (restrict,command=".../everflow-receive").
-# stdin: `git archive` tar.gz of the commit. SSH_ORIGINAL_COMMAND: "<commit sha> <archive sha256> <user, base64> <bcrypt hash, base64>".
+# stdin: `git archive` tar.gz of the commit. SSH_ORIGINAL_COMMAND: "<commit sha> <archive sha256> <user, base64> <scrypt hash, base64>".
+# The page sign-in (user and hash) goes to ~/everflow/instance/login.env for everflow.service; the password never reaches the VM.
 # Builds the commit on the VM, installs the instance files from deploy/vm, pins the new build and restarts the daemon; when the
 # page does not answer after the restart the previous build is pinned again and the deploy fails.
 set -euf
@@ -21,7 +22,7 @@ printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$' || { echo "invalid commit" >&2
 printf '%s' "$sum" | grep -Eq '^[0-9a-f]{64}$' || { echo "invalid sha256" >&2; exit 2; }
 user=$(printf '%s' "$user_b64" | base64 -d) hash=$(printf '%s' "$hash_b64" | base64 -d)
 printf '%s' "$user" | grep -Eq '^[A-Za-z0-9._@+-]{1,128}$' || { echo "invalid user" >&2; exit 2; }
-printf '%s' "$hash" | grep -Eq '^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$' || { echo "invalid bcrypt hash" >&2; exit 2; }
+printf '%s' "$hash" | grep -Eq '^scrypt\$[0-9]+\$[0-9]+\$[0-9]+\$[A-Za-z0-9_-]{16,}\$[A-Za-z0-9_-]{43}$' || { echo "invalid scrypt hash" >&2; exit 2; }
 # the client-supplied words are parsed; globbing is needed again for the cleanup below
 set +f
 command -v node >/dev/null && [ "$(node -v)" = "v26.4.0" ] || { echo "Node v26.4.0 missing in ~/.local/lib/node26 (deploy/vm/bootstrap.sh)" >&2; exit 1; }
@@ -46,7 +47,7 @@ echo "built $receipt"
 
 vm=$release/deploy/vm
 install -m 644 "$vm/config.toml" "$instance/config.toml"
-install -m 644 "$vm/providers.jsonc" "$instance/providers.jsonc"
+rm -f "$instance/providers.jsonc"
 mkdir -p "$HOME/everflow-chats/roar"
 install -m 755 "$vm/run.sh" "$HOME/.local/bin/everflow-run"
 install -m 644 "$vm/everflow.service" "$HOME/.config/systemd/user/everflow.service"
@@ -57,8 +58,9 @@ domain=$(sed -n 's|^public_origin = "https://\([^"]*\)"$|\1|p' "$instance/config
 [ -n "$domain" ] || { echo "config.toml has no [web] public_origin" >&2; exit 1; }
 install -m 644 "$vm/Caddyfile" "$root/caddy/Caddyfile"
 install -m 644 "$vm/compose.yml" "$root/caddy/compose.yml"
-# single quotes: compose takes the bcrypt '$' literally
-(umask 077; printf "EVERFLOW_DOMAIN='%s'\nEVERFLOW_USER='%s'\nEVERFLOW_HASH='%s'\n" "$domain" "$user" "$hash" > "$root/caddy/.env")
+(umask 077; printf "EVERFLOW_DOMAIN='%s'\n" "$domain" > "$root/caddy/.env")
+# single quotes: the '$' of the hash stays literal
+(umask 077; printf "EVERFLOW_LOGIN_USER='%s'\nEVERFLOW_LOGIN_HASH='%s'\n" "$user" "$hash" > "$instance/login.env")
 docker compose -f "$root/caddy/compose.yml" up -d --remove-orphans
 
 previous=$(cat "$instance/build.txt" 2>/dev/null || true)
