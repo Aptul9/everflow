@@ -1,0 +1,120 @@
+name: CI/CD
+
+# Build and test gate on every pull request; on main, a commit that came from a merged pull request is deployed to the
+# oe-vm instance (deploy/vm). A push to main that bypassed a pull request fails the guard and is never deployed.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26.4.0
+      - name: Shell scripts
+        run: |
+          for f in deploy/vm/*.sh; do sh -n "$f"; done
+          hash=$(docker run --rm caddy:2.11.8-alpine caddy hash-password --plaintext synthetic)
+          docker run --rm -v "$PWD/deploy/vm/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            -e EVERFLOW_DOMAIN=everflow.example.invalid -e EVERFLOW_USER=user@example.invalid -e "EVERFLOW_HASH=$hash" \
+            caddy:2.11.8-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          d=$(mktemp -d) && cp deploy/vm/compose.yml deploy/vm/Caddyfile "$d" && printf "EVERFLOW_DOMAIN='x'\n" > "$d/.env"
+          docker compose -f "$d/compose.yml" config -q
+      - name: Build
+        id: build
+        run: |
+          node scripts/build.ts | tee build.log
+          echo "receipt=$(sed -n 's/^{"buildReceipt":"\(.*\)"}$/\1/p' build.log | tail -n 1)" >> "$GITHUB_OUTPUT"
+      - name: Typecheck and tests
+        run: node scripts/gate.ts "${{ steps.build.outputs.receipt }}"
+      - name: Build logs
+        if: failure()
+        run: tail -n 60 "$HOME"/.local/share/everflow/source-builds/build-*/build-logs/*.log || true
+
+  guard:
+    name: Came from a pull request
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Merged pull request into main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          n=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '[.[] | select(.merged_at != null and .base.ref == "main")] | length')
+          if [ "$n" -lt 1 ]; then
+            echo "::error::${{ github.sha }} reached main without a merged pull request: not deployed"
+            exit 1
+          fi
+
+  deploy:
+    name: Deploy to oe-vm
+    needs: [check, guard]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://${{ vars.DEPLOY_DOMAIN }}
+    # one deploy at a time, never cancelled halfway
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    env:
+      TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+      DOMAIN: ${{ vars.DEPLOY_DOMAIN }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: SSH access
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          test -n "$DOMAIN" || { echo "::error::variable DEPLOY_DOMAIN missing"; exit 1; }
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          # pinned host key: no StrictHostKeyChecking=no
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Page login hash
+        env:
+          PAGE_PASSWORD: ${{ secrets.EVERFLOW_PASSWORD }}
+        run: |
+          # only the bcrypt hash leaves the runner; the password stays in the secret
+          hash=$(docker run --rm -e PAGE_PASSWORD caddy:2.11.8-alpine sh -c 'caddy hash-password --plaintext "$PAGE_PASSWORD"')
+          echo "::add-mask::$hash"
+          echo "PAGE_HASH=$hash" >> "$GITHUB_ENV"
+      - name: Build and restart on the VM
+        env:
+          PAGE_USER: ${{ secrets.EVERFLOW_USER }}
+        run: |
+          git archive --format=tar.gz -o release.tar.gz HEAD
+          sum=$(sha256sum release.tar.gz | cut -d' ' -f1)
+          ssh -o BatchMode=yes "$TARGET" "${{ github.sha }} $sum $(printf '%s' "$PAGE_USER" | base64 -w0) $(printf '%s' "$PAGE_HASH" | base64 -w0)" < release.tar.gz
+      - name: Published page asks for the login and answers with it
+        env:
+          PAGE_USER: ${{ secrets.EVERFLOW_USER }}
+          PAGE_PASSWORD: ${{ secrets.EVERFLOW_PASSWORD }}
+        run: |
+          code() { curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$@"; }
+          # a new name waits for its certificate the first time
+          for _ in $(seq 1 30); do
+            if [ "$(code "https://$DOMAIN/api/state")" = 401 ]; then break; fi
+            sleep 5
+          done
+          test "$(code "https://$DOMAIN/api/state")" = 401
+          test "$(code -u "x$PAGE_USER:$PAGE_PASSWORD" "https://$DOMAIN/api/state")" = 401
+          test "$(code -u "$PAGE_USER:$PAGE_PASSWORD" "https://$DOMAIN/api/state")" = 200
+          curl -fsS --max-time 15 -u "$PAGE_USER:$PAGE_PASSWORD" "https://$DOMAIN/" | grep -q '<title>Everflow</title>'
+          echo "https://$DOMAIN/ ok"

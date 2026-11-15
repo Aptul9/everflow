@@ -1,0 +1,19 @@
+# TLS and login in front of the oe-vm Everflow page, in ~/everflow/caddy of aptul4ever. Host network so it reaches the
+# daemon on 127.0.0.1:8789; it binds only loopback (Caddyfile default_bind). .env: EVERFLOW_DOMAIN, EVERFLOW_USER, EVERFLOW_HASH.
+name: everflow
+
+services:
+  caddy:
+    image: caddy:2.11.8-alpine
+    container_name: everflow-caddy
+    network_mode: host
+    env_file: .env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - data:/data
+      - config:/config
+    restart: unless-stopped
+
+volumes:
+  data:
+  config:

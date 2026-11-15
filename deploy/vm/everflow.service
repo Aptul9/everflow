@@ -1,0 +1,19 @@
+[Unit]
+Description=Everflow daemon, oe-vm instance (page on 127.0.0.1:8789)
+Wants=openchamber.service meridian.service
+After=openchamber.service meridian.service
+
+[Service]
+Environment=PATH=%h/.local/lib/node26/bin:/usr/local/bin:/usr/bin:/bin
+# OPENCHAMBER_UI_PASSWORD, for the chats on the local OpenChamber ([opencode] openchamber_port)
+EnvironmentFile=%h/.config/openchamber/service.env
+WorkingDirectory=%h/everflow/instance
+ExecStart=%h/.local/bin/everflow-run
+# SIGTERM is the daemon's graceful stop; watchers and SSH children are its own and it stops them
+KillMode=mixed
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
