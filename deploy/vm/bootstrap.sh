@@ -56,5 +56,5 @@ install -m 755 "$here/relay-read.sh" /usr/local/sbin/everflow-relay-read
 relay=$(cut -d' ' -f2 "$home/.ssh/everflow_relay.pub")
 grep -qF "$relay" /root/.ssh/authorized_keys || printf 'restrict,from="127.0.0.1,::1",command="/usr/local/sbin/everflow-relay-read" %s\n' "$(cat "$home/.ssh/everflow_relay.pub")" >> /root/.ssh/authorized_keys
 grep -q '^Host everflow-relay$' "$home/.ssh/config" 2>/dev/null || printf '\n# Everflow relay source (deploy/vm/bootstrap.sh)\nHost everflow-relay\n    HostName 127.0.0.1\n    User root\n    IdentityFile ~/.ssh/everflow_relay\n    IdentitiesOnly yes\n' | sudo -u "$user" tee -a "$home/.ssh/config" >/dev/null
-sudo -u "$user" ssh-keygen -F 127.0.0.1 -f "$home/.ssh/known_hosts" >/dev/null 2>&1 || ssh-keyscan -q -t ed25519 127.0.0.1 2>/dev/null | sudo -u "$user" tee -a "$home/.ssh/known_hosts" >/dev/null
+sudo -u "$user" ssh-keygen -F 127.0.0.1 -f "$home/.ssh/known_hosts" 2>/dev/null | grep -q . || ssh-keyscan -t ed25519 127.0.0.1 2>/dev/null | sudo -u "$user" tee -a "$home/.ssh/known_hosts" >/dev/null
 echo "bootstrap ok: docker group, node $node, sslh $domain -> 127.0.0.1:$port, deploy key, relay key"
