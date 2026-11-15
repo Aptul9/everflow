@@ -48,7 +48,8 @@ echo "built $receipt"
 vm=$release/deploy/vm
 install -m 644 "$vm/config.toml" "$instance/config.toml"
 rm -f "$instance/providers.jsonc"
-mkdir -p "$HOME/everflow-chats/roar"
+# the chat folders the config names ([opencode] and each client's directory)
+sed -n 's|^directory = "\(/[^"]*\)"$|\1|p' "$instance/config.toml" | while IFS= read -r d; do mkdir -p "$d"; done
 install -m 755 "$vm/run.sh" "$HOME/.local/bin/everflow-run"
 install -m 644 "$vm/everflow.service" "$HOME/.config/systemd/user/everflow.service"
 systemctl --user daemon-reload
