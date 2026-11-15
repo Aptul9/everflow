@@ -24,9 +24,7 @@ jobs:
       - name: Shell scripts
         run: |
           for f in deploy/vm/*.sh; do sh -n "$f"; done
-          hash=$(docker run --rm caddy:2.11.8-alpine caddy hash-password --plaintext synthetic)
-          docker run --rm -v "$PWD/deploy/vm/Caddyfile:/etc/caddy/Caddyfile:ro" \
-            -e EVERFLOW_DOMAIN=everflow.example.invalid -e EVERFLOW_USER=user@example.invalid -e "EVERFLOW_HASH=$hash" \
+          docker run --rm -v "$PWD/deploy/vm/Caddyfile:/etc/caddy/Caddyfile:ro" -e EVERFLOW_DOMAIN=everflow.example.invalid \
             caddy:2.11.8-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
           d=$(mktemp -d) && cp deploy/vm/compose.yml deploy/vm/Caddyfile "$d" && printf "EVERFLOW_DOMAIN='x'\n" > "$d/.env"
           docker compose -f "$d/compose.yml" config -q
@@ -87,12 +85,15 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
           # pinned host key: no StrictHostKeyChecking=no
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-      - name: Page login hash
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26.4.0
+      - name: Page sign-in hash
         env:
-          PAGE_PASSWORD: ${{ secrets.EVERFLOW_PASSWORD }}
+          EVERFLOW_PASSWORD: ${{ secrets.EVERFLOW_PASSWORD }}
         run: |
-          # only the bcrypt hash leaves the runner; the password stays in the secret
-          hash=$(docker run --rm -e PAGE_PASSWORD caddy:2.11.8-alpine sh -c 'caddy hash-password --plaintext "$PAGE_PASSWORD"')
+          # only the scrypt hash leaves the runner; the password stays in the secret
+          hash=$(node scripts/hash-password.ts)
           echo "::add-mask::$hash"
           echo "PAGE_HASH=$hash" >> "$GITHUB_ENV"
       - name: Build and restart on the VM
@@ -102,19 +103,26 @@ jobs:
           git archive --format=tar.gz -o release.tar.gz HEAD
           sum=$(sha256sum release.tar.gz | cut -d' ' -f1)
           ssh -o BatchMode=yes "$TARGET" "${{ github.sha }} $sum $(printf '%s' "$PAGE_USER" | base64 -w0) $(printf '%s' "$PAGE_HASH" | base64 -w0)" < release.tar.gz
-      - name: Published page asks for the login and answers with it
+      - name: Published page asks for the sign-in and opens with it
         env:
           PAGE_USER: ${{ secrets.EVERFLOW_USER }}
           PAGE_PASSWORD: ${{ secrets.EVERFLOW_PASSWORD }}
         run: |
+          base="https://$DOMAIN"
           code() { curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$@"; }
+          login() { curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H "origin: $base" -H 'content-type: application/json' "$@" "$base/api/login"; }
           # a new name waits for its certificate the first time
           for _ in $(seq 1 30); do
-            if [ "$(code "https://$DOMAIN/api/state")" = 401 ]; then break; fi
+            if [ "$(code "$base/api/state")" = 401 ]; then break; fi
             sleep 5
           done
-          test "$(code "https://$DOMAIN/api/state")" = 401
-          test "$(code -u "x$PAGE_USER:$PAGE_PASSWORD" "https://$DOMAIN/api/state")" = 401
-          test "$(code -u "$PAGE_USER:$PAGE_PASSWORD" "https://$DOMAIN/api/state")" = 200
-          curl -fsS --max-time 15 -u "$PAGE_USER:$PAGE_PASSWORD" "https://$DOMAIN/" | grep -q '<title>Everflow</title>'
-          echo "https://$DOMAIN/ ok"
+          test "$(code "$base/api/state")" = 401
+          test "$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$base/")" = "$base/login?next=%2F"
+          curl -fsS --max-time 15 "$base/login" | grep -q '<title>Sign in · Everflow</title>'
+          test "$(login -d "$(jq -cn --arg e "$PAGE_USER" --arg p "x$PAGE_PASSWORD" '{email:$e,password:$p}')")" = 401
+          jar=$(mktemp)
+          test "$(login -c "$jar" -d "$(jq -cn --arg e "$PAGE_USER" --arg p "$PAGE_PASSWORD" '{email:$e,password:$p}')")" = 204
+          test "$(code -b "$jar" "$base/api/state")" = 200
+          curl -fsS --max-time 15 -b "$jar" "$base/" | grep -q '<title>Everflow</title>'
+          curl -s -o /dev/null --max-time 15 -b "$jar" -H "origin: $base" -X POST "$base/api/logout"
+          echo "$base/ ok"

@@ -1,7 +1,7 @@
 # Public page of the oe-vm Everflow instance. Host network, loopback only: sslh hands this name over from 443 (SNI) to
-# https_port, Caddy asks for the login and proxies to the daemon on 127.0.0.1:8789, which accepts this Host and Origin
-# because config.toml names it in [web] public_origin. Port 80 belongs to teams-caddy, so the certificate comes through
-# the TLS-ALPN challenge over sslh; the HTTP-01 attempt fails first and is expected.
+# https_port and Caddy proxies to the daemon on 127.0.0.1:8789, which accepts this Host and Origin because config.toml
+# names it in [web] public_origin and asks for its own sign-in there. Port 80 belongs to teams-caddy, so the certificate
+# comes through the TLS-ALPN challenge over sslh; the HTTP-01 attempt fails first and is expected.
 {
 	default_bind 127.0.0.1
 	http_port 5082
@@ -12,14 +12,11 @@
 }
 
 {$EVERFLOW_DOMAIN} {
-	# user and bcrypt hash from the pipeline secrets, written to .env by receive.sh; the password itself never reaches the VM
-	basic_auth {
-		{$EVERFLOW_USER} {$EVERFLOW_HASH}
-	}
 	header {
 		Strict-Transport-Security "max-age=31536000"
 		X-Frame-Options DENY
 		-Server
 	}
+	# X-Forwarded-For carries the client address the sign-in lockout counts by
 	reverse_proxy 127.0.0.1:8789
 }

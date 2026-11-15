@@ -2,12 +2,15 @@ import { existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../core/config.ts';
+import type { Limiter, Sessions } from './login.ts';
 
 export interface WebInstance {
   config: Config;
   configPath: string;
   port: number;
   token: string;
+  // Present when [web] public_origin is set: requests under that host need a signed-in session
+  login?: { sessions: Sessions; limiter: Limiter; check: (user: string, password: string) => boolean };
 }
 
 const key = Symbol.for('everflow.web.instance');

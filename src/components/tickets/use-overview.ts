@@ -5,6 +5,13 @@ import type { OverviewState } from '../../lib/web-types.ts';
 
 export const STATE_DEADLINE_MS = 8_000;
 
+// The public page's session ended (expiry, sign-out elsewhere, new password): back to the sign-in screen, then here again
+function signedOut(response: Response): boolean {
+  if (response.status !== 401 || response.headers.get('x-everflow-login') !== 'required') return false;
+  window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+  return true;
+}
+
 export function useOverview(initialState: OverviewState, initialEtag: string, token: string, initialNow = Date.now()) {
   const [state, setState] = useState(initialState);
   const [now, setNow] = useState(initialNow);
@@ -46,6 +53,7 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
       })();
       const { response, next } = await Promise.race([operation, aborted]);
       if (!mounted.current || controller.signal.aborted) return;
+      if (signedOut(response)) return;
       if (response.status === 403) { stale.current = true; if (mounted.current) setExpired(true); throw new Error('Local Host rejected'); }
       if (response.status !== 304) {
         if (!response.ok) throw new Error(`State request failed (${response.status})`);
@@ -85,6 +93,7 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
       const send = () => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-everflow-token': action.current },
         body: JSON.stringify(input), signal: controller.signal, credentials: 'same-origin', mode: 'same-origin', redirect: 'error' });
       let response = await send();
+      if (signedOut(response)) throw new Error('Session ended, sign in again');
       // Every server start issues a new token, so a page left open across a restart holds the old one. The guard rejects
       // before any change, so the action is sent once more with the token of the page as served now.
       if (response.status === 403) {

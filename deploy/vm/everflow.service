@@ -7,6 +7,8 @@ After=openchamber.service meridian.service
 Environment=PATH=%h/.local/lib/node26/bin:/usr/local/bin:/usr/bin:/bin
 # OPENCHAMBER_UI_PASSWORD, for the chats on the local OpenChamber ([opencode] openchamber_port)
 EnvironmentFile=%h/.config/openchamber/service.env
+# EVERFLOW_LOGIN_USER and EVERFLOW_LOGIN_HASH (scrypt) of the page sign-in, written by receive.sh from the pipeline secrets
+EnvironmentFile=%h/everflow/instance/login.env
 WorkingDirectory=%h/everflow/instance
 ExecStart=%h/.local/bin/everflow-run
 # SIGTERM is the daemon's graceful stop; watchers and SSH children are its own and it stops them

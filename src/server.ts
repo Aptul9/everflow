@@ -15,6 +15,8 @@ import type { DaemonReceipt } from './core/daemon.ts';
 import { migrate, openDb, prepareStart } from './core/db.ts';
 import { startRuntime, validateRuntimeConfig } from './core/runtime.ts';
 import { createKernel } from './windows/kernel.ts';
+import { Limiter, loginAccount, loginKey, Sessions, verifyPassword } from './web/login.ts';
+import { signIn } from './web/login-http.ts';
 
 export async function startServer(options: { configPath: string; buildReceipt: string; port?: number }) {
   const artifact = readBuildReceipt(options?.buildReceipt);
@@ -24,6 +26,13 @@ export async function startServer(options: { configPath: string; buildReceipt: s
   process.env.EVERFLOW_BUILD_ROOT = artifact.root;
   const next = createRequire(import.meta.url)('next') as (options: NextServerOptions) => Pick<NextServer, 'prepare' | 'close' | 'getRequestHandler'>;
   const config = loadConfig(options.configPath);
+  // Fails closed: a public origin without an account refuses to start rather than serve the page openly
+  const login = config.web.public_origin ? (() => {
+    const account = loginAccount();
+    return { sessions: new Sessions(loginKey(config.db.path), account), limiter: new Limiter(),
+      // the hash is always checked, so a wrong user costs the same time as a wrong password
+      check: (user: string, password: string) => verifyPassword(password, account.hash) && user.toLowerCase() === account.user.toLowerCase() };
+  })() : undefined;
   const requestedPort = options.port ?? config.web.port;
   if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) throw new Error('Invalid web port');
   let handle: RequestHandler | undefined;
@@ -37,6 +46,9 @@ export async function startServer(options: { configPath: string; buildReceipt: s
       response.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' }).end('Local Host required');
       return;
     }
+    // The public host needs a session; loopback stays as before (the daemon only listens there)
+    if (current.login && `https://${request.headers.host?.toLowerCase()}` === current.config.web.public_origin
+      && signIn(request, response, current, current.login)) return;
     if (request.method === 'POST') {
       try { guardPost({ get: (name) => typeof request.headers[name] === 'string' ? request.headers[name] : null }, current); }
       catch (error) {
@@ -72,7 +84,7 @@ export async function startServer(options: { configPath: string; buildReceipt: s
     try { await app?.close(); } finally { if (current) release(current); }
   })();
   try {
-    current = { config, configPath: config._config_path, port, token: randomBytes(32).toString('hex') };
+    current = { config, configPath: config._config_path, port, token: randomBytes(32).toString('hex'), ...(login ? { login } : {}) };
     initialize(current);
     app = next({ dev: false, dir: artifact.root, hostname: '127.0.0.1', port, httpServer: server });
     await app.prepare();
