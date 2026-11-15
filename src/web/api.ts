@@ -23,15 +23,20 @@ const muteFor = z.strictObject({ minutes: minutes.optional(), hours: hours.optio
 const inMinutes = (value: number | null | undefined, legacyHours: number | null | undefined) =>
   value !== undefined ? value : legacyHours === undefined ? undefined : legacyHours === null ? null : legacyHours * 60;
 
-export function allowedHost(host: string | undefined | null, port: number): boolean {
-  return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
+// publicOrigin: [web] public_origin, the HTTPS address of the authenticating reverse proxy in front of the loopback port
+export function allowedHost(host: string | undefined | null, port: number, publicOrigin?: string): boolean {
+  return host === `127.0.0.1:${port}` || host === `localhost:${port}` || !!publicOrigin && `https://${host?.toLowerCase()}` === publicOrigin;
+}
+
+function expectedOrigin(host: string, port: number): string {
+  return host === `127.0.0.1:${port}` || host === `localhost:${port}` ? `http://${host}` : `https://${host.toLowerCase()}`;
 }
 
 export function guardPost(headers: Pick<Headers, 'get'>, current: WebInstance): void {
   const host = headers.get('host');
   const supplied = Buffer.from(headers.get('x-everflow-token') ?? '', 'utf8');
   const expected = Buffer.from(current.token, 'utf8');
-  if (!allowedHost(host, current.port) || headers.get('origin') !== `http://${host}`
+  if (!allowedHost(host, current.port, current.config.web.public_origin) || headers.get('origin')?.toLowerCase() !== expectedOrigin(host!, current.port)
     || supplied.byteLength !== expected.byteLength || !timingSafeEqual(supplied, expected)) {
     throw new HttpError(403, 'action.forbidden', 'Action token or Origin rejected. Reload this page before retrying.');
   }
@@ -88,7 +93,7 @@ function json(request: Request, value: unknown): Response {
 export function stateGet(request: Request): Response {
   try {
     const current = instance();
-    if (!allowedHost(request.headers.get('host'), current.port)) throw new HttpError(403, 'host.forbidden', 'Local Host required');
+    if (!allowedHost(request.headers.get('host'), current.port, current.config.web.public_origin)) throw new HttpError(403, 'host.forbidden', 'Local Host required');
     return json(request, withDatabase(false, (db) => readState(db, current.config)));
   } catch (error) { return errorResponse(error); }
 }
@@ -96,7 +101,7 @@ export function stateGet(request: Request): Response {
 export function ticketGet(request: Request, id: string): Response {
   try {
     const current = instance();
-    if (!allowedHost(request.headers.get('host'), current.port)) throw new HttpError(403, 'host.forbidden', 'Local Host required');
+    if (!allowedHost(request.headers.get('host'), current.port, current.config.web.public_origin)) throw new HttpError(403, 'host.forbidden', 'Local Host required');
     return json(request, withDatabase(false, (db) => ticketDetail(db, validId(id))));
   } catch (error) { return errorResponse(error); }
 }

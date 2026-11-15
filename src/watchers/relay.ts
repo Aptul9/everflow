@@ -38,7 +38,11 @@ export async function sshRun(source: Source, prefix: string, options: { host: st
   const timeout = options.timeoutMs ?? 60000, maxBytes = options.maxBytes ?? 8 * 1024 * 1024;
   if (!Number.isSafeInteger(timeout) || timeout < 1 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 64 * 1024 * 1024) throw new SourceError(source, `${prefix}.invalid-limit`);
   if (signal?.aborted) throw new SourceError(source, `${prefix}.aborted`);
-  const child = spawnProcess('ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', options.host, command], { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  // host "local": Everflow runs on the OE host itself, so the same command runs in a local bash instead of over SSH
+  const local = options.host === 'local';
+  if (local && process.platform === 'win32') throw new SourceError(source, `${prefix}.invalid-host`);
+  const child = local ? spawnProcess('/bin/bash', ['-c', command], { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
+    : spawnProcess('ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', options.host, command], { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const chunks: Buffer[] = [];
   let size = 0, failure: unknown, closed = false, escalation: ReturnType<typeof setTimeout> | undefined;
   const stop = (error: unknown) => {

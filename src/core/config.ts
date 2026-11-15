@@ -42,6 +42,8 @@ const configSchema = z.looseObject({
   opencode: z.looseObject({
     url: z.string().default(''), directory: z.string().min(1).default('.'), model: z.string().default(''),
     timeout_seconds: positive.max(120).optional(),
+    // Empty url and a port: an OpenChamber web server (`openchamber serve`) on that loopback port, password from OPENCHAMBER_UI_PASSWORD
+    openchamber_port: positive.max(65535).optional(),
   }).prefault({}),
   triage: z.looseObject({
     providers: z.array(z.string().min(1)).default([]), model: z.string().default(''),
@@ -54,7 +56,11 @@ const configSchema = z.looseObject({
     gchat: positive.min(120).default(120), gmail: positive.min(300).default(300), oemail: positive.min(120).default(180),
     slack: positive.min(120).default(120),
   }).catchall(nonnegative).prefault({}),
-  web: z.object({ port: positive.max(65535).default(8789) }).prefault({}),
+  web: z.object({
+    port: positive.max(65535).default(8789),
+    // The HTTPS address a reverse proxy in front of the loopback port serves the page under (scheme and host, no path)
+    public_origin: z.string().regex(/^https:\/\/[a-z0-9.-]+(:\d{1,5})?$/i, 'public_origin must be https://host[:port]').transform((value) => value.toLowerCase()).optional(),
+  }).prefault({}),
   jobs,
   start: z.looseObject({
     triage_after: z.string({ error: 'triage_after must be a quoted aware timestamp' }).transform(utc).optional(),
