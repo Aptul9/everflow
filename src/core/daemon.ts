@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { createServer } from 'node:net';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import type { Config } from './config.ts';
-import { createKernel, windowsPath } from '../windows/kernel.ts';
+import { createKernel, imagePath, windowsPath } from '../windows/kernel.ts';
 import type { ProcessIdentity } from '../windows/kernel.ts';
 import type { Source } from '../watchers/source.ts';
 import { readBuildReceipt, samePath } from '../web/build-artifact.ts';
@@ -39,7 +39,10 @@ export function canonicalDb(path: string): string {
 export function instancePaths(path: string, runId?: string) {
   const db = canonicalDb(path);
   if (runId !== undefined && !uuid.test(runId)) throw new DaemonError('daemon.run-id');
-  return { db, receipt: db + '.daemon.json', pipe: '\\\\.\\pipe\\everflow-' + createHash('sha256').update(windowsPath(db)).digest('hex'),
+  // Linux: an abstract socket, which the kernel releases with its last owner, so a crash leaves no stale lock file
+  const pipe = process.platform === 'win32' ? '\\\\.\\pipe\\everflow-' + createHash('sha256').update(windowsPath(db)).digest('hex')
+    : '\0everflow-' + createHash('sha256').update(db).digest('hex');
+  return { db, receipt: db + '.daemon.json', pipe,
     ready: db + `.ready-${runId ?? 'none'}.json`, stop: db + `.stop-${runId ?? 'none'}.json` };
 }
 
@@ -133,7 +136,7 @@ export async function launchDaemon(cfg: Config, buildReceipt: string, port?: num
   try {
     const value = await readyFile(paths.ready, runId);
     if (value.status === 'error') throw new DaemonError(typeof value.code === 'string' ? value.code : 'daemon.startup', typeof value.reason === 'string' ? value.reason : undefined);
-    if (!processIdentity(value) || value.pid !== identity.pid || value.created !== identity.created || windowsPath(String(value.image)) !== windowsPath(identity.image)
+    if (!processIdentity(value) || value.pid !== identity.pid || value.created !== identity.created || imagePath(String(value.image)) !== imagePath(identity.image)
       || !samePath(String(value.config_path), cfg._config_path) || !samePath(String(value.db_path), paths.db) || !samePath(String(value.artifact), buildReceipt)
       || !Number.isInteger(value.port) || Number(value.port) < 1 || Number(value.port) > 65535 || !kernel.running(identity)) throw new DaemonError('daemon.readiness-identity');
     return { ...value, launcher, launch: { executable: process.execPath, args, cwd: artifact.root, inherited_handles: false, in_job: inJob, breakaway, flags: breakaway ? '0x09000600' : '0x08000600' } };

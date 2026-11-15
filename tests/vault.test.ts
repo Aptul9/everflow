@@ -182,7 +182,7 @@ test('small notes do not consume unread bytes from the global search budget', ()
   expect(search(vault, 'needle', 50)).toHaveLength(50);
 });
 
-test.each(['directory', 'file'])('NTFS alias of excluded %s is rejected before content open', (kind) => {
+test.skipIf(process.platform !== 'win32').each(['directory', 'file'])('NTFS alias of excluded %s is rejected before content open', (kind) => {
   const { vault, note } = fixture();
   const actual = kind === 'directory' ? '.unison.synthetic/note.md' : '.unison.sensitive.md';
   const alias = kind === 'directory' ? 'UNISON~1.SYN/note.md' : 'UNISON~1.MD';
@@ -195,7 +195,7 @@ test.each(['directory', 'file'])('NTFS alias of excluded %s is rejected before c
   expect(search(vault, 'excluded-alias-marker', 50)).toEqual([]);
 });
 
-test.each([
+test.skipIf(process.platform !== 'win32').each([
   ['root', 'read'], ['ancestor', 'read'], ['root', 'search'], ['ancestor', 'search'],
 ] as const)('NTFS alias at excluded %s boundary blocks %s before content or enumeration', (boundary, operation) => {
   const { root } = fixture();
@@ -214,7 +214,7 @@ test.each([
   expect(walked).not.toHaveBeenCalled();
 });
 
-test('ordinary tilde names and native aliases of safe notes remain readable and searchable', () => {
+test.skipIf(process.platform !== 'win32')('ordinary tilde names and native aliases of safe notes remain readable and searchable', () => {
   const { vault, note } = fixture();
   note('ordinary~notes/safe~note.md', '# Ordinary tilde\nsafe-tilde-marker');
   note('allowed-synthetic-directory/readable-synthetic-note.md', '# Ordinary alias\nsafe-alias-marker');

@@ -1,0 +1,2 @@
+# Installed on the Linux VM as they are: shell scripts, unit, Caddyfile and TOML must keep LF in every checkout and archive
+deploy/** text eol=lf

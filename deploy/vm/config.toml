@@ -1,0 +1,71 @@
+# Everflow instance on oe-vm (Contabo), run by aptul4ever. Installed by deploy/vm/receive.sh into ~/everflow/instance on every
+# deploy: change it here, not on the VM. Paths are relative to the instance folder.
+# Clients move here one at a time; a client's accounts must leave the laptop instance's source lists when they are added here.
+
+[tickets]
+enabled = true
+
+[chats]
+enabled = true
+
+[db]
+path = "everflow.db"
+
+[vault]
+path = "/home/aptul4ever/Vault"
+guide = "PARA layout. 01_Projects/<slug>.md is one page per project or client engagement with Status, Log, Blockers and Traps; slugs are kebab-case and usually start with the client (tesco-..., bip-..., npo); some clients have a subfolder (01_Projects/roar/, 01_Projects/serco/). 01_Projects/Board.md is the task board. 02_Areas/<client>/ holds ongoing client know-how (bip, npo, tesco, msc, roar, serco, notarify, avvale, vection, tecnomat, bbva, q8) and 02_Areas/Decisions/YYYY-MM-DD-<slug>.md holds decisions. 03_Resources is reference material, 04_Archive closed work, 05_Daily/YYYY-MM-DD.md daily activity, 99_Inbox unfiled captures. Search client names, email domains, people, system names and ticket keys; one or two words per query work best. Prefer 01_Projects and 02_Areas notes for kb_notes."
+
+[opencode]
+# The OpenChamber web server of aptul4ever (openchamber.service); OPENCHAMBER_UI_PASSWORD comes from its service.env
+url = ""
+openchamber_port = 3000
+directory = "/home/aptul4ever/everflow-chats"
+model = "meridian-auto/claude-opus-5-5"
+
+[triage]
+# Routes in providers.jsonc beside this file: the VM Meridian on 127.0.0.1:3456, one profile per Claude account
+provider_config_path = "providers.jsonc"
+providers = ["meridian-roar", "meridian-notarify", "meridian-everbright"]
+model = "claude-haiku-5-5"
+
+[start]
+lookback_minutes = 0
+
+[web]
+port = 8789
+# Caddy (deploy/vm/Caddyfile) serves the page here with basic auth; the daemon itself stays on 127.0.0.1
+public_origin = "https://everflow.217-76-49-98.sslip.io"
+
+[sources.outlook]
+enabled = false
+
+[sources.teams]
+enabled = false
+
+[sources.gchat]
+enabled = false
+
+[sources.gmail]
+enabled = false
+
+# Everflow runs on the OE host itself. Relay: the everflow-relay SSH alias (root on loopback, read-only sqlite3 only,
+# bootstrap.sh), because some slot folders are root-only. OE mail: "local", a local bash with the docker group.
+[sources.teamsrelay]
+enabled = true
+poll_seconds = 30
+host = "everflow-relay"
+data_dir = "/opt/teamsrelay/data"
+owner = "aptul99@gmail.com"
+accounts = ["antonio.maritato@roarinc.com"]
+
+[sources.oemail]
+enabled = true
+poll_seconds = 60
+host = "local"
+accounts = ["antonio.maritato@roarinc.com"]
+
+[clients.roar]
+accounts = ["antonio.maritato@roarinc.com"]
+domains = ["roarinc.com"]
+keywords = ["roar"]
+directory = "/home/aptul4ever/everflow-chats/roar"

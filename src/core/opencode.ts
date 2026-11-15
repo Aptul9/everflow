@@ -173,7 +173,10 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
   let url = cfg.opencode.url;
   let password = options.password ?? process.env.EVERFLOW_OPENCODE_PASSWORD ?? '';
   const openchamber = !url;
-  if (openchamber) {
+  if (openchamber && cfg.opencode.openchamber_port) {
+    url = `http://127.0.0.1:${cfg.opencode.openchamber_port}`;
+    password = options.password ?? process.env.OPENCHAMBER_UI_PASSWORD ?? '';
+  } else if (openchamber) {
     const settings = loadSettings(options);
     url = `http://127.0.0.1:${settings.desktopLocalPort}`;
     password = settings.desktopUiPassword;

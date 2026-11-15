@@ -5,7 +5,7 @@ Reader guide for source collection, local ticket proposals and approved OpenCham
 - `everflow.md`: the guide.
 - `diagrams/`: typed JSON sources and generated HTML/PNG diagrams.
 
-Guide updated 2026-11-07 from current TypeScript source. Covers Outlook, Teams, relay, Google Chat through gweb and Gmail through gws. Existing instance paths remain unchanged. No database, sidecar, log, relay token or source credential is included in the guide build. Account and client names remain outside the document and diagrams.
+Guide updated 2026-11-07 from current TypeScript source; oe-vm instance section added 2026-11-15. Covers Outlook, Teams, relay, Google Chat through gweb and Gmail through gws. Existing instance paths remain unchanged. No database, sidecar, log, relay token or source credential is included in the guide build. Account and client names remain outside the document and diagrams.
 
 ## Generate diagrams
 

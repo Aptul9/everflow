@@ -33,7 +33,7 @@ export async function startServer(options: { configPath: string; buildReceipt: s
     response.setHeader('x-content-type-options', 'nosniff');
     response.setHeader('referrer-policy', 'no-referrer');
     const hosts = request.rawHeaders.filter((_value, index) => index % 2 === 0 && request.rawHeaders[index]!.toLowerCase() === 'host').length;
-    if (!current || hosts !== 1 || !allowedHost(request.headers.host, current.port)) {
+    if (!current || hosts !== 1 || !allowedHost(request.headers.host, current.port, current.config.web.public_origin)) {
       response.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' }).end('Local Host required');
       return;
     }

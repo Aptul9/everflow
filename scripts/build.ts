@@ -143,7 +143,7 @@ export function inspectBuildArtifacts(root: string): { manifests: number; outsid
 }
 
 export function build(source: string): string {
-  assert.equal(process.platform, 'win32', 'Pinned Windows build toolchain required');
+  assert.ok(process.platform === 'win32' || process.platform === 'linux', 'Windows or Linux build host required');
   assert.equal(process.versions.node, '26.4.0', 'Use the pinned Node version');
   const started = new Date().toISOString();
   const tree = createBuildTree(source);
@@ -159,10 +159,13 @@ export function build(source: string): string {
       if (result.status !== 0) throw new Error(`${name} failed (${result.status}); inspect its staged build log`);
     } finally { fs.closeSync(fd); }
   };
-  const npm = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  // npm of the running Node distribution: beside node.exe on Windows, under <prefix>/lib on Linux
+  const npm = process.platform === 'win32' ? join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    : join(dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
   run('install', [npm, 'ci', '--include=dev', '--foreground-scripts', '--no-audit', '--no-fund']);
   containedLinks(tree.root);
-  run('native-check', ['scripts/setup.ts', '--verify-only', '--log', join(logs, 'native-config.json.log')]);
+  // winax is an optional Windows-only dependency: Linux builds have no COM bridge to verify
+  if (process.platform === 'win32') run('native-check', ['scripts/setup.ts', '--verify-only', '--log', join(logs, 'native-config.json.log')]);
   run('next', [join(tree.root, 'node_modules', 'next', 'dist', 'bin', 'next'), 'build', tree.root, '--turbopack']);
   run('server', [join(tree.root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', 'tsconfig.server.json']);
   const inspection = inspectBuildArtifacts(tree.root);

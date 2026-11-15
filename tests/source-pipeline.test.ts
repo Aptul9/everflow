@@ -12,7 +12,7 @@ import { createTeamsState, scanTeams, TeamsClient } from '../src/watchers/teams.
 import type { SourceRecord } from '../src/watchers/source.ts';
 import { scratch } from './support.ts';
 
-test('synthetic encrypted Cookies/WAL and DPAPI Local State traverse actual auth/cache/HTTP/scan/NDJSON ingestion', async () => {
+test.skipIf(process.platform !== 'win32')('synthetic encrypted Cookies/WAL and DPAPI Local State traverse actual auth/cache/HTTP/scan/NDJSON ingestion', async () => {
   const { root } = scratch('phase7-source-pipeline-');
   const profile = join(root, 'WV2Profile_Fixture'), network = join(profile, 'Network');
   fs.mkdirSync(network, { recursive: true });

@@ -5,8 +5,9 @@ import { parse } from 'smol-toml';
 import { createKernel } from '../src/windows/kernel.ts';
 import { runSource, watcherArguments } from '../src/watchers/source.ts';
 import { sshQuery } from '../src/watchers/relay.ts';
+import { SCRATCH } from './support.ts';
 
-const scratch = resolve('C:/Users/Antonio/AppData/Local/Temp/opencode/everflow');
+const scratch = resolve(SCRATCH);
 function explicit(value: unknown): string {
   if (typeof value !== 'string' || !isAbsolute(value) || !resolve(value).toLowerCase().startsWith(scratch.toLowerCase() + sep)) throw new Error('fixture.explicit-scratch-required');
   return value;

@@ -1,8 +1,11 @@
 import fs from 'node:fs';
+import { userInfo } from 'node:os';
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import type { NextConfig } from 'next';
 
-export const BUILD_PARENT = resolve('C:/Users/Antonio/AppData/Local/Temp/opencode/everflow/source-builds');
+// Linux: under the account's home from the user database, not $HOME, which the build stage replaces with a private one.
+export const BUILD_PARENT = process.platform === 'win32' ? resolve('C:/Users/Antonio/AppData/Local/Temp/opencode/everflow/source-builds')
+  : join(userInfo().homedir, '.local', 'share', 'everflow', 'source-builds');
 export const BUILD_MARKER = '.source-build.json';
 
 export interface SourceFile { path: string; sha256: string }

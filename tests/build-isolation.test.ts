@@ -98,7 +98,7 @@ test('rejects local/workspace dependency material before install', () => {
   expect(() => createBuildTree(source)).toThrow(/local|workspace|link/i);
 });
 
-test('child environment drops inherited application state and scopes native caches/LTO', () => {
+test.skipIf(process.platform !== 'win32')('child environment drops inherited application state and scopes native caches/LTO', () => {
   const source = sourceFixture();
   const tree = createBuildTree(source);
   const env = isolatedEnvironment(tree.root, {
