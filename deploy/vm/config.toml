@@ -50,22 +50,35 @@ enabled = false
 
 # Everflow runs on the OE host itself. Relay: the everflow-relay SSH alias (root on loopback, read-only sqlite3 only,
 # bootstrap.sh), because some slot folders are root-only. OE mail: "local", a local bash with the docker group.
+# Clients here: roar (2026-11-15), notarify and npo (2026-11-15); their accounts are off the laptop instance's lists.
 [sources.teamsrelay]
 enabled = true
 poll_seconds = 30
 host = "everflow-relay"
 data_dir = "/opt/teamsrelay/data"
 owner = "aptul99@gmail.com"
-accounts = ["antonio.maritato@roarinc.com"]
+accounts = ["antonio.maritato@roarinc.com", "antonio.maritato@notarify.io", "antonio.maritato@nposervices.com"]
 
 [sources.oemail]
 enabled = true
 poll_seconds = 60
 host = "local"
-accounts = ["antonio.maritato@roarinc.com"]
+accounts = ["antonio.maritato@roarinc.com", "antonio.maritato@notarify.io", "antonio.maritato@nposervices.com"]
 
+# Client settings as on the laptop instance; directory = the VM folder their chats open in
 [clients.roar]
 accounts = ["antonio.maritato@roarinc.com"]
 domains = ["roarinc.com"]
 keywords = ["roar"]
 directory = "/home/aptul4ever/everflow-chats/roar"
+
+[clients.notarify]
+accounts = ["antonio.maritato@notarify.io"]
+domains = ["notarify.io"]
+keywords = ["notarify", "notaridrive", "coin"]
+directory = "/home/aptul4ever/everflow-chats/notarify"
+
+[clients.npo]
+domains = ["nposervices.com", "iveco.com"]
+keywords = ["npo", "iveco"]
+directory = "/home/aptul4ever/everflow-chats/npo"
