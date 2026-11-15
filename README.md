@@ -8,7 +8,7 @@ Tickets and chats are disabled by default. Source collection has its own switche
 
 ## Prerequisites
 
-- Windows x64 or Linux x64, and Node.js `26.4.0`, including its npm distribution. The lockfile pins TypeScript `7.0.2`, Next.js `16.4.5`, `koffi` `3.3.7` and `winax` `3.6.10` (optional, Windows only). On Linux the Outlook and Teams desktop sources are unavailable; relay, OE mail, Google and Slack sources run, see [Linux host](#linux-host-oe-vm).
+- Windows x64 or Linux x64, and Node.js `26.4.0`, including its npm distribution. The lockfile pins TypeScript `7.0.2`, Next.js `16.4.5`, `koffi` `3.3.7` and `winax` `3.6.10` (optional, Windows only). On Linux the Outlook and Teams desktop sources are unavailable; relay, OE mail, Google and Slack sources run, see Linux host (oe-vm) below.
 - On Windows, MSVC C++ build tools with a Windows SDK. The recorded toolchain uses Visual Studio 2026 Build Tools. Native compilation also requires a node-gyp-compatible Python interpreter. It is build tooling only. The application, watchers, CLI and tests use TypeScript/Node.
 - Network access to the lockfile's dependency downloads during the private build. Source-specific access is separate and unnecessary for the disabled synthetic instance below.
 - For live triage, an explicit read-only knowledge-base root, model and ordered provider ids in `[triage]`. Provider routes come from `triage.provider_config_path` or the existing OpenCode JSONC settings. No provider is installed, started or selected automatically.
@@ -315,11 +315,11 @@ The same build runs on Linux. [kernel.ts](src/posix/kernel.ts) gives the daemon,
 
 Three settings serve a host that is not the desktop:
 
-- `[web] public_origin = "https://<host>"`: a reverse proxy in front of the loopback port serves the page under that HTTPS address. Host `<host>` and Origin `https://<host>` are then accepted next to the loopback ones; the action token is unchanged. Requests under that host need a signed-in session; see [Sign-in](#sign-in). Loopback requests stay as before.
+- `[web] public_origin = "https://<host>"`: a reverse proxy in front of the loopback port serves the page under that HTTPS address. Host `<host>` and Origin `https://<host>` are then accepted next to the loopback ones; the action token is unchanged. Requests under that host need a signed-in session; see Sign-in below. Loopback requests stay as before.
 - `[opencode] openchamber_port`: with an empty `url`, the chats go to an `openchamber serve` web server on that loopback port, signed in with `OPENCHAMBER_UI_PASSWORD` from the environment, instead of the desktop settings file.
 - `host = "local"` under a relay, OE mail, Gmail/Chat-through-agent or Slack source: the command that would run over SSH runs in a local `/bin/bash`, for an instance on the OE host itself. The account needs the same access the SSH user had (Docker for the agent key, read access to the relay stores).
 
-The oe-vm instance is declared in [deploy/vm](deploy/vm) and deployed by [ci-cd.yml](.github/workflows/ci-cd.yml):
+The oe-vm instance is declared in `deploy/vm` and deployed by `.github/workflows/ci-cd.yml`:
 
 | File | Role |
 |---|---|
@@ -330,7 +330,7 @@ The oe-vm instance is declared in [deploy/vm](deploy/vm) and deployed by [ci-cd.
 | `bootstrap.sh` | One-time root setup: Docker group, Node `26.4.0` in `~/.local/lib/node26`, sslh SNI line, deploy key, relay key |
 | `relay-read.sh` | Forced command of the loopback root key behind the `everflow-relay` SSH alias: read-only `sqlite3` on `/opt/teamsrelay/data` only, since some slot folders are root-only |
 
-Pull requests run the build and the test gate on Linux ([gate.ts](scripts/gate.ts)). A push to `main` deploys only when the commit belongs to a merged pull request; a direct push fails the `guard` job and stays undeployed. The `main` ruleset in [main-ruleset.json](deploy/github/main-ruleset.json) (pull request required, `Build and test` green and up to date, no force push, no deletion, no bypass) needs a paid GitHub plan on this private repository, where the API answers 403 on the free plan; apply it with `gh api repos/Aptul9/everflow/rulesets --input deploy/github/main-ruleset.json`. Merged branches are deleted automatically. Secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`, `EVERFLOW_USER`, `EVERFLOW_PASSWORD` (page sign-in; only its scrypt hash reaches the VM, as `EVERFLOW_LOGIN_HASH` in `~/everflow/instance/login.env`). Variable: `DEPLOY_DOMAIN`.
+Pull requests run the build and the test gate on Linux ([gate.ts](scripts/gate.ts)). A push to `main` deploys only when the commit belongs to a merged pull request; a direct push fails the `guard` job and stays undeployed. The `main` ruleset in `deploy/github/main-ruleset.json` (pull request required, `Build and test` green and up to date, no force push, no deletion, no bypass) needs a paid GitHub plan on this private repository, where the API answers 403 on the free plan; apply it with `gh api repos/Aptul9/everflow/rulesets --input deploy/github/main-ruleset.json`. Merged branches are deleted automatically. Secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`, `EVERFLOW_USER`, `EVERFLOW_PASSWORD` (page sign-in; only its scrypt hash reaches the VM, as `EVERFLOW_LOGIN_HASH` in `~/everflow/instance/login.env`). Variable: `DEPLOY_DOMAIN`.
 
 On the VM, as `aptul4ever`: `systemctl --user status everflow`, `journalctl --user -u everflow`, logs beside the database in `~/everflow/instance`. Rollback: put the previous receipt path into `~/everflow/instance/build.txt` and `systemctl --user restart everflow`, or revert the commit on `main` through a pull request.
 
