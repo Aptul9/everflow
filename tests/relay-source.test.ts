@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { join, posix } from 'node:path';
+import { join, posix, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { EventEmitter, getEventListeners } from 'node:events';
 import { PassThrough } from 'node:stream';
@@ -276,7 +276,7 @@ test.each(['owner-capture', 'owner-dispose', 'child-capture', 'child-dispose', '
       processIdentity: (pid: number) => {
         controls.push({ close: child.listenerCount('close'), error: child.listenerCount('error'), stdout: child.stdout.listenerCount('data'), stderr: child.stderr.listenerCount('data'), abort: getEventListeners(controller.signal, 'abort').length, timers: vi.getTimerCount() });
         if (mode.startsWith('owner-capture') && phase === 1 || mode === 'child-capture' && phase === 2) throw failure;
-        return { pid, created: String(134384000000000000n + BigInt(phase)), image: 'C:\\synthetic\\node.exe' };
+        return { pid, created: String(134384000000000000n + BigInt(phase)), image: resolve('/synthetic/node.exe') };
       },
       [Symbol.dispose]: () => { if (mode === 'owner-dispose' && phase === 1 || mode === 'child-dispose' && phase === 2) throw failure; },
     } as unknown as ReturnType<typeof native.createKernel>;

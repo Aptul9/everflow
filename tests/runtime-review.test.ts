@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { PassThrough } from 'node:stream';
 import type { ChildProcess } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -102,9 +102,9 @@ function fakeWatcher() {
   child.kill = () => { child.send({ type: 'everflow.stop' }); return true; };
   return child as ChildProcess & { stdout: PassThrough; stderr: PassThrough };
 }
-const watcherIdentity = { pid: 1000000101, created: '134384000000000001', image: 'C:\\synthetic\\node.exe' };
-const original = { pid: 1000000202, created: '134384000000000002', image: 'C:\\synthetic\\ssh.exe' };
-const replacement = { ...original, created: '134384000000000099', image: 'C:\\unrelated\\node.exe' };
+const watcherIdentity = { pid: 1000000101, created: '134384000000000001', image: resolve('/synthetic/node.exe') };
+const original = { pid: 1000000202, created: '134384000000000002', image: resolve('/synthetic/ssh.exe') };
+const replacement = { ...original, created: '134384000000000099', image: resolve('/unrelated/node.exe') };
 
 async function ownershipFixture() {
   const f = fixture(); f.cfg.sources = { teams: { enabled: true, entrypoint: 'tests/inert-watcher.ts', profile: join(f.root, 'never-read-profile') } };
@@ -112,7 +112,7 @@ async function ownershipFixture() {
   const child = fakeWatcher(), terminated: unknown[] = [];
   let current = original;
   const kernel: any = {
-    processIdentity: vi.fn((pid: number) => pid === process.pid ? { pid, created: '134384000000000000', image: 'C:\\synthetic\\node.exe' } : pid === watcherIdentity.pid ? watcherIdentity : current),
+    processIdentity: vi.fn((pid: number) => pid === process.pid ? { pid, created: '134384000000000000', image: resolve('/synthetic/node.exe') } : pid === watcherIdentity.pid ? watcherIdentity : current),
     processes: vi.fn(() => [{ pid: original.pid, parent: watcherIdentity.pid, exe: 'ssh.exe' }]),
     childOf: vi.fn((identity: any, owner: any) => identity.created === current.created && identity.image === current.image && owner.created === watcherIdentity.created),
     running: vi.fn((identity: any) => identity.created === current.created),

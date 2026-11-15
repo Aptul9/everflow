@@ -1,12 +1,13 @@
 import { createRequire } from 'node:module';
-import { isAbsolute, win32 } from 'node:path';
+import { isAbsolute, posix, win32 } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
+import { createPosixKernel } from '../posix/kernel.ts';
 
 export type NativeBindings = Record<string, (...args: any[]) => any>;
 export type ProcessRow = { pid: number; parent: number; exe: string };
 export type LaunchOptions = { executable: string; args: string[]; cwd: string; environment: Record<string, string>; breakaway?: boolean };
 export type ProcessIdentity = { pid: number; created: string; image: string };
-export function sameProcess(a: ProcessIdentity, b: ProcessIdentity): boolean { return a.pid === b.pid && a.created === b.created && windowsPath(a.image) === windowsPath(b.image); }
+export function sameProcess(a: ProcessIdentity, b: ProcessIdentity): boolean { return a.pid === b.pid && a.created === b.created && imagePath(a.image) === imagePath(b.image); }
 export function spawnedIdentity(child: ChildProcess, capture: (pid: number) => ProcessIdentity): Promise<ProcessIdentity> {
   return new Promise((resolve, reject) => {
     const failed = (error: Error) => { child.off('spawn', spawned); reject(error); };
@@ -42,6 +43,11 @@ export function win32Ffi(): any {
 export function windowsPath(path: string): string {
   const plain = path.startsWith('\\\\?\\UNC\\') ? '\\\\' + path.slice(8) : path.startsWith('\\\\?\\') ? path.slice(4) : path;
   return win32.resolve(plain).toLowerCase();
+}
+
+// Comparable form of a process image path: case-insensitive on Windows, exact elsewhere.
+export function imagePath(path: string): string {
+  return process.platform === 'win32' ? windowsPath(path) : posix.resolve(path);
 }
 
 function invalid(pointer: bigint | null | undefined): boolean {
@@ -150,7 +156,14 @@ function kernelBindings(): NativeBindings {
   return bindings;
 }
 
-export function createKernel(input?: NativeBindings) {
+export type Kernel = ReturnType<typeof windowsKernel>;
+
+// Injected bindings always mean the Windows bridge (tests); otherwise the platform decides.
+export function createKernel(input?: NativeBindings): Kernel {
+  return input || process.platform === 'win32' ? windowsKernel(input) : createPosixKernel();
+}
+
+function windowsKernel(input?: NativeBindings) {
   const api = input ?? kernelBindings();
   const error = (code: string) => new NativeError(code, api.GetLastError!());
   const resources = new NativeResources((kind, pointer) => Boolean(kind === 'view' ? api.UnmapViewOfFile!(pointer) : api.CloseHandle!(pointer)));

@@ -3,6 +3,7 @@ import { isAbsolute, join, relative, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
+import { SCRATCH } from './support.ts';
 
 const { values } = parseArgs({ options: { root: { type: 'string' }, 'build-receipt': { type: 'string' } } });
 const buildReceipt = values['build-receipt'] ?? process.env.TEST_BUILD_RECEIPT;
@@ -10,7 +11,7 @@ const artifact = readBuildReceipt(buildReceipt);
 process.chdir(artifact.root);
 const { startServer } = await import(pathToFileURL(artifact.server).href) as typeof import('../src/server.ts');
 const { openDb } = await import(pathToFileURL(join(artifact.root, 'dist', 'core', 'db.js')).href) as typeof import('../src/core/db.ts');
-const scratch = 'C:/Users/Antonio/AppData/Local/Temp/opencode/everflow';
+const scratch = SCRATCH;
 if (!values.root || !isAbsolute(values.root)) throw new Error('Explicit absolute --root inside approved scratch required');
 const root = resolve(values.root);
 const inside = relative(resolve(scratch), root);

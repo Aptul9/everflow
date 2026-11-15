@@ -20,7 +20,7 @@ test('compiled source modules import without opening sources, models, caches or 
 test.each(['outlook', 'teams', 'relay', 'gchat', 'gmail'])('compiled %s entrypoint handles path spaces and fails missing --since before any source access', (name) => {
   const artifact = readBuildReceipt(process.env.TEST_BUILD_RECEIPT);
   const directory = fs.mkdtempSync(join(artifact.root, '.private', 'source command fixture '));
-  for (const part of ['watchers', 'windows']) fs.cpSync(join(artifact.root, 'dist', part), join(directory, part), { recursive: true });
+  for (const part of ['watchers', 'windows', 'posix']) fs.cpSync(join(artifact.root, 'dist', part), join(directory, part), { recursive: true });
   fs.mkdirSync(join(directory, 'core'));
   fs.copyFileSync(join(artifact.root, 'dist/core/time.js'), join(directory, 'core/time.js'));
   const result = spawnSync(process.execPath, ['--use-system-ca', join(directory, 'watchers', name + '.js')], {

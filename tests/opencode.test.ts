@@ -286,7 +286,7 @@ test('retains structured failed assistant error even when provider failed before
     error, assistant_id: 'asst_failed', completed_at: PEER_AT + 500 });
 });
 
-test('tag lookup treats Windows directory casing/separators as the same configured directory', async () => {
+test.skipIf(process.platform !== 'win32')('tag lookup treats Windows directory casing/separators as the same configured directory', async () => {
   await using peer = await scriptedPeer();
   const { cfg } = config(peer.url);
   const tagged = remoteSession('ses_normalized', cfg.opencode.directory.replaceAll('\\', '/').toUpperCase() + '/',
