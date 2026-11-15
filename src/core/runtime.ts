@@ -12,7 +12,7 @@ import type { ChatOptions } from './chat.ts';
 import { transaction } from './db.ts';
 import { bounded, childEnvironment, DaemonError } from './daemon.ts';
 import type { OwnedProcess } from './daemon.ts';
-import { ingest, IngestError, schedule, sourceStart } from './ingest.ts';
+import { ingest, IngestError, retireAccounts, schedule, sourceStart } from './ingest.ts';
 import { claim, complete, defer, enqueue, fail, hasPendingInput, healthError, healthOk, owns, startRenewal } from './jobs.ts';
 import type { Job } from './jobs.ts';
 import { handleTriage } from './kb-agent.ts';
@@ -79,6 +79,11 @@ export function sourceCommand(cfg: Config, db: DatabaseSync, source: Source, bui
   const value = settings[source];
   if (!value?.enabled) throw new DaemonError('source.disabled');
   const floor = sourceStart(db, cfg, source, at);
+  // oemail, Slack and the Google sources read exactly the accounts in their config; the others discover theirs
+  const read = source === 'oemail' ? value.accounts!
+    : source === 'gmail' && value.host && value.accounts?.length ? [...value.accounts, ...(value.account ? [value.account] : [])]
+    : source === 'gchat' || source === 'gmail' || source === 'slack' ? [value.account!] : null;
+  if (read) retireAccounts(db, source, read);
   const accounts = db.prepare("SELECT account FROM cursor WHERE source=? AND account<>'*' ORDER BY account").all(source).map((row) => String(row.account));
   const args = [...(source === 'teams' ? TEAMS_NODE_FLAGS : []), resolve(artifact.root, value.entrypoint ?? `dist/watchers/${entrypoints[source]}.js`), '--since', floor,
     ...accounts.flatMap((account) => ['--expected-account', account])];

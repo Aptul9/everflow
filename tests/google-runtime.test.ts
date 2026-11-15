@@ -49,6 +49,29 @@ test('Gmail through the OE agent passes every listed mailbox; Slack requires hos
   expect(slack.args.slice(slack.args.indexOf('--host'))).toEqual(['--host', 'oe-vm', '--account', 'a@example.invalid', '--self-id', 'U1', '--workspace', 'T1']);
 });
 
+test('an account taken off an explicit read list stops being known, so the next checkpoint is accepted', () => {
+  const f = scratch('retire-accounts-'), cfg = loadConfig(f.config), receipt = process.env.TEST_BUILD_RECEIPT!;
+  using db = openDb(f.path);
+  const all = ['a@example.invalid', 'b@example.invalid', 'gone@example.invalid'];
+  const run = (accounts: string[]) => sourceCommand({ ...cfg, sources: { oemail: { enabled: true, host: 'oe-vm', accounts } } }, db, 'oemail', receipt);
+  run(all);
+  const reader = createSourceReader(db, cfg, 'oemail');
+  const send = (record: object) => reader.stdout(Buffer.from(JSON.stringify(record)));
+  send({ source: 'oemail', accounts: all });
+  const known = () => db.prepare("SELECT account FROM cursor WHERE source='oemail' AND account<>'*' ORDER BY account").all().map((row) => row.account);
+  expect(known()).toEqual(all);
+  const command = run(['a@example.invalid', 'B@example.invalid']);
+  expect(known()).toEqual(['a@example.invalid', 'b@example.invalid']);
+  expect(command.args.filter((_, i, list) => list[i - 1] === '--expected-account')).toEqual(['a@example.invalid', 'b@example.invalid']);
+  const checkpoint = new Date().toISOString();
+  send({ source: 'oemail', accounts: ['a@example.invalid', 'b@example.invalid'], checkpoint });
+  expect(db.prepare('SELECT COUNT(*) AS n FROM quarantine').get()!.n).toBe(0);
+  // relay discovers its accounts: nothing is retired there
+  db.prepare("INSERT INTO cursor(source,account,since) VALUES ('teamsrelay','x@example.invalid','2026-11-07T09:00:00.000000Z')").run();
+  sourceCommand({ ...cfg, sources: { teamsrelay: { enabled: true, host: 'oe-vm', data_dir: '/srv/relay', owner: 'o@example.invalid', accounts: ['y@example.invalid'] } } }, db, 'teamsrelay', receipt);
+  expect(db.prepare("SELECT COUNT(*) AS n FROM cursor WHERE source='teamsrelay' AND account='x@example.invalid'").get()!.n).toBe(1);
+});
+
 test('recent-topic checkpoint survives runtime reader without claiming cursor advancement', () => {
   const f = scratch('google-health-'), cfg = loadConfig(f.config);
   using db = openDb(f.path);
