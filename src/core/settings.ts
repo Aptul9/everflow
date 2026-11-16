@@ -66,8 +66,13 @@ export function requestModelOptions(db: DatabaseSync, at?: string): string {
   return 'options.models';
 }
 
-export function takeModelRequest(db: DatabaseSync): boolean {
-  return transaction(db, () => db.prepare("DELETE FROM setting WHERE key='options.requested'").run().changes > 0);
+// A page asks once per load, so a fetch that failed (OpenCode restarting) is tried again each minute without waiting for one
+export function takeModelRequest(db: DatabaseSync, at?: string): boolean {
+  return transaction(db, () => {
+    if (db.prepare("DELETE FROM setting WHERE key='options.requested'").run().changes > 0) return true;
+    const stored = json<Omit<ModelOptions, 'requested_at'>>(db, 'options.models');
+    return !!stored?.error && Date.parse(utc(at)) - Date.parse(stored.at ?? '') >= 60_000;
+  });
 }
 
 export function storeModelOptions(db: DatabaseSync, value: Omit<ModelOptions, 'requested_at'>, at?: string): void {

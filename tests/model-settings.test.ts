@@ -107,6 +107,12 @@ test('picker options are fetched only on request, keep the side that worked and 
   expect([noNames.chat.length, noNames.accounts, noNames.error]).toEqual([1, {}, null]);
   const noModels = await modelOptions(cfg, { models: async () => { throw new Error('OpenCode HTTP 503'); }, providers: async () => [] } as never);
   expect([noModels.chat, noModels.error]).toEqual([[], 'Model list: OpenCode HTTP 503']);
+  // A failed list is fetched again a minute later with no page asking; a good one waits for a request
+  storeModelOptions(db, { ...noModels, at: AT });
+  const later = (seconds: number) => new Date(Date.parse(AT) + seconds * 1000).toISOString();
+  expect([takeModelRequest(db, later(30)), takeModelRequest(db, later(61))]).toEqual([false, true]);
+  storeModelOptions(db, { ...value, at: AT });
+  expect(takeModelRequest(db, later(3600))).toBe(false);
   storeModelOptions(db, value);
   expect(readState(db, cfg).models.options).toMatchObject({ chat: value.chat, accounts: value.accounts, at: value.at, error: value.error, requested_at: null });
   expect(readState(db, cfg).models.triage_routes).toEqual(cfg.triage.providers);
