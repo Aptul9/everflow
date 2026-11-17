@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { appendFileSync, statSync } from 'node:fs';
 import { expect, test } from 'vitest';
 import { cookieDomain, cookieValue, cookieValues, hashPassword, Limiter, loginAccount, loginKey, openPath, safeNext, Sessions, SESSION_MS, verifyPassword } from '../src/web/login.ts';
@@ -8,6 +9,15 @@ import { scratch } from './support.ts';
 const ORIGIN = 'https://everflow.example.invalid';
 const HOST = 'everflow.example.invalid';
 
+// scripts/hash-password.ts in its own process, as the deploy runs it: each call is one deploy's hash
+const hashScript = (env: Record<string, string>, ...args: string[]) => spawnSync(process.execPath, ['scripts/hash-password.ts', ...args],
+  { cwd: process.cwd(), env: { ...process.env, EVERFLOW_USER: '', EVERFLOW_PASSWORD: '', ...env }, encoding: 'utf8', windowsHide: true, timeout: 30000 });
+const deployHash = (user: string, password: string) => {
+  const run = hashScript({ EVERFLOW_USER: user, EVERFLOW_PASSWORD: password }, '--stable');
+  expect(run.status, run.stderr).toBe(0);
+  return run.stdout.trim();
+};
+
 test('scrypt hash verifies only its own password and never stores it', () => {
   const hash = hashPassword('synthetic secret');
   expect(hash).toMatch(/^scrypt\$32768\$8\$1\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_-]{43}$/);
@@ -17,6 +27,26 @@ test('scrypt hash verifies only its own password and never stores it', () => {
   expect(verifyPassword('synthetic secret', 'plain')).toBe(false);
   expect(hashPassword('same')).not.toBe(hashPassword('same'));
 });
+
+test('deploy hash: the same user and password give the same hash on every run, a changed one a different hash', () => {
+  const first = deployHash('me@example.invalid', 'synthetic secret');
+  expect(first).toMatch(/^scrypt\$32768\$8\$1\$[A-Za-z0-9_-]{22}\$[A-Za-z0-9_-]{43}$/);
+  expect(first).not.toContain('synthetic');
+  expect(verifyPassword('synthetic secret', first)).toBe(true);
+  expect(deployHash('me@example.invalid', 'synthetic secret')).toBe(first);
+  // the session account is case-insensitive on the user, and so is the salt
+  expect(deployHash(' ME@example.invalid ', 'synthetic secret')).toBe(first);
+  const otherPassword = deployHash('me@example.invalid', 'synthetic secreT');
+  expect(otherPassword).not.toBe(first);
+  expect(deployHash('other@example.invalid', 'synthetic secret')).not.toBe(first);
+  // the salt is the same for both passwords: it carries nothing of the password
+  expect(otherPassword.split('$')[4]).toBe(first.split('$')[4]);
+  expect(hashScript({ EVERFLOW_PASSWORD: 'synthetic secret' }, '--stable').status).toBe(2);
+  const manual = hashScript({ EVERFLOW_USER: 'me@example.invalid', EVERFLOW_PASSWORD: 'synthetic secret' });
+  expect(manual.status).toBe(0);
+  expect(manual.stdout.trim()).not.toBe(first);
+  expect(verifyPassword('synthetic secret', manual.stdout.trim())).toBe(true);
+}, 60_000);
 
 test('account comes only from a user and a valid scrypt hash in the environment', () => {
   const hash = hashPassword('x');
@@ -134,6 +164,34 @@ test('served page: public host needs the sign-in, loopback does not, and a sessi
     expect(String(out.headers['set-cookie'])).toContain('Max-Age=0');
   } finally { await server.close(); }
 }, 120_000);
+
+test('redeploy: a page session survives a restart with the same sign-in and ends when the user or password changes', async () => {
+  const fixture = webFixture();
+  appendFileSync(fixture.config, `[web]\npublic_origin = "${ORIGIN}"\n`);
+  // one deploy: a fresh hash from the script, a new server process on the same database (and so the same signing key)
+  const deploy = (hash: string, user = 'me@example.invalid') => launch('web-process.ts', [], { TEST_INSTANCE_CONFIG: fixture.config, EVERFLOW_LOGIN_USER: user, EVERFLOW_LOGIN_HASH: hash });
+  const stateWith = async (hash: string, cookie: string, user?: string) => {
+    const server = await deploy(hash, user);
+    try { return (await http(server.port, '/api/state', { headers: { host: HOST, cookie } })).status; } finally { await server.close(); }
+  };
+
+  const server = await deploy(deployHash('me@example.invalid', 'synthetic secret'));
+  let cookie = '';
+  try {
+    const ok = await http(server.port, '/api/login', { method: 'POST', body: JSON.stringify({ email: 'me@example.invalid', password: 'synthetic secret' }),
+      headers: { host: HOST, origin: ORIGIN, 'content-type': 'application/json', 'x-forwarded-for': '203.0.113.7' } });
+    expect(ok.status).toBe(204);
+    cookie = String(ok.headers['set-cookie']).split(';')[0]!;
+    expect((await http(server.port, '/api/state', { headers: { host: HOST, cookie } })).status).toBe(200);
+  } finally { await server.close(); }
+
+  expect(await stateWith(deployHash('me@example.invalid', 'synthetic secret'), cookie)).toBe(200);
+  expect(await stateWith(deployHash('me@example.invalid', 'synthetic secret'), cookie)).toBe(200);
+  // what every deploy did before: a random salt, a new hash, the session gone
+  expect(await stateWith(hashPassword('synthetic secret'), cookie)).toBe(401);
+  expect(await stateWith(deployHash('me@example.invalid', 'changed secret'), cookie)).toBe(401);
+  expect(await stateWith(deployHash('other@example.invalid', 'synthetic secret'), cookie, 'other@example.invalid')).toBe(401);
+}, 240_000);
 
 test('a public origin without an account refuses to start', async () => {
   const fixture = webFixture();

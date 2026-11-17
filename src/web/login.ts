@@ -14,6 +14,15 @@ export function hashPassword(password: string, salt = randomBytes(16)): string {
   return `scrypt$${SCRYPT.N}$${SCRYPT.r}$${SCRYPT.p}$${b64(salt)}$${b64(scryptSync(password, salt, 32, SCRYPT))}`;
 }
 
+/** Salt for a hash that must stay the same across deploys, so the sessions signed with it survive: derived from the user
+ * alone. Never from the password: a salt is stored in clear inside the hash, and a cheap function of the password there
+ * would let a guess be checked without paying for scrypt. A changed password still changes the hash. */
+export function stableSalt(user: string): Buffer<ArrayBuffer> {
+  const name = user.trim().toLowerCase();
+  if (!name) throw new Error('login.user-required');
+  return Buffer.from(createHash('sha256').update('everflow login salt v1\0' + name).digest().subarray(0, 16));
+}
+
 const HASH = /^scrypt\$(\d+)\$(\d+)\$(\d+)\$([A-Za-z0-9_-]{16,})\$([A-Za-z0-9_-]{43})$/;
 
 export function verifyPassword(password: string, stored: string): boolean {

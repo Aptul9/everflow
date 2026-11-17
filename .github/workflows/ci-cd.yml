@@ -26,6 +26,8 @@ jobs:
           for f in deploy/vm/*.sh; do sh -n "$f"; done
           # the deploy job runs this straight through Node's type stripping, outside the build
           EVERFLOW_PASSWORD=synthetic node scripts/hash-password.ts | grep -Eq '^scrypt\$32768\$8\$1\$'
+          stable() { EVERFLOW_USER=u@example.invalid EVERFLOW_PASSWORD=synthetic node scripts/hash-password.ts --stable; }
+          a=$(stable) && test "$a" = "$(stable)" && printf '%s' "$a" | grep -Eq '^scrypt\$32768\$8\$1\$'
           docker run --rm -v "$PWD/deploy/vm/Caddyfile:/etc/caddy/Caddyfile:ro" -e EVERFLOW_DOMAIN=everflow.example.invalid \
             -e EVERFLOW_CHAT_DOMAIN=chat.everflow.example.invalid \
             caddy:2.11.8-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
@@ -94,9 +96,11 @@ jobs:
       - name: Page sign-in hash
         env:
           EVERFLOW_PASSWORD: ${{ secrets.EVERFLOW_PASSWORD }}
+          EVERFLOW_USER: ${{ secrets.EVERFLOW_USER }}
         run: |
-          # only the scrypt hash leaves the runner; the password stays in the secret
-          hash=$(node scripts/hash-password.ts)
+          # only the scrypt hash leaves the runner; the password stays in the secret. --stable: the same user and password give
+          # the same hash on every deploy, so the page sessions signed with it survive the restart
+          hash=$(node scripts/hash-password.ts --stable)
           echo "::add-mask::$hash"
           echo "PAGE_HASH=$hash" >> "$GITHUB_ENV"
       - name: Build and restart on the VM
