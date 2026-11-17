@@ -123,7 +123,7 @@ A second instance runs on oe-vm (Contabo, Ubuntu), so clients can move off the l
 
 | Item | Where |
 |---|---|
-| Page | `https://everflow.217-76-49-98.sslip.io`, behind Everflow's own sign-in screen (email and password, 30-day session, lockout after 5 wrong attempts, Sign out in the header); the daemon itself still listens on `127.0.0.1:8789` |
+| Page | `https://flow.everbright.it` (the old `https://everflow.217-76-49-98.sslip.io` redirects there), behind Everflow's own sign-in screen (email and password, 30-day session, lockout after 5 wrong attempts, Sign out in the header); the daemon itself still listens on `127.0.0.1:8789` |
 | Triage and chat models | the VM's OpenCode setup is the laptop's: same versions, `opencode.jsonc` and plugins (instructions repo `setup/oracle-vm`); Meridian profiles are signed in on the VM itself |
 | Configuration | `deploy/vm/config.toml` in the repository, installed on every deploy; never edited on the VM |
 | Process | systemd user unit `everflow` of `aptul4ever`, restarted after a crash and at boot |

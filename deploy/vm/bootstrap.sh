@@ -5,7 +5,7 @@
 set -eu
 user=aptul4ever
 home=/home/$user
-domain=everflow.217-76-49-98.sslip.io
+domain=flow.everbright.it
 port=4449
 node=v26.4.0
 key=${1:?deploy public key required}
@@ -29,14 +29,16 @@ if [ "$(sudo -u "$user" "$home/.local/lib/node26/bin/node" -v 2>/dev/null)" != "
   rm -rf "$tmp"
 fi
 
-# sslh: this name to the Everflow Caddy, ahead of the catch-all that sends unnamed TLS to teams-caddy
-if ! grep -q "\"$domain\"" /etc/sslh.cfg; then
-  cp -p /etc/sslh.cfg /etc/sslh.cfg.pre-everflow
+# sslh: this name to the Everflow Caddy, ahead of the catch-all that sends unnamed TLS to teams-caddy. Lines for earlier
+# names stay (Caddy redirects them); the backup is per name, so the first one (.pre-everflow) is never overwritten.
+if ! grep -qF "\"$domain\"" /etc/sslh.cfg; then
+  backup=/etc/sslh.cfg.pre-$domain
+  cp -p /etc/sslh.cfg "$backup"
   awk -v line="    { name: \"tls\"; host: \"127.0.0.1\"; port: \"$port\"; sni_hostnames: [ \"$domain\" ]; }," '
-    !done && /name: "tls"; host: "127.0.0.1"; port: "4443"; }/ { print line; done = 1 } { print }' /etc/sslh.cfg.pre-everflow > /etc/sslh.cfg
-  grep -q "\"$domain\"" /etc/sslh.cfg || { cp -p /etc/sslh.cfg.pre-everflow /etc/sslh.cfg; echo "sslh catch-all line not found" >&2; exit 1; }
+    !done && /name: "tls"; host: "127.0.0.1"; port: "4443"; }/ { print line; done = 1 } { print }' "$backup" > /etc/sslh.cfg
+  grep -qF "\"$domain\"" /etc/sslh.cfg || { cp -p "$backup" /etc/sslh.cfg; echo "sslh catch-all line not found" >&2; exit 1; }
   if ! systemctl restart sslh || ! systemctl is-active --quiet sslh; then
-    cp -p /etc/sslh.cfg.pre-everflow /etc/sslh.cfg && systemctl restart sslh
+    cp -p "$backup" /etc/sslh.cfg && systemctl restart sslh
     echo "sslh did not start with the new line: previous config restored" >&2; exit 1
   fi
 fi
