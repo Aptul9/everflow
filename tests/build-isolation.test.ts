@@ -18,7 +18,7 @@ test('forbidden-input assertions detect Windows descendants without matching sib
 });
 
 test('npm install keeps the staged cache unless an absolute EVERFLOW_NPM_CACHE names a shared one', () => {
-  const staged = { npm_config_cache: '/stage/.private/npm-cache', PATH: '/bin' };
+  const staged = { npm_config_cache: '/stage/.private/npm-cache', PATH: '/bin', NODE_ENV: 'production' as const };
   expect(installEnvironment(staged, {}).npm_config_cache).toBe('/stage/.private/npm-cache');
   expect(installEnvironment(staged, { EVERFLOW_NPM_CACHE: 'relative/cache' }).npm_config_cache).toBe('/stage/.private/npm-cache');
   const shared = installEnvironment(staged, { EVERFLOW_NPM_CACHE: process.platform === 'win32' ? 'C:\\cache\\npm' : '/home/x/.cache/everflow-npm' });
