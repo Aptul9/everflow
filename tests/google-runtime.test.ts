@@ -87,6 +87,22 @@ test('teamsrelay without [oe] is source.oe-required; empty token file is source.
   for (const gone of ['--host', 'oe-vm', '--data-dir', '/srv/relay', '--owner', 'o@example.invalid']) expect(old.args).not.toContain(gone);
 });
 
+test('an endpoint the watchers would refuse fails at start: plain http off this machine, credentials in the url, a token with spaces', () => {
+  const f = scratch('oe-start-'), base = withOe(loadConfig(f.config)), receipt = process.env.TEST_BUILD_RECEIPT!;
+  const relay = { teamsrelay: { enabled: true } };
+  for (const url of ['http://teams.example/communication', 'https://u:p@teams.example/communication', 'https://teams.example/communication?x=1']) {
+    expect(() => validateRuntimeConfig({ ...base, oe: { ...base.oe!, url }, sources: relay }, receipt), url).toThrow('source.oe-url');
+  }
+  expect(() => validateRuntimeConfig({ ...base, oe: { ...base.oe!, url: 'http://127.0.0.1:8190' }, sources: relay }, receipt)).not.toThrow();
+  expect(() => validateRuntimeConfig({ ...withOe(base, 'two words'), sources: relay }, receipt)).toThrow('source.oe-token');
+});
+
+test('a host left under gmail or gchat is refused, so the read path never changes silently', () => {
+  const f = scratch('oe-host-'), cfg = withOe(loadConfig(f.config)), receipt = process.env.TEST_BUILD_RECEIPT!;
+  expect(() => validateRuntimeConfig({ ...cfg, sources: { gmail: { enabled: true, host: 'oe-vm', account: 'a@example.invalid' } } }, receipt)).toThrow('source.host-removed');
+  expect(() => validateRuntimeConfig({ ...cfg, sources: { gchat: { enabled: true, host: 'oe-vm', account: 'a@example.invalid', self_id: 'self', oe: true } } }, receipt)).toThrow('source.host-removed');
+});
+
 test('gmail with oe = false keeps the gws CLI path and gets no endpoint', () => {
   const f = scratch('oe-off-'), cfg = withOe(loadConfig(f.config)), receipt = process.env.TEST_BUILD_RECEIPT!;
   using db = openDb(f.path);

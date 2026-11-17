@@ -25,6 +25,7 @@ import { sourceAccounts } from './policy.ts';
 import { utc } from './time.ts';
 import { createKernel, sameProcess, spawnedIdentity } from '../windows/kernel.ts';
 import type { ProcessIdentity } from '../windows/kernel.ts';
+import { oeEndpoint } from '../watchers/oe-endpoint.ts';
 import { TEAMS_NODE_FLAGS } from '../watchers/teams.ts';
 import type { Source } from '../watchers/source.ts';
 import { inside, plainParents, readBuildReceipt } from '../web/build-artifact.ts';
@@ -53,12 +54,15 @@ type SourceValue = z.infer<typeof sourceSchema>;
 // Sources that read through the OE Copilot endpoint: always relay, OE mail and Slack; Gmail and Chat when `oe = true`
 const throughOe = (source: Source, value: SourceValue) => source === 'teamsrelay' || source === 'oemail' || source === 'slack' || (source === 'gmail' || source === 'gchat') && value.oe === true;
 
-// URL and token the watcher gets in its environment, never in its arguments
+// URL and token the watcher gets in its environment, never in its arguments; checked here as the watcher checks them
+// (oeEndpoint), so a value it would refuse stops the start instead of failing every OE source afterwards
 function oeEnvironment(cfg: Config): { EVERFLOW_OE_URL: string; EVERFLOW_OE_TOKEN: string } {
   if (!cfg.oe) throw new DaemonError('source.oe-required');
   let token = '';
   try { token = fs.readFileSync(cfg.oe.token_file, 'utf8').trim(); } catch { /* reported below */ }
-  if (!token) throw new DaemonError('source.oe-token');
+  if (!token || !/^[\x21-\x7e]+$/.test(token)) throw new DaemonError('source.oe-token');
+  try { oeEndpoint('teamsrelay', 'relay', { EVERFLOW_OE_URL: cfg.oe.url, EVERFLOW_OE_TOKEN: token }); }
+  catch { throw new DaemonError('source.oe-url'); }
   return { EVERFLOW_OE_URL: cfg.oe.url, EVERFLOW_OE_TOKEN: token };
 }
 
@@ -70,6 +74,8 @@ export function validateRuntimeConfig(cfg: Config, buildReceipt: string) {
     const value = parsed.data[source];
     if (!value?.enabled) continue;
     if (source === 'teams' && !value.profile) throw new DaemonError('source.profile-required');
+    // host chose the OE agent for these two before [oe]; ignoring it would move the source to the local CLI unannounced
+    if ((source === 'gmail' || source === 'gchat') && 'host' in value) throw new DaemonError('source.host-removed');
     if (source === 'oemail' && !value.accounts?.length) throw new DaemonError('source.oemail-options-required');
     // Gmail through the OE agent may list several mailboxes under accounts instead of one account.
     if ((source === 'gchat' || source === 'gmail') && !value.account && !(source === 'gmail' && value.oe && value.accounts?.length)) throw new DaemonError('source.google-account-required');
