@@ -1,8 +1,8 @@
 'use client';
 
-import { ExternalLink, LoaderCircle } from 'lucide-react';
+import { ExternalLink, LoaderCircle, XIcon } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
 
 export type OpenChat = (ticket: number) => Promise<{ session_id: string; directory: string }>;
 
@@ -27,23 +27,26 @@ export function ChatDialog(props: { ticket: { id: number; title: string; session
   }, [id, session, open, origin]);
   const encoded = encodeURIComponent(session ?? '');
   return <Dialog open={!!ticket} onOpenChange={(next) => { if (!next) props.onClose(); }}>
-    <DialogContent className="flex h-dvh max-h-dvh w-screen max-w-none flex-col gap-0 overflow-hidden rounded-none p-0 sm:h-[90vh] sm:w-[95vw] sm:max-w-none sm:rounded-lg">
-      <div className="flex min-w-0 items-center gap-3 border-b py-2 pr-12 pl-4">
-        <DialogTitle className="min-w-0 truncate text-sm leading-snug font-semibold">
-          <span className="mr-1.5 font-mono text-muted-foreground">#{ticket?.id}</span>{ticket?.title}
-        </DialogTitle>
-        <DialogDescription className="sr-only">Chat of this ticket in OpenChamber</DialogDescription>
-        <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-xs">
-          <a href={`openchamber://session/${encoded}`} aria-label={`Open the chat of ticket #${ticket?.id} in the OpenChamber app`}
-            className="rounded px-1.5 py-1 text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring">App</a>
-          <a href={`${origin}/?session=${encoded}`} target="_blank" rel="noopener" aria-label={`Open the chat of ticket #${ticket?.id} in OpenChamber`}
-            className="inline-flex items-center gap-1 rounded px-1.5 py-1 font-semibold text-primary underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring">
-            OpenChamber<ExternalLink aria-hidden="true" className="size-3" />
-          </a>
-        </span>
+    {/* The chat view already shows the session title, so the ticket title stays for screen readers only. Desktop: a column
+        as wide as the chat needs (its messages and composer stop near 900 px) and nearly as tall as the window, the links and
+        Close above it on the backdrop. Phone: full screen, links in a slim strip on top. */}
+    <DialogContent showCloseButton={false}
+      className="flex h-dvh max-h-dvh w-screen max-w-none flex-col gap-0 rounded-none p-0 sm:top-[calc(50%+1.25rem)] sm:h-[calc(100dvh-3.5rem)] sm:w-[min(1100px,96vw)] sm:max-w-none sm:rounded-lg">
+      <DialogTitle className="sr-only"><span>#{ticket?.id}</span>{ticket?.title}</DialogTitle>
+      <DialogDescription className="sr-only">Chat of this ticket in OpenChamber</DialogDescription>
+      <div className="flex shrink-0 items-center justify-end gap-1 border-b px-2 py-1 text-xs sm:absolute sm:right-0 sm:bottom-full sm:mb-1.5 sm:border-0 sm:p-0 sm:text-white">
+        <a href={`openchamber://session/${encoded}`} aria-label={`Open the chat of ticket #${ticket?.id} in the OpenChamber app`}
+          className="rounded px-2 py-1 underline-offset-2 opacity-80 hover:underline hover:opacity-100 focus-visible:outline-2 focus-visible:outline-ring">App</a>
+        <a href={`${origin}/?session=${encoded}`} target="_blank" rel="noopener" aria-label={`Open the chat of ticket #${ticket?.id} in OpenChamber`}
+          className="inline-flex items-center gap-1 rounded px-2 py-1 font-semibold underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring">
+          OpenChamber<ExternalLink aria-hidden="true" className="size-3" />
+        </a>
+        <DialogClose aria-label="Close" className="ml-1 inline-flex size-7 items-center justify-center rounded-md opacity-80 hover:bg-white/15 hover:opacity-100 focus-visible:outline-2 focus-visible:outline-ring">
+          <XIcon aria-hidden="true" className="size-4" />
+        </DialogClose>
       </div>
       {src ? <iframe key={src} src={src} title={`Chat of ticket #${ticket?.id}`} allow="clipboard-read; clipboard-write; microphone"
-        className="min-h-0 w-full flex-1 border-0 bg-background" />
+        className="min-h-0 w-full flex-1 border-0 bg-background sm:rounded-lg" />
         : <div className="flex flex-1 items-center justify-center p-6 text-sm">
           {error ? <p role="alert" className="max-w-md rounded-md bg-destructive-soft px-3 py-2 text-destructive">{error}</p>
             : <p role="status" className="inline-flex items-center gap-2 text-muted-foreground"><LoaderCircle aria-hidden="true" className="size-4 animate-spin" />Opening the chat...</p>}
