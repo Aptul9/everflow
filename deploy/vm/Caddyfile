@@ -25,10 +25,13 @@
 # Every request asks the daemon's loopback gate: with the everflow_session cookie (Domain = the page host) it answers 204
 # and the OpenChamber client token, copied upstream as Authorization; without one, 401 and the sign-in address to go to.
 # route keeps the order: a client's own Authorization is dropped before the gate's is set. Websockets (events, terminal)
-# go through the same gate and then upstream with the same Authorization.
+# go through the same gate and then upstream with the same Authorization. The page frames the ticket chat (mini-chat.html):
+# the policy replaces OpenChamber's own, which allows only its desktop and mobile shells.
 {$EVERFLOW_CHAT_DOMAIN} {
 	header {
+		defer
 		Strict-Transport-Security "max-age=31536000"
+		Content-Security-Policy "frame-ancestors 'self' https://{$EVERFLOW_DOMAIN}"
 		-Server
 	}
 	route {
