@@ -35,6 +35,22 @@ test('one quota read per Meridian proxy gives each named profile its verdict; ro
   ]);
 });
 
+test('a failed usage refresh is not an account problem: cached windows still decide, a rate-limited usage read leaves health alone', async () => {
+  const { cfg } = kbFixture();
+  cfg.triage.providers = ['stale', 'blind', 'full'];
+  const failure = { reason: 'rate_limited', consecutiveFailures: 1, lastFailureAt: AT };
+  const peer = fakeFetch(() => Response.json({ profiles: [
+    { id: 'notarify', windows: [{ type: 'five_hour', utilization: 0.04, resetsAt: RESET }], error: null, failure, stale: true },
+    { id: 'everbright', windows: [], error: 'rate_limited', failure },
+    { id: 'roar', windows: [{ type: 'five_hour', utilization: 1, resetsAt: RESET }], error: 'rate_limited', failure },
+  ] }));
+  const verdicts = await readAccounts(cfg, { fetch: peer.fetch, providers: { stale: route('notarify'), blind: route('everbright'), full: route('roar') } });
+  expect(verdicts).toEqual([
+    { id: 'stale', state: 'ok', usage: { five_hour: 0.04 } },
+    { id: 'full', state: 'limited', usage: { five_hour: 1 }, window: 'five_hour', resets_at: '2026-11-14T10:30:00.000Z' },
+  ]);
+});
+
 test.each([
   ['an unreachable Meridian', () => { throw new TypeError('fetch failed'); }, 'fetch failed'],
   ['a Meridian error status', () => new Response('nope', { status: 500 }), 'Meridian quota HTTP 500'],

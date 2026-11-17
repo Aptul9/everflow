@@ -8,10 +8,12 @@ import { utc } from './time.ts';
 
 // Meridian answers for its accounts: one quota read per proxy says whether each triage route can serve now, so the health row and
 // failover follow the account instead of the last triage call. Routes without an x-meridian-profile header keep call-based health.
-export const ACCOUNT_CHECK_MS = 60_000;
+// Each read makes Meridian ask Anthropic's usage endpoint for every profile once its 30 s cache is gone, and that endpoint rate limits
+// per account across every Meridian signed into it; a limit hit between checks still reaches failover through the triage call itself.
+export const ACCOUNT_CHECK_MS = 5 * 60_000;
 
 const windowSchema = z.looseObject({ type: z.string(), utilization: z.number().nullish(), resetsAt: z.number().nullish() });
-const quotaSchema = z.looseObject({ profiles: z.array(z.looseObject({ id: z.string(), error: z.unknown().optional(), failure: z.unknown().optional(),
+const quotaSchema = z.looseObject({ profiles: z.array(z.looseObject({ id: z.string(), error: z.unknown().optional(),
   windows: z.array(windowSchema).nullish() })) });
 
 export type Usage = Partial<Record<'five_hour' | 'seven_day', number>>;
@@ -57,12 +59,14 @@ export async function readAccounts(cfg: Config, options: { providers?: Readonly<
       const windows = found.windows ?? [];
       const usage: Usage = Object.fromEntries(windows.filter((item) => (item.type === 'five_hour' || item.type === 'seven_day') && typeof item.utilization === 'number')
         .map((item) => [item.type, item.utilization]));
-      const error = problem(found.error) ?? problem(found.failure);
+      // `failure` is only the last refresh that failed: with no `error` Meridian still serves its cached windows. `rate_limited` is the
+      // usage endpoint refusing, not the account, so without a full window the health row stays with the triage calls.
+      const error = problem(found.error);
       // The window that frees up last decides when the account can serve again
       const full = windows.filter((item) => (item.utilization ?? 0) >= 1 && typeof item.resetsAt === 'number').sort((a, b) => b.resetsAt! - a.resetsAt!)[0];
-      if (error) verdicts.push({ id: route.id, state: 'unavailable', error: `Meridian: ${error}`, usage });
+      if (error && error !== 'rate_limited') verdicts.push({ id: route.id, state: 'unavailable', error: `Meridian: ${error}`, usage });
       else if (full) verdicts.push({ id: route.id, state: 'limited', usage, window: full.type, resets_at: new Date(full.resetsAt!).toISOString() });
-      else verdicts.push({ id: route.id, state: 'ok', usage });
+      else if (!error) verdicts.push({ id: route.id, state: 'ok', usage });
     }
   }
   return verdicts;
