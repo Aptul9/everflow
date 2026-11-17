@@ -38,9 +38,10 @@ rm -rf "$release.new" && mkdir -p "$release.new"
 tar xzf "$archive" -C "$release.new"
 rm -rf "$release" && mv "$release.new" "$release" && rm -f "$archive"
 
-# source-only staged build, as on the laptop; its receipt path is the last JSON line
+# source-only staged build, as on the laptop; its receipt path is the last JSON line. The npm tarball cache outlives the release.
 build_log=$root/build-$commit.log
-(cd "$release" && node scripts/build.ts) > "$build_log" 2>&1 || { tail -20 "$build_log" >&2; echo "build failed" >&2; exit 1; }
+mkdir -p "$HOME/.cache/everflow-npm"
+(cd "$release" && EVERFLOW_NPM_CACHE="$HOME/.cache/everflow-npm" node scripts/build.ts) > "$build_log" 2>&1 || { tail -20 "$build_log" >&2; echo "build failed" >&2; exit 1; }
 receipt=$(sed -n 's/^{"buildReceipt":"\(.*\)"}$/\1/p' "$build_log" | tail -n 1)
 [ -f "$receipt" ] || { echo "build wrote no receipt" >&2; exit 1; }
 echo "built $receipt"

@@ -89,6 +89,14 @@ export function isolatedEnvironment(root: string, base: Record<string, string | 
     npm_config_prefix: join(root, '.private', 'npm-prefix'), npm_config_update_notifier: 'false', npm_config_audit: 'false', npm_config_fund: 'false' });
 }
 
+// npm ci only: EVERFLOW_NPM_CACHE (absolute) keeps the tarball cache across builds, so a deploy does not download every package
+// again; npm checks each cached tarball against the lockfile integrity. Fewer sockets and more retries for a slow registry path.
+export function installEnvironment(env: NodeJS.ProcessEnv, base: Record<string, string | undefined>): NodeJS.ProcessEnv {
+  const cache = base.EVERFLOW_NPM_CACHE;
+  return { ...env, ...(cache && isAbsolute(cache) ? { npm_config_cache: cache } : {}),
+    npm_config_maxsockets: '6', npm_config_fetch_retries: '5', npm_config_fetch_retry_maxtimeout: '120000' };
+}
+
 export function containedLinks(root: string): number {
   let links = 0;
   const checkedTarget = (link: string, seen: Set<string>): string => {
@@ -151,10 +159,10 @@ export function build(source: string): string {
   const logs = join(tree.root, 'build-logs');
   fs.mkdirSync(logs);
   console.log(JSON.stringify({ stage: tree.root, status: 'prepared', sourceFiles: tree.files.length }));
-  const run = (name: string, args: string[]) => {
+  const run = (name: string, args: string[], runEnv: NodeJS.ProcessEnv = env) => {
     const fd = fs.openSync(join(logs, `${name}.log`), 'wx');
     try {
-      const result = spawnSync(process.execPath, args, { cwd: tree.root, env, windowsHide: true, stdio: ['ignore', fd, fd], timeout: 600_000 });
+      const result = spawnSync(process.execPath, args, { cwd: tree.root, env: runEnv, windowsHide: true, stdio: ['ignore', fd, fd], timeout: 600_000 });
       if (result.error) throw result.error;
       if (result.status !== 0) throw new Error(`${name} failed (${result.status}); inspect its staged build log`);
     } finally { fs.closeSync(fd); }
@@ -162,7 +170,7 @@ export function build(source: string): string {
   // npm of the running Node distribution: beside node.exe on Windows, under <prefix>/lib on Linux
   const npm = process.platform === 'win32' ? join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js')
     : join(dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  run('install', [npm, 'ci', '--include=dev', '--foreground-scripts', '--no-audit', '--no-fund']);
+  run('install', [npm, 'ci', '--include=dev', '--foreground-scripts', '--no-audit', '--no-fund'], installEnvironment(env, process.env));
   containedLinks(tree.root);
   // winax is an optional Windows-only dependency: Linux builds have no COM bridge to verify
   if (process.platform === 'win32') run('native-check', ['scripts/setup.ts', '--verify-only', '--log', join(logs, 'native-config.json.log')]);
