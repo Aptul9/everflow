@@ -325,7 +325,7 @@ The oe-vm instance is declared in `deploy/vm` and deployed by `.github/workflows
 |---|---|
 | `config.toml` | Instance config, installed into `~aptul4ever/everflow/instance` on every deploy; triage routes come from the VM `opencode.jsonc`, the laptop's file mirrored by the instructions repo `setup/oracle-vm/push-opencode.ps1` |
 | `everflow.service`, `run.sh` | systemd user unit of `aptul4ever`; the daemon runs `_run` in the foreground on the build pinned in `build.txt`, restarts on failure |
-| `Caddyfile`, `compose.yml` | `everflow-caddy`: TLS (TLS-ALPN through sslh) for `https://everflow.217-76-49-98.sslip.io`, proxy to `127.0.0.1:8789` |
+| `Caddyfile`, `compose.yml` | `everflow-caddy`: TLS (TLS-ALPN through sslh) for `https://flow.everbright.it`, proxy to `127.0.0.1:8789`; the former `https://everflow.217-76-49-98.sslip.io` answers 301 to the same path there |
 | `receive.sh` | Forced command of the pipeline key: verifies the archive, builds, installs the files above and the sign-in account (`login.env`), pins, restarts, rolls back when the page does not answer |
 | `bootstrap.sh` | One-time root setup: Docker group, Node `26.4.0` in `~/.local/lib/node26`, sslh SNI line, deploy key, relay key |
 | `relay-read.sh` | Forced command of the loopback root key behind the `everflow-relay` SSH alias: read-only `sqlite3` on `/opt/teamsrelay/data` only, alone or as the stores of one relay batch, since some slot folders are root-only. Not deployed by the pipeline: reinstall with `install -m 755 deploy/vm/relay-read.sh /usr/local/sbin/everflow-relay-read` as root |

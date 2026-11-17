@@ -20,3 +20,8 @@
 	# X-Forwarded-For carries the client address the sign-in lockout counts by
 	reverse_proxy 127.0.0.1:8789
 }
+
+# Former address: its sslh line stays on the VM, so old bookmarks land here and move to the current one
+everflow.217-76-49-98.sslip.io {
+	redir https://{$EVERFLOW_DOMAIN}{uri} permanent
+}

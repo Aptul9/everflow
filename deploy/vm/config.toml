@@ -34,7 +34,7 @@ lookback_minutes = 0
 [web]
 port = 8789
 # Caddy (deploy/vm/Caddyfile) serves the page here over TLS; the daemon asks for its own sign-in under this host and stays on 127.0.0.1
-public_origin = "https://everflow.217-76-49-98.sslip.io"
+public_origin = "https://flow.everbright.it"
 
 [sources.outlook]
 enabled = false
