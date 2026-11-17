@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { delimiter, join, win32 } from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
-import { containedLinks, createBuildTree, inspectBuildArtifacts, isolatedEnvironment } from '../scripts/build.ts';
+import { containedLinks, createBuildTree, inspectBuildArtifacts, installEnvironment, isolatedEnvironment } from '../scripts/build.ts';
 import { BUILD_PARENT, buildConfiguration, readBuildReceipt } from '../src/web/build-artifact.ts';
 import { SCRATCH } from './support.ts';
 
@@ -15,6 +15,15 @@ function visitedWithin(path: string, root: string): boolean {
 test('forbidden-input assertions detect Windows descendants without matching sibling prefixes', () => {
   expect(visitedWithin('C:\\synthetic\\data\\nested\\held.db', 'C:\\synthetic\\data')).toBe(true);
   expect(visitedWithin('C:\\synthetic\\data-other\\held.db', 'C:\\synthetic\\data')).toBe(false);
+});
+
+test('npm install keeps the staged cache unless an absolute EVERFLOW_NPM_CACHE names a shared one', () => {
+  const staged = { npm_config_cache: '/stage/.private/npm-cache', PATH: '/bin', NODE_ENV: 'production' as const };
+  expect(installEnvironment(staged, {}).npm_config_cache).toBe('/stage/.private/npm-cache');
+  expect(installEnvironment(staged, { EVERFLOW_NPM_CACHE: 'relative/cache' }).npm_config_cache).toBe('/stage/.private/npm-cache');
+  const shared = installEnvironment(staged, { EVERFLOW_NPM_CACHE: process.platform === 'win32' ? 'C:\\cache\\npm' : '/home/x/.cache/everflow-npm' });
+  expect(shared.npm_config_cache).not.toBe('/stage/.private/npm-cache');
+  expect(shared).toMatchObject({ PATH: '/bin', npm_config_maxsockets: '6', npm_config_fetch_retries: '5' });
 });
 
 function sourceFixture() {
