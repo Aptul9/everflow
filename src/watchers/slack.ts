@@ -1,48 +1,28 @@
 import { z } from 'zod';
-import { parseOeOutput } from './oemail.ts';
-import { sshRun } from './relay.ts';
+import { oeEndpoint, oeRequest } from './oe-endpoint.ts';
+import type { OeEndpoint } from './oe-endpoint.ts';
 import { accountNames, emitChanged, isEntrypoint, publishAccounts, requiredOption, runSource, sourceStamp, sourceText, SourceError, watcherArguments, writeDiagnostic, writeRecord } from './source.ts';
 import type { Emit, SourceMessage } from './source.ts';
 
 // One Slack workspace read with the browser session slackcli keeps on the OE host (xoxc token and d cookie in its
-// workspaces.json, renewed there by autologin oe-slack). The Web API calls run on that host with curl, so the session never
-// leaves it. Read-only methods only; nothing is marked read.
+// workspaces.json, renewed there by autologin oe-slack). The Web API calls go through the OE endpoint (/everflow/slack),
+// so the session never leaves that host. Read-only methods only; nothing is marked read.
 export interface SlackRequest { method: string; params?: Record<string, string> }
 export type SlackCall = (requests: SlackRequest[], signal?: AbortSignal) => Promise<unknown[]>;
 
 const READ_METHODS = new Set(['auth.test', 'client.counts', 'subscriptions.thread.getView', 'conversations.history', 'conversations.replies', 'conversations.info', 'users.info']);
-const STORE = '/opt/communication-mcp-state/slackcli/workspaces.json';
-const B64 = (text: string) => Buffer.from(text).toString('base64');
+const responsesSchema = z.object({ responses: z.array(z.object({ status: z.number().int(), body: z.string() })) });
 
-export function slackCommand(workspace: string, requests: SlackRequest[], store = STORE): string {
-  if (!/^T[A-Z0-9]+$/.test(workspace) || !/^\/[\w./-]+$/.test(store) || requests.some((r) => !READ_METHODS.has(r.method))) throw new SourceError('slack', 'slack.invalid-argument');
-  const entries = requests.map((r) => `${r.method}:${B64(new URLSearchParams(r.params ?? {}).toString())}`).join(' ');
-  const curl = `curl -sg --noproxy '*' --max-time 30 -H @"$t/h" -H 'Content-Type: application/x-www-form-urlencoded' -o "$t/o" -w '%{http_code}'`;
-  const script = [
-    'set -eu',
-    `w=$(jq -c --arg w ${workspace} '.workspaces[$w] // empty' ${store})`,
-    '[ -n "$w" ] || exit 2',
-    't=$(mktemp -d); chmod 700 "$t"; trap \'rm -rf "$t"\' EXIT',
-    // The d cookie is stored decoded; Slack only takes it URL-encoded, as a browser sends it.
-    'printf \'Authorization: Bearer %s\\nCookie: d=%s\\n\' "$(printf %s "$w" | jq -j .xoxc_token)" "$(printf %s "$w" | jq -j .xoxd_token | jq -sRr @uri)" > "$t/h"',
-    'u=$(printf %s "$w" | jq -j \'.workspace_url | rtrimstr("/")\')',
-    `for r in ${entries}; do`,
-    '  m=${r%%:*}; p=$(printf %s "${r#*:}" | base64 -d); : > "$t/o"',
-    `  c=$(printf %s "$p" | ${curl} --data-binary @- "$u/api/$m") || c=000`,
-    '  printf \'%s %s\\n\' "${c:-000}" "$(base64 -w0 < "$t/o")"',
-    'done',
-  ].join('\n');
-  // Script and requests travel as base64, so the remote shell never interprets request data.
-  return `bash -c "$(printf %s '${B64(script)}' | base64 -d)"`;
-}
-
-export function sshSlackCall(host: string, workspace: string, store?: string): SlackCall {
+export function httpSlackCall(endpoint: OeEndpoint, workspace: string): SlackCall {
+  if (!/^T[A-Z0-9]+$/.test(workspace)) throw new SourceError('slack', 'slack.invalid-argument');
   return async (requests, signal) => {
+    if (requests.some((r) => !READ_METHODS.has(r.method))) throw new SourceError('slack', 'slack.invalid-argument');
     const out: unknown[] = [];
     for (let at = 0; at < requests.length; at += 25) {
       const chunk = requests.slice(at, at + 25);
-      const output = await sshRun('slack', 'slack', { host, timeoutMs: 120_000, maxBytes: 32 * 1024 * 1024 }, slackCommand(workspace, chunk, store), signal);
-      for (const [index, response] of parseOeOutput(output.toString('utf8'), chunk.length, 'slack').entries()) {
+      const answer = responsesSchema.safeParse(await oeRequest('slack', 'slack', endpoint, 'slack', { method: 'POST', body: { workspace, requests: chunk } }, signal, { timeoutMs: 120_000 }));
+      if (!answer.success || answer.data.responses.length !== chunk.length) throw new SourceError('slack', 'slack.response-shape');
+      for (const [index, response] of answer.data.responses.entries()) {
         let body: any;
         try { body = JSON.parse(response.body); } catch { throw new SourceError('slack', 'slack.response-json', undefined, response.status); }
         // 429 and 5xx are dependency failures (backoff); invalid_auth and the like name the cause in the reason.
@@ -184,10 +164,10 @@ export async function scanSlack(call: SlackCall, state: SlackState, emit: Emit, 
 }
 
 export async function slackMain(args = process.argv.slice(2)): Promise<number> {
-  const options = watcherArguments(args, { host: { type: 'string' }, account: { type: 'string' }, 'self-id': { type: 'string' }, workspace: { type: 'string' }, store: { type: 'string' } });
+  const options = watcherArguments(args, { account: { type: 'string' }, 'self-id': { type: 'string' }, workspace: { type: 'string' } });
   const state = createSlackState({ account: requiredOption(options.values, 'account'), selfId: requiredOption(options.values, 'self-id'), workspace: requiredOption(options.values, 'workspace'),
     since: options.since, expectedAccounts: options.expectedAccounts });
-  const call = sshSlackCall(requiredOption(options.values, 'host'), state.workspace, options.values.store);
+  const call = httpSlackCall(oeEndpoint('slack', 'slack'), state.workspace);
   return runSource('slack', options, (signal) => scanSlack(call, state, writeRecord, undefined, signal));
 }
 

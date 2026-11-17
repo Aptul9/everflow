@@ -1,5 +1,7 @@
-import { expect, test } from 'vitest';
-import { createSlackState, scanSlack, slackCommand } from '../src/watchers/slack.ts';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { expect, test, vi } from 'vitest';
+import { createSlackState, httpSlackCall, scanSlack, slackMain } from '../src/watchers/slack.ts';
 import type { SlackRequest } from '../src/watchers/slack.ts';
 import type { SourceRecord } from '../src/watchers/source.ts';
 
@@ -66,12 +68,73 @@ test('Slack fails closed on another user or team and on malformed answers, witho
   }
 });
 
-test('the remote Slack command allows only read methods and carries requests as base64', () => {
-  const command = slackCommand('T0250U10X', [{ method: 'conversations.history', params: { channel: "C1'; rm -rf /", oldest: '1.0' } }]);
-  expect(command).toMatch(/^bash -c "\$\(printf %s '[A-Za-z0-9+/=]+' \| base64 -d\)"$/);
-  expect(command).not.toContain('rm -rf');
-  expect(() => slackCommand('T0250U10X', [{ method: 'chat.postMessage' }])).toThrow('slack.invalid-argument');
-  expect(() => slackCommand('not-a-team', [{ method: 'auth.test' }])).toThrow('slack.invalid-argument');
-  expect(() => slackCommand('T0250U10X', [{ method: 'auth.test' }], "/x'; y")).toThrow('slack.invalid-argument');
+test('slack state refuses a user id that is not one', () => {
   expect(() => createSlackState({ account, selfId: 'not-a-user', workspace: 'TTEAM', since })).toThrow('slack.invalid-options');
+});
+
+const TOKEN = 'everflow-token-0123456789abcdef0123456789';
+
+async function endpoint(answer: (request: SlackRequest) => { status: number; body: string }) {
+  const seen: { url: string; auth: string; body: { workspace: string; requests: SlackRequest[] } }[] = [];
+  const server = createServer((req, res) => {
+    let text = '';
+    req.on('data', (chunk) => { text += chunk; });
+    req.on('end', () => {
+      const body = JSON.parse(text);
+      seen.push({ url: req.url!, auth: req.headers.authorization!, body });
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ responses: body.requests.map(answer) }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, seen, close: () => { server.closeAllConnections(); server.close(); } };
+}
+
+test('httpSlackCall posts the workspace and requests to /everflow/slack and parses each answer', async () => {
+  const oe = await endpoint((r) => ({ status: 200, body: JSON.stringify({ ok: true, method: r.method }) }));
+  try {
+    const call = httpSlackCall({ url: oe.url, token: TOKEN }, 'T0250U10X');
+    const requests: SlackRequest[] = [{ method: 'auth.test' }, { method: 'conversations.history', params: { channel: 'C1', oldest: '1.0' } }];
+    expect(await call(requests)).toEqual([{ ok: true, method: 'auth.test' }, { ok: true, method: 'conversations.history' }]);
+    expect(oe.seen).toEqual([{ url: '/everflow/slack', auth: `Bearer ${TOKEN}`, body: { workspace: 'T0250U10X', requests } }]);
+  } finally { oe.close(); }
+});
+
+test('httpSlackCall: ok false is slack.api with method:error, a 429 passes through as slack.api 429, non-JSON is slack.response-json', async () => {
+  const cases: [{ status: number; body: string }, Record<string, unknown>][] = [
+    [{ status: 200, body: '{"ok":false,"error":"invalid_auth"}' }, { code: 'slack.api', status: 400, reason: 'conversations.history:invalid_auth' }],
+    [{ status: 429, body: '{"ok":false,"error":"ratelimited"}' }, { code: 'slack.api', status: 429, reason: 'conversations.history:ratelimited' }],
+    [{ status: 502, body: '<html>' }, { code: 'slack.response-json', status: 502 }],
+  ];
+  for (const [answer, expected] of cases) {
+    const oe = await endpoint(() => answer);
+    try {
+      await expect(httpSlackCall({ url: oe.url, token: TOKEN }, 'T0250U10X')([{ method: 'conversations.history', params: { channel: 'C1' } }])).rejects.toMatchObject(expected);
+    } finally { oe.close(); }
+  }
+});
+
+test('httpSlackCall sends at most 25 requests per call and refuses anything but read methods before any call', async () => {
+  const oe = await endpoint((r) => ({ status: 200, body: JSON.stringify({ ok: true, user: { id: r.params!.user } }) }));
+  try {
+    const call = httpSlackCall({ url: oe.url, token: TOKEN }, 'T0250U10X');
+    const requests = Array.from({ length: 26 }, (_, i) => ({ method: 'users.info', params: { user: `U${i}` } }));
+    expect(await call(requests)).toHaveLength(26);
+    expect(oe.seen.map((s) => s.body.requests.length)).toEqual([25, 1]);
+    oe.seen.length = 0;
+    await expect(call([{ method: 'auth.test' }, { method: 'chat.postMessage' }])).rejects.toMatchObject({ code: 'slack.invalid-argument' });
+    expect(() => httpSlackCall({ url: oe.url, token: TOKEN }, 'not-a-team')).toThrow('slack.invalid-argument');
+    expect(oe.seen).toEqual([]);
+  } finally { oe.close(); }
+});
+
+test('the slack watcher takes the endpoint from its environment and no longer knows --host or --store', async () => {
+  const errors = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+  try {
+    vi.stubEnv('EVERFLOW_OE_URL', ''); vi.stubEnv('EVERFLOW_OE_TOKEN', TOKEN);
+    const args = ['--since', since, '--once', '--account', account, '--self-id', 'UME', '--workspace', 'T0250U10X'];
+    await expect(slackMain(args)).rejects.toMatchObject({ code: 'slack.oe-config' });
+    await expect(slackMain([...args, '--host', 'oe-vm'])).rejects.toThrow();
+    await expect(slackMain([...args, '--store', '/x'])).rejects.toThrow();
+  } finally { errors.mockRestore(); vi.unstubAllEnvs(); }
 });
