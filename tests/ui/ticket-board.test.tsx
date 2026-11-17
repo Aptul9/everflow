@@ -259,6 +259,26 @@ test('a ticket with a chat says where the chat is, from the moment it opens', ()
   expect(open.getAttribute('href')).toBe('openchamber://session/ses_synthetic123');
   expect(open.textContent).toBe('Open');
   expect(within(ticket()).queryByRole('link', { name: /in OpenChamber/ })).toBeNull();
+  expect(within(card).queryByRole('link', { name: /OpenChamber web/ })).toBeNull();
+});
+
+test('with a chat origin the card opens the chat in the app or in OpenChamber web', () => {
+  const state = uiState();
+  Object.assign(state.groups.working[0]!, { session_id: 'ses_synthetic123', chat_running: true });
+  state.chat_origin = 'https://chat.everflow.example.invalid';
+  board(state);
+  const card = screen.getByRole('article', { name: 'Ticket #3: Active work' });
+  expect(within(card).getByText('Chat working now, project Vault')).toBeTruthy();
+  expect(within(card).queryByRole('link', { name: 'Open the chat of ticket #3 in OpenChamber' })).toBeNull();
+  const app = within(card).getByRole('link', { name: 'Open the chat of ticket #3 in the OpenChamber app' });
+  expect(app.getAttribute('href')).toBe('openchamber://session/ses_synthetic123');
+  expect(app.textContent).toBe('App');
+  expect(app.getAttribute('target')).toBeNull();
+  const web = within(card).getByRole('link', { name: 'Open the chat of ticket #3 in OpenChamber web' });
+  expect(web.getAttribute('href')).toBe('https://chat.everflow.example.invalid/?session=ses_synthetic123');
+  expect(web.textContent).toBe('Web');
+  expect(web.getAttribute('target')).toBe('_blank');
+  expect(web.getAttribute('rel')).toBe('noopener');
 });
 
 test('a ticket whose chat is running says so on the card', () => {
