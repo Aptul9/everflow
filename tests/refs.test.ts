@@ -12,7 +12,7 @@ function ticket(db: DatabaseSync) {
 }
 
 test('normalizes Jira keys with the retained project and number boundaries', () => {
-  expect(extractRefs('rca-12 AB-1 a1b2c3d4e5-1234567 A-1 ABCDEFGHIJK-1 AB-0 AB-01 AB-12345678', 'message'))
+  expect(extractRefs('RCA-12 AB-1 A1B2C3D4E5-1234567 A-1 ABCDEFGHIJK-1 AB-0 AB-01 AB-12345678', 'message'))
     .toEqual([
       { kind: 'jira', key: 'RCA-12', url: null, seen_in: 'message' },
       { kind: 'jira', key: 'AB-1', url: null, seen_in: 'message' },
@@ -20,7 +20,11 @@ test('normalizes Jira keys with the retained project and number boundaries', () 
     ]);
 });
 
-test.each(['UTF', 'ISO', 'SHA', 'RFC', 'TLS', 'SSL', 'AES', 'RSA', 'HTTP', 'WIN', 'COVID', 'CVE', 'GPT', 'PCI', 'MD'])(
+test('lower- or mixed-case words in prose are no Jira keys', () => {
+  expect(extractRefs('rca-12 node-20 Rhel-9 on python-3', 'message')).toEqual([]);
+});
+
+test.each(['UTF', 'ISO', 'SHA', 'RFC', 'TLS', 'SSL', 'AES', 'RSA', 'HTTP', 'WIN', 'COVID', 'CVE', 'GPT', 'PCI', 'MD', 'PR', 'SSH'])(
   'retains the full Jira exclusion prefix %s', (prefix) => {
     expect(extractRefs(`${prefix}-123 ${prefix.toLowerCase()}-1 RCA-12`, 'message').map((ref: { key: string }) => ref.key)).toEqual(['RCA-12']);
   },
@@ -34,12 +38,16 @@ test('base64 and base64url payloads are not decoded into ticket references or co
 });
 
 test('extracts ServiceNow kinds without losing zero padding and deduplicates repeats', () => {
-  expect(extractRefs('inc0012345 CHG000123 RITM0000007 task42 INC0012345 XINC123 INC-123', 'chat'))
+  expect(extractRefs('inc0012345 CHG000123 RITM0000007 task42 SCTASK0939152 CTASK0169675 PRB0040001 REQ0012345 INC0012345 XINC123 INC-123', 'chat'))
     .toEqual([
       { kind: 'snow', key: 'INC0012345', url: null, seen_in: 'chat' },
       { kind: 'snow', key: 'CHG000123', url: null, seen_in: 'chat' },
       { kind: 'snow', key: 'RITM0000007', url: null, seen_in: 'chat' },
       { kind: 'snow', key: 'TASK42', url: null, seen_in: 'chat' },
+      { kind: 'snow', key: 'SCTASK0939152', url: null, seen_in: 'chat' },
+      { kind: 'snow', key: 'CTASK0169675', url: null, seen_in: 'chat' },
+      { kind: 'snow', key: 'PRB0040001', url: null, seen_in: 'chat' },
+      { kind: 'snow', key: 'REQ0012345', url: null, seen_in: 'chat' },
       { kind: 'jira', key: 'INC-123', url: null, seen_in: 'chat' },
     ]);
 });

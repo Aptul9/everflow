@@ -256,6 +256,17 @@ export interface Candidate {
   recent: boolean;
 }
 
+// One person across sources: the same person row, or the same name of two words or more in any order, as the relay's
+// Teams display name ("irene laudanna") carries no address while the mail of the same person reads "Laudanna Irene"
+function personKeys(message: Pick<Message, 'person' | 'sender' | 'sender_name'>): string[] {
+  const keys = message.person === null ? [] : [`person:${message.person}`];
+  const name = message.sender_name || (message.sender?.includes('@') ? '' : message.sender ?? '');
+  const words = name.normalize('NFKD').replace(/\p{M}/gu, '').replace(/\([^)]*\)/g, ' ').toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u).filter(Boolean).sort();
+  if (words.length >= 2) keys.push(`name:${words.join(' ')}`);
+  return keys;
+}
+
 // Tickets one triage call may see, so the prompt stays bounded whatever the volume
 export const MAX_CANDIDATES = 30;
 
@@ -263,10 +274,13 @@ export function candidates(db: DatabaseSync, cfg: Config, batch: number, at?: st
   const row = getBatch(db, batch);
   const clients = batchClients(db, cfg, batch);
   const references = new Set(refMatches(db, batchRefs(db, row)));
+  const people = new Set(batchMessages(db, batch).filter((message) => !message.sender_is_me).flatMap(personKeys));
   const shared = new Set<number>();
-  for (const message of batchMessages(db, batch).filter((message) => message.person !== null && !message.sender_is_me)) {
-    for (const match of db.prepare(`SELECT DISTINCT l.ticket FROM message m JOIN ticket_conversation l ON l.conversation=m.conversation
-      WHERE m.person=? AND m.source=? AND m.sender_is_me=0`).all(message.person, message.source)) shared.add(Number(match.ticket));
+  if (people.size) {
+    for (const match of db.prepare(`SELECT DISTINCT l.ticket,m.person,m.sender,m.sender_name FROM message m
+      JOIN ticket_conversation l ON l.conversation=m.conversation WHERE m.sender_is_me=0`).all()) {
+      if (personKeys(match as unknown as Message).some((key) => people.has(key))) shared.add(Number(match.ticket));
+    }
   }
   const cutoff = daysBefore(utc(at), cfg.jobs.reopen_days);
   // Customers never share tickets: a batch of a known client only sees that client's tickets
@@ -805,7 +819,7 @@ export interface TicketRef {
   seen_in: 'message' | 'chat';
 }
 
-const excludedProjects = new Set(['UTF', 'ISO', 'SHA', 'RFC', 'TLS', 'SSL', 'AES', 'RSA', 'HTTP', 'WIN', 'COVID', 'CVE', 'GPT', 'PCI', 'MD']);
+const excludedProjects = new Set(['UTF', 'ISO', 'SHA', 'RFC', 'TLS', 'SSL', 'AES', 'RSA', 'HTTP', 'WIN', 'COVID', 'CVE', 'GPT', 'PCI', 'MD', 'PR', 'SSH']);
 
 function cleanUrl(text: string): string {
   let value = text.replace(/[.,;:!?]+$/, '');
@@ -864,11 +878,13 @@ export function extractRefs(text: string, seenIn: TicketRef['seen_in']): TicketR
   }
   for (const [kind, pattern] of [
     ['jira', /\b([a-z][a-z0-9]{1,9})-[1-9]\d{0,6}\b/gi],
-    ['snow', /\b(?:INC|CHG|RITM|TASK)\d+\b/gi],
+    ['snow', /\b(?:INC|CHG|RITM|SCTASK|CTASK|TASK|PRB|REQ)\d+\b/gi],
   ] as const) {
     for (const match of text.matchAll(pattern)) {
       if (kind === 'jira' && excludedProjects.has(match[1]!.toUpperCase())) continue;
       const url = urls.find((entry) => match.index >= entry.start && match.index < entry.end)?.url.href ?? null;
+      // Jira writes keys in capitals; a lower-case word-dash-number in prose (node-20, rhel-9) is no key
+      if (kind === 'jira' && !url && match[1] !== match[1]!.toUpperCase()) continue;
       found.push({ at: match.index, ref: { kind, key: match[0].toUpperCase(), url, seen_in: seenIn } });
     }
   }
