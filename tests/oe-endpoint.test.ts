@@ -92,6 +92,12 @@ test('body over maxBytes is result-limit, never a cut parse', async () => {
   expect(await oeRequest('teamsrelay', 'relay', { url, token: TOKEN }, 'teams', { method: 'GET' }, undefined, { maxBytes: 1203 })).toHaveLength(601);
 });
 
+test('507 from the endpoint (its answer over the cap) is result-limit, not http-failed', async () => {
+  const url = await serve((_req, res) => { res.statusCode = 507; res.end('{"error":"answer too large"}'); });
+  const error = await failure(oeRequest('oemail', 'oemail', { url, token: TOKEN }, 'agent', { method: 'POST', body: {} }));
+  expect([error.code, error.status]).toEqual(['oemail.result-limit', 507]);
+});
+
 test('slow server is timeout, aborted signal is aborted, non-JSON body is response-json', async () => {
   const slow = await serve((_req, res) => { setTimeout(() => res.end('{}'), 2000); });
   expect((await failure(oeRequest('oemail', 'oemail', { url: slow, token: TOKEN }, 'agent', { method: 'POST', body: {} }, undefined, { timeoutMs: 100 }))).code).toBe('oemail.timeout');

@@ -19,7 +19,7 @@ export function oeEndpoint(source: Source, prefix: string, env: Record<string, s
 }
 
 // One call to <url>/everflow/<route>. Transport failures carry the caller's prefix: http-failed (network error, redirect
-// or non-2xx from the endpoint itself, status kept), timeout, aborted, result-limit (body past maxBytes, never cut),
+// or non-2xx from the endpoint itself, status kept), timeout, aborted, result-limit (body past maxBytes, never cut, or 507),
 // response-json.
 export async function oeRequest(source: Source, prefix: string, endpoint: OeEndpoint, route: string,
   init: { method: 'GET' | 'POST'; body?: unknown; query?: Record<string, string> }, signal?: AbortSignal,
@@ -43,7 +43,8 @@ export async function oeRequest(source: Source, prefix: string, endpoint: OeEndp
       ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }) });
     if (!response.ok) {
       await response.body?.cancel().catch(() => {});
-      throw new SourceError(source, `${prefix}.http-failed`, undefined, response.status);
+      // 507: the endpoint's own answer would exceed its cap (OE-Copilot mcp/src/everflow.rs)
+      throw new SourceError(source, `${prefix}.${response.status === 507 ? 'result-limit' : 'http-failed'}`, undefined, response.status);
     }
     const declared = Number(response.headers.get('content-length') ?? NaN);
     if (declared > maxBytes) {
