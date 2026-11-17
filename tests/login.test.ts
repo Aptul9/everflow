@@ -1,6 +1,6 @@
 import { appendFileSync, statSync } from 'node:fs';
 import { expect, test } from 'vitest';
-import { cookieValue, hashPassword, Limiter, loginAccount, loginKey, openPath, safeNext, Sessions, SESSION_MS, verifyPassword } from '../src/web/login.ts';
+import { cookieDomain, cookieValue, cookieValues, hashPassword, Limiter, loginAccount, loginKey, openPath, safeNext, Sessions, SESSION_MS, verifyPassword } from '../src/web/login.ts';
 import { webFixture } from './web-fixture.ts';
 import { http, launch } from './web-support.ts';
 import { scratch } from './support.ts';
@@ -66,6 +66,27 @@ test('helpers: cookie parsing, open paths and safe return targets', () => {
   expect(openPath('POST', '/login')).toBe(false);
   for (const bad of ['//evil.example', '/\\evil', 'https://evil.example', '/login?next=/', '/api/state', '', null]) expect(safeNext(bad)).toBe('/');
   expect(safeNext('/?q=1')).toBe('/?q=1');
+  expect(cookieValues('everflow_session=a; x=1; everflow_session=b')).toEqual(['a', 'b']);
+});
+
+test('next may be absolute only on the chat origin', () => {
+  const chat = 'https://chat.everflow.example.invalid';
+  expect(safeNext(`${chat}/?session=ses_1`, chat)).toBe(`${chat}/?session=ses_1`);
+  expect(safeNext(chat, chat)).toBe(`${chat}/`);
+  expect(safeNext('/?q=1', chat)).toBe('/?q=1');
+  expect(safeNext(`${chat}/?session=ses_1`)).toBe('/');
+  for (const bad of ['https://chat.everflow.example.invalid.evil.example/', 'https://chat.everflow.example.invalid@evil.example/', 'https://user@chat.everflow.example.invalid/',
+    'http://chat.everflow.example.invalid/', 'https://chat.everflow.example.invalid:444/', 'https://everflow.example.invalid/', 'https://evil.example/', 'https://chat.everflow.example.invalid\\@evil.example/',
+    'https://chat.everflow.example.invalid/ x', 'javascript:alert(1)']) expect(safeNext(bad, chat)).toBe('/');
+});
+
+test('the session cookie gets the page host as Domain only when the chat host is under it', () => {
+  expect(cookieDomain('https://everflow.example.invalid', 'https://chat.everflow.example.invalid')).toBe('everflow.example.invalid');
+  expect(cookieDomain('https://everflow.example.invalid', undefined)).toBeUndefined();
+  expect(cookieDomain(undefined, 'https://chat.everflow.example.invalid')).toBeUndefined();
+  expect(cookieDomain('https://everflow.example.invalid', 'https://chat.example.invalid')).toBeUndefined();
+  expect(cookieDomain('https://flow.example.invalid', 'https://overflow.example.invalid')).toBeUndefined();
+  expect(cookieDomain('https://flow.example.invalid', 'https://a.b.flow.example.invalid')).toBe('flow.example.invalid');
 });
 
 test('served page: public host needs the sign-in, loopback does not, and a session opens the board', async () => {
