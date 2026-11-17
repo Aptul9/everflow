@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { COOKIE, cookieValue, openPath, safeNext, SESSION_MS } from './login.ts';
+import { COOKIE, cookieDomain, cookieValues, openPath, safeNext, SESSION_MS } from './login.ts';
 import type { WebInstance } from './instance.ts';
 
 type Login = NonNullable<WebInstance['login']>;
@@ -24,7 +24,20 @@ function body(request: IncomingMessage, limit: number): Promise<string> {
   });
 }
 
-const cookie = (value: string, maxAge: number) => `${COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+const cookie = (value: string, maxAge: number, domain?: string) =>
+  `${COOKIE}=${value}; Path=/;${domain ? ` Domain=${domain};` : ''} HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+
+/** The session cookie: for the public host and its chat host when [web] chat_origin sits under it, otherwise host-only. */
+export function sessionCookies(current: WebInstance, value: string | null): string[] {
+  const domain = cookieDomain(current.config.web.public_origin, current.config.web.chat_origin);
+  if (value !== null) return [cookie(value, SESSION_MS / 1000, domain)];
+  // signing out clears both, since a session from before chat_origin was set is host-only
+  return domain ? [cookie('', 0), cookie('', 0, domain)] : [cookie('', 0)];
+}
+
+export function signedIn(request: IncomingMessage, login: Login): boolean {
+  return cookieValues(request.headers.cookie).some((value) => login.sessions.valid(value));
+}
 
 /** Sign-in gate for a request under the public host. True when it answered the request itself. */
 export function signIn(request: IncomingMessage, response: ServerResponse, current: WebInstance, login: Login): boolean {
@@ -46,7 +59,7 @@ export function signIn(request: IncomingMessage, response: ServerResponse, curre
       }
       if (login.check(input.email.trim(), input.password)) {
         login.limiter.clear(who);
-        response.writeHead(204, { 'set-cookie': cookie(login.sessions.issue(), SESSION_MS / 1000) }).end();
+        response.writeHead(204, { 'set-cookie': sessionCookies(current, login.sessions.issue()) }).end();
       } else {
         login.limiter.fail(who);
         json(401, 'login.invalid', 'Wrong email or password');
@@ -56,12 +69,15 @@ export function signIn(request: IncomingMessage, response: ServerResponse, curre
   }
   if (path === '/api/logout' && method === 'POST') {
     if (!sameOrigin) { json(403, 'login.origin', 'Origin rejected'); return true; }
-    response.writeHead(204, { 'set-cookie': cookie('', 0) }).end();
+    response.writeHead(204, { 'set-cookie': sessionCookies(current, null) }).end();
     return true;
   }
-  const signed = login.sessions.valid(cookieValue(request.headers.cookie));
+  const signed = signedIn(request, login);
   if (signed && method === 'GET' && path === '/login') {
-    response.writeHead(303, { location: safeNext(url.searchParams.get('next')) }).end();
+    // A session from before chat_origin was set is host-only and never reaches the chat host: renewing it here
+    // gives it the domain, so the chat host's redirect to this page cannot loop
+    const renew = cookieDomain(current.config.web.public_origin, current.config.web.chat_origin) ? { 'set-cookie': sessionCookies(current, login.sessions.issue()) } : {};
+    response.writeHead(303, { location: safeNext(url.searchParams.get('next'), current.config.web.chat_origin), ...renew }).end();
     return true;
   }
   if (signed || openPath(method, path)) return false;

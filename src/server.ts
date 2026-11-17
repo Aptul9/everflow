@@ -17,6 +17,7 @@ import { startRuntime, validateRuntimeConfig } from './core/runtime.ts';
 import { createKernel } from './windows/kernel.ts';
 import { Limiter, loginAccount, loginKey, Sessions, verifyPassword } from './web/login.ts';
 import { signIn } from './web/login-http.ts';
+import { ChatToken, chatGate, GATE_PATH } from './web/chat-gate.ts';
 
 export async function startServer(options: { configPath: string; buildReceipt: string; port?: number }) {
   const artifact = readBuildReceipt(options?.buildReceipt);
@@ -33,6 +34,10 @@ export async function startServer(options: { configPath: string; buildReceipt: s
       // the hash is always checked, so a wrong user costs the same time as a wrong password
       check: (user: string, password: string) => verifyPassword(password, account.hash) && user.toLowerCase() === account.user.toLowerCase() };
   })() : undefined;
+  // The chat host's gate: OpenChamber is the loopback web server of [opencode] openchamber_port, which config.ts requires with chat_origin
+  const chat = login && config.web.chat_origin && config.opencode.openchamber_port
+    ? new ChatToken(config.db.path + '.chat-token', `http://127.0.0.1:${config.opencode.openchamber_port}`, () => process.env.OPENCHAMBER_UI_PASSWORD ?? '')
+    : undefined;
   const requestedPort = options.port ?? config.web.port;
   if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) throw new Error('Invalid web port');
   let handle: RequestHandler | undefined;
@@ -44,6 +49,12 @@ export async function startServer(options: { configPath: string; buildReceipt: s
     const hosts = request.rawHeaders.filter((_value, index) => index % 2 === 0 && request.rawHeaders[index]!.toLowerCase() === 'host').length;
     if (!current || hosts !== 1 || !allowedHost(request.headers.host, current.port, current.config.web.public_origin)) {
       response.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' }).end('Local Host required');
+      return;
+    }
+    // Loopback only: under the public host the token would reach a browser
+    if (new URL(request.url ?? '/', 'http://everflow.invalid').pathname === GATE_PATH) {
+      if (`https://${request.headers.host?.toLowerCase()}` === current.config.web.public_origin) response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('Not found');
+      else chatGate(request, response, current);
       return;
     }
     // The public host needs a session; loopback stays as before (the daemon only listens there)
@@ -84,7 +95,7 @@ export async function startServer(options: { configPath: string; buildReceipt: s
     try { await app?.close(); } finally { if (current) release(current); }
   })();
   try {
-    current = { config, configPath: config._config_path, port, token: randomBytes(32).toString('hex'), ...(login ? { login } : {}) };
+    current = { config, configPath: config._config_path, port, token: randomBytes(32).toString('hex'), ...(login ? { login } : {}), ...(chat ? { chat } : {}) };
     initialize(current);
     app = next({ dev: false, dir: artifact.root, hostname: '127.0.0.1', port, httpServer: server });
     await app.prepare();

@@ -21,6 +21,34 @@
 	reverse_proxy 127.0.0.1:8789
 }
 
+# OpenChamber web UI of aptul4ever (openchamber.service on 127.0.0.1:3000) behind the Everflow sign-in ([web] chat_origin).
+# Every request asks the daemon's loopback gate: with the everflow_session cookie (Domain = the page host) it answers 204
+# and the OpenChamber client token, copied upstream as Authorization; without one, 401 and the sign-in address to go to.
+# route keeps the order: a client's own Authorization is dropped before the gate's is set. Websockets (events, terminal)
+# go through the same gate and then upstream with the same Authorization.
+{$EVERFLOW_CHAT_DOMAIN} {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	route {
+		request_header -Authorization
+		forward_auth 127.0.0.1:8789 {
+			uri /api/chat-gate
+			header_up Host 127.0.0.1:8789
+			# a websocket request asks the gate as plain HTTP: Node holds an Upgrade request for its own upgrade handler
+			header_up -Connection
+			header_up -Upgrade
+			copy_headers X-Everflow-Chat-Authorization>Authorization
+			@login status 401
+			handle_response @login {
+				redir {rp.header.X-Everflow-Login} 302
+			}
+		}
+		reverse_proxy 127.0.0.1:3000
+	}
+}
+
 # Former address: its sslh line stays on the VM, so old bookmarks land here and move to the current one
 everflow.217-76-49-98.sslip.io {
 	redir https://{$EVERFLOW_DOMAIN}{uri} permanent

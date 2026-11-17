@@ -34,6 +34,8 @@ const jobs = z.strictObject({
   path: ['backoff_initial_seconds'], message: 'backoff initial must not exceed maximum',
 }).prefault({});
 
+const origin = (name: string) => z.string().regex(/^https:\/\/[a-z0-9.-]+(:\d{1,5})?$/i, `${name} must be https://host[:port]`).transform((value) => value.toLowerCase());
+
 const configSchema = z.looseObject({
   db: z.looseObject({ path: z.string().min(1) }),
   tickets: rollout,
@@ -62,7 +64,11 @@ const configSchema = z.looseObject({
   web: z.object({
     port: positive.max(65535).default(8789),
     // The HTTPS address a reverse proxy in front of the loopback port serves the page under (scheme and host, no path)
-    public_origin: z.string().regex(/^https:\/\/[a-z0-9.-]+(:\d{1,5})?$/i, 'public_origin must be https://host[:port]').transform((value) => value.toLowerCase()).optional(),
+    public_origin: origin('public_origin').optional(),
+    // The HTTPS address a reverse proxy serves the local OpenChamber web UI under, behind this page's sign-in
+    chat_origin: origin('chat_origin').optional(),
+  }).refine((web) => !web.chat_origin || !!web.public_origin && web.chat_origin !== web.public_origin, {
+    path: ['chat_origin'], message: 'chat_origin needs public_origin and must differ from it',
   }).prefault({}),
   jobs,
   start: z.looseObject({
@@ -75,6 +81,8 @@ const configSchema = z.looseObject({
     // What is Antonio's work at this client, for triage (trusted text in its system prompt)
     role: z.string().max(2_000).optional(),
   })).default({}),
+}).refine((cfg) => !cfg.web.chat_origin || !!cfg.opencode.openchamber_port, {
+  path: ['web', 'chat_origin'], message: 'chat_origin needs [opencode] openchamber_port',
 });
 
 export type Config = z.infer<typeof configSchema> & { _config_path: string };

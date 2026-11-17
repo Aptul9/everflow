@@ -136,6 +136,7 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
   return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped, triaging, agents,
     models: { triage: modelChoice(db, cfg, 'triage'), chat: modelChoice(db, cfg, 'chat'), options: readModelOptions(db), triage_routes: cfg.triage.providers }, chat_project: basename(cfg.opencode.directory || ''),
     chat_projects: Object.fromEntries(Object.keys(cfg.clients).map((client) => [client, basename(chatDirectory(cfg, client))])), muted,
+    ...(cfg.web.chat_origin ? { chat_origin: cfg.web.chat_origin } : {}),
     health: health(db, cfg), problems: { jobs, quarantine, triage }, feedback: feedback(db) };
 }
 

@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../core/config.ts';
+import type { ChatToken } from './chat-gate.ts';
 import type { Limiter, Sessions } from './login.ts';
 
 export interface WebInstance {
@@ -11,6 +12,8 @@ export interface WebInstance {
   token: string;
   // Present when [web] public_origin is set: requests under that host need a signed-in session
   login?: { sessions: Sessions; limiter: Limiter; check: (user: string, password: string) => boolean };
+  // Present when [web] chat_origin is set: the OpenChamber client token the chat host's gate hands to Caddy
+  chat?: Pick<ChatToken, 'token'>;
 }
 
 const key = Symbol.for('everflow.web.instance');

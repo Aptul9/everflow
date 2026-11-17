@@ -87,11 +87,24 @@ export class Limiter {
 }
 
 export function cookieValue(header: string | undefined, name = COOKIE): string | undefined {
+  return cookieValues(header, name)[0];
+}
+
+/** Every value of the cookie: a host-only and a domain cookie of the same name can both be sent. */
+export function cookieValues(header: string | undefined, name = COOKIE): string[] {
+  const values: string[] = [];
   for (const part of (header ?? '').split(';')) {
     const at = part.indexOf('=');
-    if (at > 0 && part.slice(0, at).trim() === name) return part.slice(at + 1).trim();
+    if (at > 0 && part.slice(0, at).trim() === name) values.push(part.slice(at + 1).trim());
   }
-  return undefined;
+  return values;
+}
+
+/** Domain for the session cookie: the public host when the chat host is under it, so the cookie reaches both and nothing else. */
+export function cookieDomain(publicOrigin: string | undefined, chatOrigin: string | undefined): string | undefined {
+  if (!publicOrigin || !chatOrigin) return undefined;
+  const pub = new URL(publicOrigin).hostname, chat = new URL(chatOrigin).hostname;
+  return chat.endsWith('.' + pub) ? pub : undefined;
 }
 
 /** Paths the sign-in page itself needs before there is a session. */
@@ -99,7 +112,15 @@ export function openPath(method: string, path: string): boolean {
   return method === 'GET' && (path === '/login' || path.startsWith('/_next/static/') || ['/icon.png', '/apple-icon.png', '/favicon.ico'].includes(path));
 }
 
-/** A same-site relative target to return to after signing in; anything else goes to the board. */
-export function safeNext(value: string | null | undefined): string {
-  return typeof value === 'string' && /^\/(?![/\\])[^\s]*$/.test(value) && !value.startsWith('/login') && !value.startsWith('/api/') ? value : '/';
+/** A same-site relative target to return to after signing in, or an absolute address on the chat origin; anything else goes to the board. */
+export function safeNext(value: string | null | undefined, chatOrigin?: string): string {
+  if (typeof value !== 'string') return '/';
+  if (chatOrigin && /^https:\/\/[^\s\\]*$/i.test(value)) {
+    try {
+      const url = new URL(value);
+      if (url.origin === chatOrigin && !url.username && !url.password && (value.toLowerCase() === chatOrigin || value.toLowerCase().startsWith(chatOrigin + '/'))) return url.href;
+    } catch { /* not an address */ }
+    return '/';
+  }
+  return /^\/(?![/\\])[^\s]*$/.test(value) && !value.startsWith('/login') && !value.startsWith('/api/') ? value : '/';
 }

@@ -1,5 +1,6 @@
-# TLS in front of the oe-vm Everflow page, in ~/everflow/caddy of aptul4ever. Host network so it reaches the daemon on
-# 127.0.0.1:8789; it binds only loopback (Caddyfile default_bind). .env: EVERFLOW_DOMAIN. Sign-in is the daemon's.
+# TLS in front of the oe-vm Everflow page and of the OpenChamber web UI behind its sign-in, in ~/everflow/caddy of
+# aptul4ever. Host network so it reaches the daemon on 127.0.0.1:8789 and OpenChamber on 127.0.0.1:3000; it binds only
+# loopback (Caddyfile default_bind). .env: EVERFLOW_DOMAIN, EVERFLOW_CHAT_DOMAIN. Sign-in is the daemon's.
 name: everflow
 
 services:

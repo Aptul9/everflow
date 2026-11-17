@@ -5,7 +5,8 @@
 set -eu
 user=aptul4ever
 home=/home/$user
-domain=flow.everbright.it
+# names Caddy serves on $port: the page, then the OpenChamber web UI behind its sign-in
+names="flow.everbright.it chat.flow.everbright.it"
 port=4449
 node=v26.4.0
 key=${1:?deploy public key required}
@@ -29,14 +30,19 @@ if [ "$(sudo -u "$user" "$home/.local/lib/node26/bin/node" -v 2>/dev/null)" != "
   rm -rf "$tmp"
 fi
 
-# sslh: this name to the Everflow Caddy, ahead of the catch-all that sends unnamed TLS to teams-caddy. Lines for earlier
-# names stay (Caddy redirects them); the backup is per name, so the first one (.pre-everflow) is never overwritten.
-if ! grep -qF "\"$domain\"" /etc/sslh.cfg; then
-  backup=/etc/sslh.cfg.pre-$domain
+# sslh: these names to the Everflow Caddy, ahead of the catch-all that sends unnamed TLS to teams-caddy. Lines for earlier
+# names stay (Caddy redirects them). The missing names go on one new line, with one backup per run that changes the file
+# (never overwriting an earlier one, such as .pre-everflow) and at most one restart.
+missing=
+for name in $names; do grep -qF "\"$name\"" /etc/sslh.cfg || missing="$missing${missing:+, }\"$name\""; done
+if [ -n "$missing" ]; then
+  backup=/etc/sslh.cfg.pre-everflow-$(date -u +%Y%m%dT%H%M%SZ)
   cp -p /etc/sslh.cfg "$backup"
-  awk -v line="    { name: \"tls\"; host: \"127.0.0.1\"; port: \"$port\"; sni_hostnames: [ \"$domain\" ]; }," '
+  awk -v line="    { name: \"tls\"; host: \"127.0.0.1\"; port: \"$port\"; sni_hostnames: [ $missing ]; }," '
     !done && /name: "tls"; host: "127.0.0.1"; port: "4443"; }/ { print line; done = 1 } { print }' "$backup" > /etc/sslh.cfg
-  grep -qF "\"$domain\"" /etc/sslh.cfg || { cp -p "$backup" /etc/sslh.cfg; echo "sslh catch-all line not found" >&2; exit 1; }
+  for name in $names; do
+    grep -qF "\"$name\"" /etc/sslh.cfg || { cp -p "$backup" /etc/sslh.cfg; echo "sslh catch-all line not found" >&2; exit 1; }
+  done
   if ! systemctl restart sslh || ! systemctl is-active --quiet sslh; then
     cp -p "$backup" /etc/sslh.cfg && systemctl restart sslh
     echo "sslh did not start with the new line: previous config restored" >&2; exit 1
@@ -51,4 +57,4 @@ line="restrict,command=\"$home/.local/bin/everflow-receive\" $key"
 blob=$(printf '%s' "$key" | cut -d' ' -f2)
 grep -qF "$blob" "$home/.ssh/authorized_keys" 2>/dev/null || printf '%s\n' "$line" | sudo -u "$user" tee -a "$home/.ssh/authorized_keys" >/dev/null
 chmod 600 "$home/.ssh/authorized_keys"
-echo "bootstrap ok: docker group, node $node, sslh $domain -> 127.0.0.1:$port, deploy key"
+echo "bootstrap ok: docker group, node $node, sslh $names -> 127.0.0.1:$port, deploy key"
