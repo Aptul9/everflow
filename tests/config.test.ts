@@ -141,3 +141,11 @@ test('JSONC rejects partial or malformed config rather than using a partial pars
   writeFileSync(path, '{"ok": true, "broken": }');
   expect(() => readJsonc(path)).toThrow(SyntaxError);
 });
+
+test('[oe] token_file resolves against the config folder; url must be a URL; absent [oe] stays absent', () => {
+  expect(loadConfig(configFile().config).oe).toBeUndefined();
+  const { config, root } = configFile('[oe]\nurl = "https://teams.example/communication"\ntoken_file = "oe.token"\n');
+  expect(loadConfig(config).oe).toEqual({ url: 'https://teams.example/communication', token_file: join(root, 'oe.token') });
+  expect(() => loadConfig(configFile('[oe]\nurl = "nonsense"\ntoken_file = "oe.token"\n').config)).toThrow();
+  expect(() => loadConfig(configFile('[oe]\nurl = "https://teams.example/communication"\n').config)).toThrow();
+});

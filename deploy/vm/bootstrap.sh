@@ -12,7 +12,7 @@ key=${1:?deploy public key required}
 here=$(cd "$(dirname "$0")" && pwd)
 printf '%s' "$key" | grep -Eq '^ssh-ed25519 [A-Za-z0-9+/=]+ [A-Za-z0-9@._-]+$' || { echo "expected one ssh-ed25519 public key" >&2; exit 2; }
 
-# docker: oemail reads the OE agent key with docker inspect, receive.sh runs the Caddy compose
+# docker: receive.sh runs the Caddy compose
 id -nG "$user" | tr ' ' '\n' | grep -qx docker || usermod -aG docker "$user"
 
 # Node of the build and the daemon, verified against the release checksums; the Linux build links libatomic
@@ -49,12 +49,4 @@ line="restrict,command=\"$home/.local/bin/everflow-receive\" $key"
 blob=$(printf '%s' "$key" | cut -d' ' -f2)
 grep -qF "$blob" "$home/.ssh/authorized_keys" 2>/dev/null || printf '%s\n' "$line" | sudo -u "$user" tee -a "$home/.ssh/authorized_keys" >/dev/null
 chmod 600 "$home/.ssh/authorized_keys"
-
-# relay source: SSH alias everflow-relay = root on loopback, limited to read-only sqlite3 (relay-read.sh); slots 10 and 11 are 0700
-install -m 755 "$here/relay-read.sh" /usr/local/sbin/everflow-relay-read
-[ -f "$home/.ssh/everflow_relay" ] || sudo -u "$user" ssh-keygen -q -t ed25519 -N '' -C everflow-relay@oe-vm -f "$home/.ssh/everflow_relay"
-relay=$(cut -d' ' -f2 "$home/.ssh/everflow_relay.pub")
-grep -qF "$relay" /root/.ssh/authorized_keys || printf 'restrict,from="127.0.0.1,::1",command="/usr/local/sbin/everflow-relay-read" %s\n' "$(cat "$home/.ssh/everflow_relay.pub")" >> /root/.ssh/authorized_keys
-grep -q '^Host everflow-relay$' "$home/.ssh/config" 2>/dev/null || printf '\n# Everflow relay source (deploy/vm/bootstrap.sh)\nHost everflow-relay\n    HostName 127.0.0.1\n    User root\n    IdentityFile ~/.ssh/everflow_relay\n    IdentitiesOnly yes\n' | sudo -u "$user" tee -a "$home/.ssh/config" >/dev/null
-sudo -u "$user" ssh-keygen -F 127.0.0.1 -f "$home/.ssh/known_hosts" 2>/dev/null | grep -q . || ssh-keyscan -t ed25519 127.0.0.1 2>/dev/null | sudo -u "$user" tee -a "$home/.ssh/known_hosts" >/dev/null
-echo "bootstrap ok: docker group, node $node, sslh $domain -> 127.0.0.1:$port, deploy key, relay key"
+echo "bootstrap ok: docker group, node $node, sslh $domain -> 127.0.0.1:$port, deploy key"

@@ -36,8 +36,9 @@ const sourceSchema = z.looseObject({
   enabled: z.preprocess((value) => value === true, z.boolean()).default(false),
   entrypoint: z.string().min(1).optional(), poll_seconds: z.number().int().positive().max(86400).optional(),
   profile: z.string().min(1).optional(), bootstrap_cache: z.string().min(1).optional(),
-  host: z.string().min(1).optional(), data_dir: z.string().min(1).optional(), owner: z.string().min(1).optional(),
-  account: z.email().optional(), self_id: z.string().min(1).regex(/^\S+$/).optional(), workspace: z.string().regex(/^T[A-Z0-9]+$/).optional(), store: z.string().min(1).optional(),
+  // gmail and gchat: read through the OE Copilot agent behind [oe] instead of the local gws/gweb CLI
+  oe: z.preprocess((value) => value === true, z.boolean()).optional(),
+  account: z.email().optional(), self_id: z.string().min(1).regex(/^\S+$/).optional(), workspace: z.string().regex(/^T[A-Z0-9]+$/).optional(),
   full_spaces: z.array(z.string().trim().min(1).refine((value) => !/[\r\n\0]/.test(value))).optional(), self_name: z.string().trim().min(1).optional(), executable: z.string().min(1).optional(), topics: z.number().int().min(1).max(1000).optional(),
   browser_refresh: z.preprocess((value) => value === true, z.boolean()).optional(),
   accounts: z.array(z.string().trim().min(1).refine((value) => value !== '*' && !/[\r\n\0]/.test(value))).optional(),
@@ -48,6 +49,19 @@ export type Log = (event: Event) => void;
 const silent: Log = () => {};
 const after = (at: string, seconds: number) => utc(new Date(Date.parse(at) + seconds * 1000).toISOString());
 
+type SourceValue = z.infer<typeof sourceSchema>;
+// Sources that read through the OE Copilot endpoint: always relay, OE mail and Slack; Gmail and Chat when `oe = true`
+const throughOe = (source: Source, value: SourceValue) => source === 'teamsrelay' || source === 'oemail' || source === 'slack' || (source === 'gmail' || source === 'gchat') && value.oe === true;
+
+// URL and token the watcher gets in its environment, never in its arguments
+function oeEnvironment(cfg: Config): { EVERFLOW_OE_URL: string; EVERFLOW_OE_TOKEN: string } {
+  if (!cfg.oe) throw new DaemonError('source.oe-required');
+  let token = '';
+  try { token = fs.readFileSync(cfg.oe.token_file, 'utf8').trim(); } catch { /* reported below */ }
+  if (!token) throw new DaemonError('source.oe-token');
+  return { EVERFLOW_OE_URL: cfg.oe.url, EVERFLOW_OE_TOKEN: token };
+}
+
 export function validateRuntimeConfig(cfg: Config, buildReceipt: string) {
   const artifact = readBuildReceipt(buildReceipt);
   const parsed = sourceSettings.safeParse(cfg.sources ?? {});
@@ -56,12 +70,12 @@ export function validateRuntimeConfig(cfg: Config, buildReceipt: string) {
     const value = parsed.data[source];
     if (!value?.enabled) continue;
     if (source === 'teams' && !value.profile) throw new DaemonError('source.profile-required');
-    if (source === 'teamsrelay' && (!value.host || !value.data_dir || !value.owner)) throw new DaemonError('source.relay-options-required');
-    if (source === 'oemail' && (!value.host || !value.accounts?.length)) throw new DaemonError('source.oemail-options-required');
+    if (source === 'oemail' && !value.accounts?.length) throw new DaemonError('source.oemail-options-required');
     // Gmail through the OE agent may list several mailboxes under accounts instead of one account.
-    if ((source === 'gchat' || source === 'gmail') && !value.account && !(source === 'gmail' && value.host && value.accounts?.length)) throw new DaemonError('source.google-account-required');
+    if ((source === 'gchat' || source === 'gmail') && !value.account && !(source === 'gmail' && value.oe && value.accounts?.length)) throw new DaemonError('source.google-account-required');
     if (source === 'gchat' && !value.self_id) throw new DaemonError('source.google-self-required');
-    if (source === 'slack' && (!value.host || !value.account || !value.self_id || !value.workspace)) throw new DaemonError('source.slack-options-required');
+    if (source === 'slack' && (!value.account || !value.self_id || !value.workspace)) throw new DaemonError('source.slack-options-required');
+    if (throughOe(source, value)) oeEnvironment(cfg);
     const entry = resolve(artifact.root, value.entrypoint ?? `dist/watchers/${entrypoints[source]}.js`);
     if (!inside(artifact.root, entry)) throw new DaemonError('source.artifact-entry');
     const staged = artifact.files.find((file) => resolve(artifact.root, file.path).toLowerCase() === entry.toLowerCase());
@@ -81,7 +95,7 @@ export function sourceCommand(cfg: Config, db: DatabaseSync, source: Source, bui
   const floor = sourceStart(db, cfg, source, at);
   // oemail, Slack and the Google sources read exactly the accounts in their config; the others discover theirs
   const read = source === 'oemail' ? value.accounts!
-    : source === 'gmail' && value.host && value.accounts?.length ? [...value.accounts, ...(value.account ? [value.account] : [])]
+    : source === 'gmail' && value.oe && value.accounts?.length ? [...value.accounts, ...(value.account ? [value.account] : [])]
     : source === 'gchat' || source === 'gmail' || source === 'slack' ? [value.account!] : null;
   if (read) retireAccounts(db, source, read);
   const accounts = db.prepare("SELECT account FROM cursor WHERE source=? AND account<>'*' ORDER BY account").all(source).map((row) => String(row.account));
@@ -93,14 +107,12 @@ export function sourceCommand(cfg: Config, db: DatabaseSync, source: Source, bui
     args.push('--cache', join(cfg.db.path + '.sources', 'teams-cache.dpapi'), '--scratch-root', join(cfg.db.path + '.sources', 'snapshots'), '--profile', local(value.profile!));
     if (value.bootstrap_cache) args.push('--bootstrap-cache', local(value.bootstrap_cache));
   }
-  if (source === 'teamsrelay') args.push('--host', value.host!, '--data-dir', value.data_dir!, '--owner', value.owner!);
-  if (source === 'oemail') args.push('--host', value.host!, ...value.accounts!.flatMap((account) => ['--account', account]));
-  if (source === 'slack') args.push('--host', value.host!, '--account', value.account!, '--self-id', value.self_id!, '--workspace', value.workspace!, ...(value.store ? ['--store', value.store] : []));
+  if (source === 'oemail') args.push(...value.accounts!.flatMap((account) => ['--account', account]));
+  if (source === 'slack') args.push('--account', value.account!, '--self-id', value.self_id!, '--workspace', value.workspace!);
   if (source === 'gchat' || source === 'gmail') {
-    const mailboxes = source === 'gmail' && value.host && value.accounts?.length ? value.accounts : [value.account!];
+    const mailboxes = source === 'gmail' && value.oe && value.accounts?.length ? value.accounts : [value.account!];
     for (const account of new Set([...(value.account ? [value.account] : []), ...mailboxes])) args.push('--account', account);
-    // host: read through the OE Copilot agent on that host instead of the local gweb/gws CLI
-    if (value.host) args.push('--host', value.host);
+    if (value.oe) args.push('--oe');
     else if (value.executable) args.push('--executable', /[\\/]/.test(value.executable) ? local(value.executable) : value.executable);
     if (source === 'gchat') {
       args.push('--self-id', value.self_id!);
@@ -111,7 +123,8 @@ export function sourceCommand(cfg: Config, db: DatabaseSync, source: Source, bui
     }
   }
   return { source, executable: process.execPath, args, cwd: artifact.root,
-    environment: { ...childEnvironment(), EVERFLOW_SOURCE_OWNER: String(process.pid), EVERFLOW_SOURCE_CONFIG: cfg._config_path, EVERFLOW_ARTIFACT: buildReceipt } };
+    environment: { ...childEnvironment(), EVERFLOW_SOURCE_OWNER: String(process.pid), EVERFLOW_SOURCE_CONFIG: cfg._config_path, EVERFLOW_ARTIFACT: buildReceipt,
+      ...(throughOe(source, value) ? oeEnvironment(cfg) : {}) } };
 }
 
 export function createLog(path: string, policy: Pick<Config['jobs'], 'log_files' | 'log_max_bytes'>): Log {
@@ -159,11 +172,11 @@ const diagnosticCodes = new Set(`source.unexpected source.invalid-message source
 cli.invalid-options cli.aborted cli.start cli.timeout cli.result-limit cli.failed cli.response-json
 gchat.invalid-options gchat.account-mismatch gchat.response-shape gchat.message-limit
 gmail.account-mismatch gmail.response-shape gmail.mime-shape gmail.mime-encoding gmail.body-unavailable gmail.message-time gmail.pagination-limit gmail.message-limit
-slack.invalid-argument slack.invalid-options slack.invalid-host slack.invalid-limit slack.aborted slack.timeout slack.result-limit slack.ssh-start slack.ssh-failed slack.response-json slack.response-shape slack.api slack.account-mismatch slack.pagination-limit slack.message-limit
-oemail.invalid-argument oemail.invalid-host oemail.invalid-limit oemail.aborted oemail.timeout oemail.result-limit oemail.ssh-start oemail.ssh-failed oemail.response-json oemail.response-shape oemail.http oemail.pagination oemail.message-shape oemail.message-time oemail.message-limit oemail.account-required oemail.account-unavailable
+slack.invalid-argument slack.invalid-options slack.invalid-limit slack.aborted slack.timeout slack.result-limit slack.http-failed slack.oe-config slack.response-json slack.response-shape slack.api slack.account-mismatch slack.pagination-limit slack.message-limit
+oemail.invalid-argument oemail.invalid-limit oemail.aborted oemail.timeout oemail.result-limit oemail.http-failed oemail.oe-config oemail.response-json oemail.response-shape oemail.http oemail.pagination oemail.message-shape oemail.message-time oemail.message-limit oemail.account-required oemail.account-unavailable
 teams.scan-incomplete teams.accounts-missing teams.accounts-incomplete teams.region teams.origin teams.read-endpoint teams.refresh-account teams.http teams.response-json teams.response-limit teams.aborted teams.timeout teams.request-failed teams.response-shape teams.message-time teams.pagination-limit teams.page-shape teams.message-id
 outlook.invalid-wall-clock outlook.collection-limit outlook.reference-cleanup outlook.accounts-unavailable outlook.accounts-incomplete outlook.account-mismatch outlook.read-failed outlook.not-running outlook.duplicate-account outlook.event-read-failed outlook.event-overflow outlook.newmail
-relay.invalid-argument relay.absolute-path relay.invalid-host relay.invalid-limit relay.aborted relay.timeout relay.result-limit relay.ssh-start relay.ssh-failed relay.response-json relay.saved-json relay.saved-shape relay.invalid-slot relay.message-time relay.message-shape relay.app-unavailable relay.no-active-accounts relay.account-limit relay.scan-state relay.scan-incomplete relay.store-unavailable
+relay.invalid-argument relay.invalid-limit relay.aborted relay.timeout relay.result-limit relay.http-failed relay.oe-config relay.response-json relay.saved-json relay.saved-shape relay.invalid-slot relay.message-time relay.message-shape relay.app-unavailable relay.no-active-accounts relay.account-limit relay.scan-state relay.scan-incomplete relay.store-unavailable
 auth.invalid-region auth.token-metadata auth.no-cookie-accounts auth.account-limit auth.cache-schema auth.cache-token auth.cache-separation auth.cache-read auth.cache-file auth.cache-json auth.cache-path auth.cache-parent auth.refresh-throttled auth.expired auth.profile-missing
 cookie.unsupported-v21 cookie.invalid-length cookie.aes-authentication cookie.host-prefix
 native.windows-x64-required native.invalid-handle native.duplicate-owner native.unowned native.cleanup native.invalid-argument native.abi-layout native.open-failed native.not-disk-file native.file-path native.file-path-limit native.file-path-mismatch native.mapping-size native.file-size native.file-identity native.file-attributes native.teams-not-running native.handle-inventory native.handle-inventory-query native.handle-inventory-limit native.file-size-changed
@@ -502,11 +515,11 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
         try {
           if (entry.active === true) {
             if (!kernel().childOf(expectedChild, watcher)) {
-              // A short SSH call often exits before its report arrives: nothing left to own, so only a live stranger is a mismatch
+              // A short CLI call often exits before its report arrives: nothing left to own, so only a live stranger is a mismatch
               if (kernel().running(expectedChild)) log({ source, code: 'source.child-identity', ...failureFields({ reason: 'identity-mismatch' }, stage) });
               return;
             }
-            registry.set(expectedChild.pid, { ...expectedChild, source, kind: (source === 'gchat' || source === 'gmail') && !command.args.includes('--host') ? 'cli' : 'ssh', owner_pid: watcher.pid, owner_created: watcher.created });
+            registry.set(expectedChild.pid, { ...expectedChild, source, kind: 'cli', owner_pid: watcher.pid, owner_created: watcher.created });
           } else if (entry.active === false) {
             const registered = registry.get(expectedChild.pid);
             if (!registered || registered.owner_pid !== watcher.pid || registered.owner_created !== watcher.created || !sameProcess(registered, expectedChild)) return;

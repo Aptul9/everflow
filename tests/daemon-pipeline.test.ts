@@ -34,9 +34,9 @@ test.each(['missing', 'false', '"true"'])('P01 actual daemon ingests inert sourc
   } finally { await f.run('stop'); }
 });
 
-test('P02/P03 actual daemon owns one inert watcher and SSH child, excludes duplicate, releases pipe on stop/kill and preserves unrelated child', async () => {
+test('P02/P03 actual daemon owns one inert watcher and CLI child, excludes duplicate, releases pipe on stop/kill and preserves unrelated child', async () => {
   const f = daemonFixture('[tickets]\nenabled=false\n');
-  fs.writeFileSync(f.config, fs.readFileSync(f.config, 'utf8').replace('poll_seconds=1', 'poll_seconds=1\nfixture_ssh=true'));
+  fs.writeFileSync(f.config, fs.readFileSync(f.config, 'utf8').replace('poll_seconds=1', 'poll_seconds=1\nfixture_child=true'));
   const unrelated = spawn(process.execPath, ['-e', 'setInterval(()=>{},10000)'], { cwd: f.artifact.root, windowsHide: true, stdio: 'ignore' });
   using kernel = createKernel();
   try {
@@ -45,8 +45,8 @@ test('P02/P03 actual daemon owns one inert watcher and SSH child, excludes dupli
     const owned = await f.until<any[]>(() => {
       const value = JSON.parse(fs.readFileSync(f.path + '.daemon.json', 'utf8'));
       return value.children.length === 2 && value.children;
-    }, 'watcher and owned synthetic SSH registration');
-    expect(owned.map((child: any) => child.kind).sort()).toEqual(['ssh', 'watcher']);
+    }, 'watcher and owned synthetic CLI registration');
+    expect(owned.map((child: any) => child.kind).sort()).toEqual(['cli', 'watcher']);
     const duplicate = await f.run('start', '--port', '0'); expect(duplicate.status).not.toBe(0); expect(duplicate.stderr).toContain('daemon.already-running');
     expect(fs.readFileSync(f.starts, 'utf8').trim().split('\n')).toHaveLength(1);
     const stop = await f.run('stop'); expect(stop.status, stop.stderr).toBe(0); expect(JSON.parse(stop.stdout).forced).toBe(false);

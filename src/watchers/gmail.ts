@@ -107,7 +107,7 @@ export async function scanGmail(query: JsonQuery, state: ReturnType<typeof creat
 }
 
 // Through the OE agent: the agent's Gmail paths answer Google's own JSON, so pages and messages parse as above; the message
-// reads of one scan share SSH sessions.
+// reads of one scan share endpoint calls.
 export async function scanOeGmail(read: OeGoogleRead, state: ReturnType<typeof createGmailState>, emit: Emit, now = () => new Date().toISOString(), signal?: AbortSignal): Promise<void> {
   const started = sourceStamp(now());
   const list = (pageToken?: string) => ({ path: `messages?q=${encodeURIComponent(search(state))}&maxResults=500${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}` });

@@ -36,6 +36,12 @@ port = 8789
 # Caddy (deploy/vm/Caddyfile) serves the page here over TLS; the daemon asks for its own sign-in under this host and stays on 127.0.0.1
 public_origin = "https://everflow.217-76-49-98.sslip.io"
 
+[oe]
+# The OE Copilot endpoint every OE source reads through; oe.token (mode 600, next to this file) holds its read-only token
+# EVERFLOW_TOKEN. Not deployed by the pipeline: the file stays in ~/everflow/instance across deploys.
+url = "https://teams.everbright.it/communication"
+token_file = "oe.token"
+
 [sources.outlook]
 enabled = false
 
@@ -48,21 +54,16 @@ enabled = false
 [sources.gmail]
 enabled = false
 
-# Everflow runs on the OE host itself. Relay: the everflow-relay SSH alias (root on loopback, read-only sqlite3 only,
-# bootstrap.sh), because some slot folders are root-only. OE mail: "local", a local bash with the docker group.
 # Clients here: roar (2026-11-15), notarify and npo (2026-11-15); their accounts are off the laptop instance's lists.
+# The relay slots read are those of the Teams relay administrator the endpoint acts for.
 [sources.teamsrelay]
 enabled = true
 poll_seconds = 30
-host = "everflow-relay"
-data_dir = "/opt/teamsrelay/data"
-owner = "aptul99@gmail.com"
 accounts = ["antonio.maritato@roarinc.com", "antonio.maritato@notarify.io", "antonio.maritato@nposervices.com"]
 
 [sources.oemail]
 enabled = true
 poll_seconds = 60
-host = "local"
 accounts = ["antonio.maritato@roarinc.com", "antonio.maritato@notarify.io", "antonio.maritato@nposervices.com"]
 
 # Client settings as on the laptop instance; directory = the VM folder their chats open in

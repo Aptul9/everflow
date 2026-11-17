@@ -7,7 +7,6 @@ import { acquireInstance } from '../src/core/daemon.ts';
 import * as transport from '../src/core/opencode.ts';
 import { allowedHost, guardPost } from '../src/web/api.ts';
 import type { WebInstance } from '../src/web/instance.ts';
-import { sshRun } from '../src/watchers/relay.ts';
 import { createKernel } from '../src/windows/kernel.ts';
 import { scriptedPeer } from './opencode-support.ts';
 import { scratch } from './support.ts';
@@ -70,12 +69,6 @@ test.skipIf(!linux)('instance lock is an abstract socket held once per database 
   await first.close();
   const again = await acquireInstance(path);
   await again.close();
-});
-
-test.skipIf(!linux)('host "local" runs the source command in a local bash instead of ssh', async () => {
-  const output = await sshRun('oemail', 'oemail', { host: 'local' }, 'printf "%s" "$((6 * 7))"');
-  expect(output.toString()).toBe('42');
-  await expect(sshRun('oemail', 'oemail', { host: 'local' }, 'exit 3')).rejects.toMatchObject({ code: 'oemail.ssh-failed' });
 });
 
 test('public origin admits its HTTPS host and Origin next to the loopback ones, nothing else', () => {

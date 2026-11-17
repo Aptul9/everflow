@@ -98,7 +98,7 @@ export async function scanGchat(query: JsonQuery, state: ReturnType<typeof creat
   emit({ source: 'gchat', accounts: [state.account], checkpoint: state.floor, coverage: 'recent-topics', observed_at: observed });
 }
 
-// Through the OE agent: one list, then only the conversations with activity since the floor, several reads per SSH session.
+// Through the OE agent: one list, then only the conversations with activity since the floor, several reads per endpoint call.
 export async function scanOeGchat(read: OeGoogleRead, state: ReturnType<typeof createGchatState>, emit: Emit, now = () => new Date().toISOString(), signal?: AbortSignal): Promise<void> {
   const observed = sourceStamp(now());
   const listed = agentList.safeParse((await read([{ action: 'list' }], signal))[0]);

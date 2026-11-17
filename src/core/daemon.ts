@@ -13,7 +13,8 @@ export { childEnvironment } from '../cli.ts';
 export class DaemonError extends Error {
   constructor(readonly code: string, readonly reason?: string) { super(code); }
 }
-export interface OwnedProcess extends ProcessIdentity { kind: 'watcher' | 'ssh' | 'cli'; source: Source; owner_pid: number; owner_created?: string }
+// 'ssh': children of builds before the OE endpoint (2026-11-17); still read, so the first stop after an upgrade stops them
+export interface OwnedProcess extends ProcessIdentity { kind: 'watcher' | 'cli' | 'ssh'; source: Source; owner_pid: number; owner_created?: string }
 export interface DaemonReceipt extends ProcessIdentity {
   version: 1; status: 'starting' | 'ready' | 'stopped'; run_id: string; config_path: string; db_path: string;
   artifact: string; port: number; started_at: string; heartbeat_at: string; argv: string[]; children: OwnedProcess[];
