@@ -70,6 +70,11 @@ install -m 644 "$vm/compose.yml" "$root/caddy/compose.yml"
 # single quotes: the '$' of the hash stays literal
 (umask 077; printf "EVERFLOW_LOGIN_USER='%s'\nEVERFLOW_LOGIN_HASH='%s'\n" "$user" "$hash" > "$instance/login.env")
 docker compose -f "$root/caddy/compose.yml" up -d --remove-orphans
+# The Caddyfile is a single-file bind mount: install replaces the inode, so the running container keeps the old file and Caddy
+# never reloads. Recreate the container whenever what it reads differs from what was just installed.
+if [ "$(docker exec everflow-caddy sha256sum /etc/caddy/Caddyfile 2>/dev/null | cut -d' ' -f1)" != "$(sha256sum "$root/caddy/Caddyfile" | cut -d' ' -f1)" ]; then
+  docker compose -f "$root/caddy/compose.yml" up -d --force-recreate --remove-orphans
+fi
 
 previous=$(cat "$instance/build.txt" 2>/dev/null || true)
 printf '%s\n' "$receipt" > "$instance/build.txt"

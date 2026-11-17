@@ -136,6 +136,10 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$chat/")" = "$base/login?next=$(jq -rn --arg u "$chat/" '$u|@uri')"
           test "$(code -b "$jar" -H 'accept: application/json' "$chat/auth/session")" = 200
           test "$(code -b "$jar" "$base/api/chat-gate")" = 404
+          # the chat may be framed by the page (ticket chat modal): the served policy, not the file, decides
+          csp=$(curl -s -o /dev/null -D - --max-time 15 -b "$jar" "$chat/mini-chat.html" | tr -d '\r' | sed -n 's/^content-security-policy: //Ip')
+          printf '%s\n' "$csp"
+          test "$csp" = "frame-ancestors 'self' $base"
           echo "$chat/ ok"
           curl -s -o /dev/null --max-time 15 -b "$jar" -H "origin: $base" -X POST "$base/api/logout"
           echo "$base/ ok"
