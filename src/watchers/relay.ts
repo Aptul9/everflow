@@ -1,115 +1,25 @@
-import { spawn } from 'node:child_process';
-import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import { posix } from 'node:path';
-import { accountNames, emitChanged, isEntrypoint, publishAccounts, requiredOption, runSource, sourceStamp, sourceText, SourceError, trackSourceChild, watcherArguments, writeDiagnostic, writeRecord } from './source.ts';
-import type { Emit, Source, SourceMessage } from './source.ts';
+import { z } from 'zod';
+import { oeEndpoint, oeRequest } from './oe-endpoint.ts';
+import type { OeEndpoint } from './oe-endpoint.ts';
+import { accountNames, emitChanged, isEntrypoint, publishAccounts, runSource, sourceStamp, sourceText, SourceError, watcherArguments, writeDiagnostic, writeRecord } from './source.ts';
+import type { Emit, SourceMessage } from './source.ts';
 
-export interface RelayOptions { host: string; root: string; owner: string; maxRows?: number; maxAccounts?: number; timeoutMs?: number; maxBytes?: number }
-export type RelayQuery = (path: string, sql: string, signal?: AbortSignal) => Promise<Record<string, any>[]>;
-/** One result per query: its rows, or the error that query alone hit. */
-export type RelayBatch = (queries: readonly { path: string; sql: string }[], signal?: AbortSignal) => Promise<unknown[]>;
-export type SshSpawn = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
+export interface RelayOptions { maxRows?: number; maxAccounts?: number }
+/**
+ * The saved messages of every active Teams relay account of the token's owner since `floor` (ms), in slot order: each slot's
+ * snapshot text (OE-Copilot teams-relay /api/everflow/saved, at most maxRows + 1 messages), or the error that slot alone hit.
+ */
+export type RelaySaved = (floor: number, maxRows: number, signal?: AbortSignal) => Promise<{ slot: number; snapshot?: string; error?: string }[]>;
 export interface RelaySnapshot { accounts: { slot: number; email: string; scanAt: number; muted: string[]; messages: SourceMessage[] }[]; errors: { code: string; account: string }[] }
-export function shellQuote(value: string): string {
-  if (value.includes('\0')) throw new SourceError('teamsrelay', 'relay.invalid-argument');
-  return "'" + value.replaceAll("'", "'\"'\"'") + "'";
-}
-export function sqlLiteral(value: string): string {
-  if (value.includes('\0')) throw new SourceError('teamsrelay', 'relay.invalid-argument');
-  return "'" + value.replaceAll("'", "''") + "'";
-}
-export function relayCommand(path: string, sql: string): string {
-  if (!posix.isAbsolute(path)) throw new SourceError('teamsrelay', 'relay.absolute-path');
-  const statement = sql.trimEnd().endsWith(';') ? sql : sql + ';';
-  return ['sqlite3', '-readonly', '-json', path, `PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; BEGIN; ${statement} COMMIT;`].map(shellQuote).join(' ');
-}
 
-function relayRows(output: string): Record<string, any>[] {
-  try {
-    const value: unknown = JSON.parse(output);
-    if (!Array.isArray(value) || value.some((row) => !row || typeof row !== 'object' || Array.isArray(row))) throw new Error('shape');
-    return value;
-  } catch { throw new SourceError('teamsrelay', 'relay.response-json'); }
-}
+const savedSchema = z.object({ slots: z.array(z.union([z.object({ slot: z.unknown(), snapshot: z.string() }), z.object({ slot: z.unknown(), error: z.string() })])) });
 
-export async function sshQuery(options: RelayOptions, path: string, sql: string, signal?: AbortSignal, spawnProcess: SshSpawn = spawn): Promise<Record<string, any>[]> {
-  return relayRows((await sshRun('teamsrelay', 'relay', options, relayCommand(path, sql), signal, spawnProcess)).toString('utf8'));
-}
-
-// Every query in one SSH session: each output ends with RS (\x1e), and NAK (\x15) before it marks a query whose sqlite3 failed.
-// sqlite3 -json escapes control characters, so neither byte can come from the data.
-export function relayBatchCommand(queries: readonly { path: string; sql: string }[]): string {
-  return queries.map(({ path, sql }) => `{ ${relayCommand(path, sql)} || printf '\\025'; }; printf '\\036'`).join('; ');
-}
-
-export async function sshBatch(options: RelayOptions, queries: readonly { path: string; sql: string }[], signal?: AbortSignal, spawnProcess: SshSpawn = spawn): Promise<unknown[]> {
-  const maxBytes = Math.min(64 * 1024 * 1024, (options.maxBytes ?? 8 * 1024 * 1024) * Math.max(1, queries.length));
-  const parts = (await sshRun('teamsrelay', 'relay', { ...options, maxBytes }, relayBatchCommand(queries), signal, spawnProcess)).toString('utf8').split('\x1e');
-  if (parts.length !== queries.length + 1 || parts.at(-1) !== '') throw new SourceError('teamsrelay', 'relay.response-json');
-  return parts.slice(0, -1).map((part) => {
-    if (part.endsWith('\x15')) return new SourceError('teamsrelay', 'relay.store-unavailable');
-    try { return relayRows(part); } catch (error) { return error; }
-  });
-}
-
-function serial(query: RelayQuery): RelayBatch {
-  return async (queries, signal) => {
-    const results: unknown[] = [];
-    for (const { path, sql } of queries) {
-      signal?.throwIfAborted();
-      try { results.push(await query(path, sql, signal)); } catch (error) { results.push(error); }
-    }
-    return results;
+export function httpRelaySaved(endpoint: OeEndpoint): RelaySaved {
+  return async (floor, maxRows, signal) => {
+    const answer = savedSchema.safeParse(await oeRequest('teamsrelay', 'relay', endpoint, 'teams', { method: 'GET', query: { since: String(floor), max_rows: String(maxRows) } }, signal));
+    if (!answer.success) throw new SourceError('teamsrelay', 'relay.response-json');
+    return answer.data.slots as { slot: number; snapshot?: string; error?: string }[];
   };
-}
-
-// One owned, bounded SSH command; error codes carry the caller's prefix (relay.timeout, oemail.timeout, ...).
-export async function sshRun(source: Source, prefix: string, options: { host: string; timeoutMs?: number; maxBytes?: number }, command: string,
-  signal?: AbortSignal, spawnProcess: SshSpawn = spawn): Promise<Buffer> {
-  if (!options.host || options.host.startsWith('-') || !/^[a-z0-9_.@:[\]-]+$/i.test(options.host)) throw new SourceError(source, `${prefix}.invalid-host`);
-  const timeout = options.timeoutMs ?? 60000, maxBytes = options.maxBytes ?? 8 * 1024 * 1024;
-  if (!Number.isSafeInteger(timeout) || timeout < 1 || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 64 * 1024 * 1024) throw new SourceError(source, `${prefix}.invalid-limit`);
-  if (signal?.aborted) throw new SourceError(source, `${prefix}.aborted`);
-  // host "local": Everflow runs on the OE host itself, so the same command runs in a local bash instead of over SSH
-  const local = options.host === 'local';
-  if (local && process.platform === 'win32') throw new SourceError(source, `${prefix}.invalid-host`);
-  const child = local ? spawnProcess('/bin/bash', ['-c', command], { shell: false, stdio: ['ignore', 'pipe', 'pipe'] })
-    : spawnProcess('ssh', ['-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2', options.host, command], { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-  const chunks: Buffer[] = [];
-  let size = 0, failure: unknown, closed = false, escalation: ReturnType<typeof setTimeout> | undefined;
-  const stop = (error: unknown) => {
-    failure ??= error;
-    if (closed) return;
-    escalation ??= setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }, 2000);
-    child.kill();
-  };
-  const aborted = () => stop(new SourceError(source, `${prefix}.aborted`));
-  const stdout = (bytes: Buffer) => {
-    size += bytes.length;
-    if (size > maxBytes) stop(new SourceError(source, `${prefix}.result-limit`));
-    else if (!failure) chunks.push(Buffer.from(bytes));
-  };
-  // stderr is drained but never copied into diagnostics or records.
-  const stderr = () => {};
-  const failed = () => { failure ??= new SourceError(source, `${prefix}.ssh-start`); };
-  const exit = new Promise<number | null>((resolve) => {
-    child.once('close', (code) => { closed = true; resolve(code); });
-  });
-  child.stdout?.on('data', stdout); child.stderr?.on('data', stderr); child.once('error', failed);
-  const timer = setTimeout(() => stop(new SourceError(source, `${prefix}.timeout`)), timeout);
-  signal?.addEventListener('abort', aborted, { once: true });
-  if (signal?.aborted) aborted();
-  try {
-    try { if (!closed) await trackSourceChild(child); } catch (error) { stop(error); }
-    const code = await exit;
-    if (failure !== undefined) throw failure;
-    if (code !== 0) throw new SourceError(source, `${prefix}.ssh-failed`, undefined, code ?? undefined);
-    return Buffer.concat(chunks);
-  } finally {
-    clearTimeout(timer); if (escalation) clearTimeout(escalation);
-    signal?.removeEventListener('abort', aborted);
-    child.off('error', failed); child.stdout?.off('data', stdout); child.stderr?.off('data', stderr);
-  }
 }
 
 function jsonObject(value: unknown): Record<string, any> {
@@ -143,41 +53,26 @@ function normalize(email: string, slot: number, raw: Record<string, any>): Sourc
       ...(extra.mentionsMe === true ? { mentions_me: true } : {}) } };
 }
 
-function storeQuery(floor: number, maxRows: number): string {
-  return `SELECT json_object('state',json((SELECT json_group_object(k,v) FROM state WHERE k IN ('me','last_scan_ts','state'))),'muted',json((SELECT json_group_array(name) FROM chats WHERE muted=1)),'messages',json((SELECT json_group_array(json_object('chat',chat,'mid',mid,'author',author,'text',text,'mine',mine,'extra',extra)) FROM (SELECT chat,mid,author,substr(text,1,2000) AS text,mine,extra FROM chat_messages WHERE mid GLOB '[0-9]*' AND mid NOT GLOB '*[^0-9]*' AND CAST(mid AS INTEGER)>=${floor} ORDER BY CAST(mid AS INTEGER),chat LIMIT ${maxRows + 1})))) AS snapshot`;
-}
-
-export async function readRelay(options: RelayOptions, floor: number, signal?: AbortSignal, input?: RelayQuery): Promise<RelaySnapshot> {
-  if (!posix.isAbsolute(options.root) || options.root.includes('\0') || !options.owner || !Number.isSafeInteger(floor)) throw new SourceError('teamsrelay', 'relay.invalid-argument');
+// One call per scan: the endpoint reads every active slot store of the token's owner and answers each one's snapshot or error.
+export async function readRelay(options: RelayOptions, floor: number, signal?: AbortSignal, input?: RelaySaved): Promise<RelaySnapshot> {
+  if (!Number.isSafeInteger(floor) || floor < 0 || !input) throw new SourceError('teamsrelay', 'relay.invalid-argument');
   const maxRows = options.maxRows ?? 10000, maxAccounts = options.maxAccounts ?? 1024;
   if (!Number.isSafeInteger(maxRows) || maxRows < 1 || maxRows > 100000 || !Number.isSafeInteger(maxAccounts) || maxAccounts < 1 || maxAccounts > 4096) throw new SourceError('teamsrelay', 'relay.invalid-limit');
-  const query = input ?? ((path, sql, stop) => sshQuery(options, path, sql, stop));
-  // Two SSH sessions per scan, the slot list and then every store together, instead of one per store
-  const batch: RelayBatch = input ? serial(input) : (queries, stop) => sshBatch(options, queries, stop);
-  let slots: Record<string, any>[];
-  try {
-    signal?.throwIfAborted();
-    slots = await query(posix.join(options.root, 'app.db'), `SELECT t.slot FROM teams_accounts t JOIN "user" u ON u.id=t.owner_id WHERE t.stopped=0 AND lower(u.email)=${sqlLiteral(options.owner.toLowerCase())} ORDER BY t.slot LIMIT ${maxAccounts + 1}`, signal);
-  } catch { throw new SourceError('teamsrelay', 'relay.app-unavailable'); }
+  signal?.throwIfAborted();
+  let slots: Awaited<ReturnType<RelaySaved>>;
+  try { slots = await input(floor, maxRows, signal); }
+  catch (error) { if (error instanceof SourceError) throw error; throw new SourceError('teamsrelay', 'relay.app-unavailable'); }
   if (!slots.length) throw new SourceError('teamsrelay', 'relay.no-active-accounts');
   if (slots.length > maxAccounts) throw new SourceError('teamsrelay', 'relay.account-limit');
-  const ids = slots.map((row) => numericSlot(row.slot));
+  const ids = slots.map((entry) => numericSlot(entry.slot));
   if (new Set(ids).size !== ids.length) throw new SourceError('teamsrelay', 'relay.invalid-slot');
   const snapshot: RelaySnapshot = { accounts: [], errors: [] };
-  let results: unknown[];
-  try {
-    results = await batch(ids.map((slot) => ({ path: posix.join(options.root, String(slot), 'messages.db'), sql: storeQuery(floor, maxRows) })), signal);
-  } catch (error) {
-    signal?.throwIfAborted();
-    results = ids.map(() => error);
-  }
   for (const [index, slot] of ids.entries()) {
     signal?.throwIfAborted();
     try {
-      const rows = results[index];
-      if (!Array.isArray(rows)) throw rows;
-      if (rows.length !== 1) throw new SourceError('teamsrelay', 'relay.saved-shape');
-      const saved = jsonObject(rows[0]!.snapshot), state = jsonObject(saved.state), me = jsonObject(state.me || '{}');
+      const entry = slots[index]!;
+      if (typeof entry.snapshot !== 'string') throw new SourceError('teamsrelay', 'relay.store-unavailable');
+      const saved = jsonObject(entry.snapshot), state = jsonObject(saved.state), me = jsonObject(state.me || '{}');
       const email = accountNames([me.email])[0]!;
       const scanAt = Number(state.last_scan_ts || 0);
       if (!Number.isSafeInteger(scanAt) || scanAt <= 0) throw new SourceError('teamsrelay', 'relay.scan-state');
@@ -215,10 +110,10 @@ export async function scanRelay(relay: { snapshot(floor: number, signal?: AbortS
 }
 
 export async function relayMain(args = process.argv.slice(2)): Promise<number> {
-  const options = watcherArguments(args, { host: { type: 'string' }, 'data-dir': { type: 'string' }, owner: { type: 'string' } });
-  const relayOptions: RelayOptions = { host: requiredOption(options.values, 'host'), root: requiredOption(options.values, 'data-dir'), owner: requiredOption(options.values, 'owner') };
+  const options = watcherArguments(args);
+  const saved = httpRelaySaved(oeEndpoint('teamsrelay', 'relay'));
   const state = createRelayState(new Date(Date.parse(options.since) - 120000).toISOString(), options.expectedAccounts);
-  return runSource('teamsrelay', options, (signal) => scanRelay({ snapshot: (floor, stop) => readRelay(relayOptions, floor, stop) }, state, writeRecord, undefined, signal));
+  return runSource('teamsrelay', options, (signal) => scanRelay({ snapshot: (floor, stop) => readRelay({}, floor, stop, saved) }, state, writeRecord, undefined, signal));
 }
 
 if (isEntrypoint(import.meta.url)) void relayMain().then((code) => { process.exitCode = code; }, (error: unknown) => { writeDiagnostic(error, 'teamsrelay'); process.exitCode = 1; });

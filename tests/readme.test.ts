@@ -132,18 +132,20 @@ test('documented source prerequisites construct only artifact Node commands and 
   const runtime = createRequire(import.meta.url)(join(f.artifact.root, 'dist/core/runtime.js')) as typeof import('../src/core/runtime.ts');
   expect(runtime.validateRuntimeConfig(cfg, f.receipt).settings).toEqual(cfg.sources);
   expect(sources).toContain('`[sources.teams] profile`');
-  expect(sources).toContain('`[sources.teamsrelay] host`');
+  expect(sources).toContain('`[oe] url`');
   const entries = [...sources.matchAll(/`(dist\/watchers\/[^`]+\.js)`/g)].map((match) => match[1]!);
   expect(entries).toHaveLength(5);
   expect(() => runtime.validateRuntimeConfig({ ...cfg, sources: { teams: { enabled: true } } }, f.receipt)).toThrow('source.profile-required');
-  expect(() => runtime.validateRuntimeConfig({ ...cfg, sources: { teamsrelay: { enabled: true } } }, f.receipt)).toThrow('source.relay-options-required');
+  expect(() => runtime.validateRuntimeConfig({ ...cfg, sources: { teamsrelay: { enabled: true } } }, f.receipt)).toThrow('source.oe-required');
+  fs.writeFileSync(join(f.root, 'oe.token'), 'synthetic-token-0123456789abcdef0123456789\n');
+  const oe = { url: 'https://synthetic.invalid/communication', token_file: join(f.root, 'oe.token') };
   using db = openDb(f.path);
   for (const [source, options] of [
     ['outlook', {}], ['teams', { profile: join(f.root, 'synthetic profile never read') }],
-    ['teamsrelay', { host: 'synthetic.invalid', data_dir: '/synthetic saved relay', owner: 'synthetic@example.invalid' }],
+    ['teamsrelay', {}],
     ['gchat', { account: 'synthetic@example.invalid', self_id: 'synthetic-self' }], ['gmail', { account: 'synthetic@example.invalid' }],
   ] as const) {
-    const command = runtime.sourceCommand({ ...cfg, sources: { [source]: { enabled: true, ...options } } }, db, source, f.receipt);
+    const command = runtime.sourceCommand({ ...cfg, oe, sources: { [source]: { enabled: true, ...options } } }, db, source, f.receipt);
     expect(command.executable).toBe(process.execPath);
     expect(command.cwd).toBe(f.artifact.root);
     expect(command.args.some((arg) => entries.some((entry) => samePath(arg, join(f.artifact.root, entry))))).toBe(true);

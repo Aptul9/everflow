@@ -11,7 +11,7 @@ EnvironmentFile=%h/.config/openchamber/service.env
 EnvironmentFile=%h/everflow/instance/login.env
 WorkingDirectory=%h/everflow/instance
 ExecStart=%h/.local/bin/everflow-run
-# SIGTERM is the daemon's graceful stop; watchers and SSH children are its own and it stops them
+# SIGTERM is the daemon's graceful stop; watchers and their CLI children are its own and it stops them
 KillMode=mixed
 TimeoutStopSec=30
 Restart=on-failure

@@ -56,6 +56,9 @@ const configSchema = z.looseObject({
     gchat: positive.min(120).default(120), gmail: positive.min(300).default(300), oemail: positive.min(120).default(180),
     slack: positive.min(120).default(120),
   }).catchall(nonnegative).prefault({}),
+  // The OE Copilot endpoint the OE-hosted sources read through (communication service /everflow/*), and the file holding
+  // its read-only token, relative to this config
+  oe: z.object({ url: z.url(), token_file: z.string().min(1) }).optional(),
   web: z.object({
     port: positive.max(65535).default(8789),
     // The HTTPS address a reverse proxy in front of the loopback port serves the page under (scheme and host, no path)
@@ -88,6 +91,7 @@ export function loadConfig(path: string): Config {
     vault: { ...cfg.vault, path: resolve(root, cfg.vault.path) },
     opencode: { ...cfg.opencode, directory: resolve(root, cfg.opencode.directory) },
     triage: { ...cfg.triage, ...(cfg.triage.provider_config_path ? { provider_config_path: resolve(root, cfg.triage.provider_config_path) } : {}) },
+    ...(cfg.oe ? { oe: { ...cfg.oe, token_file: resolve(root, cfg.oe.token_file) } } : {}),
     clients: Object.fromEntries(Object.entries(cfg.clients).map(([name, client]) =>
       [name, { ...client, ...(client.directory ? { directory: resolve(root, client.directory) } : {}) }])),
   };

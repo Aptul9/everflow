@@ -5,6 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'node:url';
 import { expect, test } from 'vitest';
 import { isolatedEnvironment } from '../scripts/build.ts';
+import { loadConfig } from '../src/core/config.ts';
+import { cleanupChildren, instancePaths, readDaemonReceipt } from '../src/core/daemon.ts';
 import { openDb } from '../src/core/db.ts';
 import { createKernel } from '../src/windows/kernel.ts';
 import { readBuildReceipt } from '../src/web/build-artifact.ts';
@@ -166,4 +168,19 @@ test('ticket/job/quarantine commands reuse local transactions without migration 
   expect(db.prepare('SELECT merged_into FROM ticket WHERE id=?').get(source)?.merged_into).toBe(target);
   expect(db.prepare('SELECT lifecycle FROM ticket WHERE id=?').get(target)?.lifecycle).toBe('done');
   expect(db.prepare('SELECT replayed_at FROM quarantine WHERE id=?').get(quarantine)?.replayed_at).toBeNull();
+});
+
+test('a receipt written with an ssh child by an older build still reads, and stop terminates that child', () => {
+  const files = scratch('ssh-receipt-');
+  writeFileSync(files.config, '[db]\npath="fixture.db"\n');
+  const cfg = loadConfig(files.config), paths = instancePaths(cfg.db.path);
+  const identity = { pid: 4242, created: '134384000000000001', image: resolve('/synthetic/node.exe') };
+  const child = { pid: 4343, created: '134384000000000002', image: resolve('/synthetic/ssh.exe'), kind: 'ssh', source: 'teamsrelay', owner_pid: 4242, owner_created: '134384000000000001' };
+  writeFileSync(paths.receipt, JSON.stringify({ ...identity, version: 1, status: 'ready', run_id: '00000000-0000-4000-8000-000000000000', config_path: cfg._config_path, db_path: paths.db,
+    artifact: 'x', port: 1, started_at: '2026-11-17T08:00:00Z', heartbeat_at: '2026-11-17T08:00:00Z', argv: [], children: [child, { ...identity, pid: 4444, kind: 'watcher', source: 'teamsrelay', owner_pid: 4242 }] }));
+  const receipt = readDaemonReceipt(cfg)!;
+  expect(receipt.children.map((c) => c.kind)).toEqual(['ssh', 'watcher']);
+  const terminated: number[] = [];
+  cleanupChildren(receipt.children, { wait: () => true, terminate: (c: { pid: number }) => { terminated.push(c.pid); } } as unknown as Parameters<typeof cleanupChildren>[1]);
+  expect(terminated).toEqual([4343, 4444]);
 });

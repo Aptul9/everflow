@@ -1,5 +1,7 @@
-import { expect, test } from 'vitest';
-import { createOeMailState, nextPath, oeCommand, parseOeOutput, scanOeMail } from '../src/watchers/oemail.ts';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { expect, test, vi } from 'vitest';
+import { createOeMailState, httpOeCall, nextPath, oeMailMain, scanOeMail } from '../src/watchers/oemail.ts';
 import type { OeCall, OeRequest } from '../src/watchers/oemail.ts';
 import type { SourceRecord } from '../src/watchers/source.ts';
 
@@ -112,15 +114,61 @@ test('a failure that names no account still fails the whole scan', async () => {
   await expect(scanOeMail(call, createOeMailState({ accounts: [MSC], since: NOW }), () => {}, () => NOW)).rejects.toMatchObject({ code: 'oemail.http', status: 503 });
 });
 
-test('next links become gateway paths; the remote command carries requests only as base64', () => {
+test('next links become gateway paths', () => {
   expect(nextPath('https://outlook.office.com/api/v2.0/me/MailFolders/Inbox/messages?%24skip=50')).toBe('me/MailFolders/Inbox/messages?%24skip=50');
   expect(() => nextPath('https://example.invalid/other')).toThrow('oemail.pagination');
-  const command = oeCommand([{ path: '/api/communication/read', body: { account: MSC, path: "x'; rm -rf /" } }]);
-  expect(command).toMatch(/^bash -c "\$\(printf %s '[A-Za-z0-9+/=]+' \| base64 -d\)"$/);
-  expect(command).not.toContain('rm -rf /');
-  // one line per request: status and base64 body; anything else is a shape error
-  expect(parseOeOutput(`200 ${Buffer.from('{"a":1}').toString('base64')}\n404 \n`, 2)).toEqual([{ status: 200, body: '{"a":1}' }, { status: 404, body: '' }]);
-  expect(() => parseOeOutput('200 e30=\n', 2)).toThrow('oemail.response-shape');
-  expect(() => parseOeOutput('ok {}\n', 1)).toThrow('oemail.response-shape');
   expect(() => createOeMailState({ accounts: [], since: NOW })).toThrow('oemail.account-required');
+});
+
+async function endpoint(answer: (body: any) => unknown) {
+  const seen: { url: string; auth: string; body: any }[] = [];
+  const server = createServer((req, res) => {
+    let text = '';
+    req.on('data', (chunk) => { text += chunk; });
+    req.on('end', () => {
+      const body = JSON.parse(text);
+      seen.push({ url: req.url!, auth: req.headers.authorization!, body });
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify(answer(body)));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, seen, close: () => { server.closeAllConnections(); server.close(); } };
+}
+
+test('httpOeCall posts the requests to /everflow/agent and returns the responses in order', async () => {
+  const oe = await endpoint((body) => ({ responses: body.requests.map((r: { path: string }, i: number) => ({ status: i === 1 ? 502 : 200, body: `${i}:${r.path}` })) }));
+  try {
+    const call = httpOeCall({ url: oe.url, token: 'everflow-token-0123456789abcdef0123456789' });
+    const requests: OeRequest[] = [{ path: '/api/communication/accounts' }, { path: '/api/communication/read', body: { account: MSC, path: 'me/MailFolders/Inbox/messages' } }];
+    expect(await call(requests)).toEqual([{ status: 200, body: '0:/api/communication/accounts' }, { status: 502, body: '1:/api/communication/read' }]);
+    expect(oe.seen).toEqual([{ url: '/everflow/agent', auth: 'Bearer everflow-token-0123456789abcdef0123456789', body: { requests } }]);
+  } finally { oe.close(); }
+});
+
+test('httpOeCall refuses an answer of the wrong length or shape as oemail.response-shape, under the caller source', async () => {
+  for (const answer of [{ responses: [] }, { responses: [{ status: '200', body: '' }] }, { responses: [{ status: 200 }] }, { other: true }]) {
+    const oe = await endpoint(() => answer);
+    try {
+      await expect(httpOeCall({ url: oe.url, token: 'everflow-token-0123456789abcdef0123456789' }, 'gmail')([{ path: '/api/communication/accounts' }]))
+        .rejects.toMatchObject({ code: 'oemail.response-shape', source: 'gmail' });
+    } finally { oe.close(); }
+  }
+});
+
+test('the oemail watcher reads through the endpoint in its environment, and without it fails oemail.oe-config', async () => {
+  const oe = await endpoint((body) => ({ responses: body.requests.map((r: OeRequest) => r.path === '/api/communication/accounts'
+    ? { status: 200, body: JSON.stringify({ accounts: [{ upn: MSC, status: 'ok' }] }) } : { status: 200, body: JSON.stringify({ value: [] }) }) }));
+  const out: string[] = [];
+  const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { out.push(String(chunk)); return true; });
+  const errors = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { out.push(String(chunk)); return true; });
+  try {
+    vi.stubEnv('EVERFLOW_OE_URL', oe.url); vi.stubEnv('EVERFLOW_OE_TOKEN', 'everflow-token-0123456789abcdef0123456789');
+    expect(await oeMailMain(['--since', '2026-11-10T17:00:00Z', '--once', '--account', MSC])).toBe(0);
+    expect(oe.seen.map((s) => s.body.requests[0].path)).toEqual(['/api/communication/accounts', '/api/communication/read']);
+    expect(out.some((line) => line.includes('"checkpoint"'))).toBe(true);
+    vi.stubEnv('EVERFLOW_OE_TOKEN', '');
+    await expect(oeMailMain(['--since', '2026-11-10T17:00:00Z', '--once', '--account', MSC])).rejects.toMatchObject({ code: 'oemail.oe-config' });
+    await expect(oeMailMain(['--since', '2026-11-10T17:00:00Z', '--once', '--account', MSC, '--host', 'oe-vm'])).rejects.toThrow();
+  } finally { write.mockRestore(); errors.mockRestore(); vi.unstubAllEnvs(); oe.close(); }
 });

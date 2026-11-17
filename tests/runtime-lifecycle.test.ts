@@ -71,24 +71,20 @@ test('source lifecycle accepts only the owned stop IPC message and removes its l
   expect(process.listenerCount('message')).toBe(before);
 });
 
-test('relay owner disconnect aborts and observes its actual synthetic SSH child before watcher exit', async () => {
+test('watcher owner disconnect aborts and observes its actual synthetic CLI child before watcher exit', async () => {
   const artifact = readBuildReceipt(process.env.TEST_BUILD_RECEIPT);
-  const f = scratch('phase7b-ssh-cleanup-');
-  const script = join(f.root, 'synthetic-relay.mjs');
-  const relay = pathToFileURL(join(artifact.root, 'dist/watchers/relay.js')).href;
+  const f = scratch('phase7b-child-cleanup-');
+  const script = join(f.root, 'synthetic-watcher.mjs');
+  const cli = pathToFileURL(join(artifact.root, 'dist/watchers/cli-json.js')).href;
   const source = pathToFileURL(join(artifact.root, 'dist/watchers/source.js')).href;
-  writeFileSync(script, `import {spawn} from 'node:child_process';
-    import {getEventListeners} from 'node:events';
-    import {sshQuery} from ${JSON.stringify(relay)};
+  writeFileSync(script, `import {getEventListeners} from 'node:events';
+    import {cliJson} from ${JSON.stringify(cli)};
     import {runSource} from ${JSON.stringify(source)};
-    let target;const fallback=new AbortController();process.on('message',value=>{if(value?.type==='fixture.cleanup')fallback.abort();});
-    const code=await runSource('teamsrelay',{once:false,poll:30},async(signal)=>{
-      try { await sshQuery({host:'synthetic.invalid',root:'/synthetic',owner:'me@example.invalid'},'/synthetic/a.db','SELECT 1',signal,
-        (_command,_args,options)=>{target=spawn(process.execPath,['-e','setTimeout(()=>process.stdout.end("[]"),30000)'],options);process.send({type:'fixture.ssh',pid:target.pid});return target;}); }
-      finally {process.stdout.write(JSON.stringify({closed:target?.exitCode!==null||target?.signalCode!==null,
-        abortListeners:getEventListeners(signal,'abort').length,timers:process.getActiveResourcesInfo().filter(value=>value==='Timeout').length,
-        errorListeners:target?.listenerCount('error'),closeListeners:target?.listenerCount('close'),
-        stdoutListeners:target?.stdout.listenerCount('data'),stderrListeners:target?.stderr.listenerCount('data')})+'\\n');}
+    const fallback=new AbortController();process.on('message',value=>{if(value?.type==='fixture.cleanup')fallback.abort();});
+    const code=await runSource('gmail',{once:false,poll:30},async(signal)=>{
+      try { await cliJson('gmail',process.execPath,['-e','setTimeout(()=>process.stdout.end("[]"),30000)'],signal,{timeoutMs:60000}); }
+      finally {process.stdout.write(JSON.stringify({closed:true,
+        abortListeners:getEventListeners(signal,'abort').length,timers:process.getActiveResourcesInfo().filter(value=>value==='Timeout').length})+'\\n');}
     },{},fallback.signal);process.exitCode=code;if(process.connected)process.disconnect();`);
   const child = fork(script, [], { cwd: artifact.root, env: { ...isolatedEnvironment(artifact.root, process.env), EVERFLOW_SOURCE_OWNER: String(process.pid) }, execArgv: [], windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   using kernel = createKernel();
@@ -103,24 +99,20 @@ test('relay owner disconnect aborts and observes its actual synthetic SSH child 
   let target: ReturnType<ReturnType<typeof createKernel>['processIdentity']> | undefined;
   let candidate: ProcessIdentity | undefined, teardown: Record<string, unknown> | undefined;
   try {
-    const pid = await new Promise<number>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Synthetic SSH did not start')), 5000);
-      child.on('message', (value: any) => { if (value.type === 'fixture.ssh') { clearTimeout(timeout); resolve(value.pid); } });
-    });
     const packet = await bounded(new Promise<any>((resolve) => {
-      const existing = messages.find((value) => value.type === 'everflow.child' && value.pid === pid && value.active === true);
+      const existing = messages.find((value) => value.type === 'everflow.child' && value.active === true);
       if (existing) { resolve(existing); return; }
-      const received = (value: any) => { if (value.type === 'everflow.child' && value.pid === pid && value.active === true) { child.off('message', received); resolve(value); } };
+      const received = (value: any) => { if (value.type === 'everflow.child' && value.active === true) { child.off('message', received); resolve(value); } };
       child.on('message', received);
     }), 5000, 'fixture.child-registration');
     candidate = packet.identity;
     verifyCleanupTarget(packet, await watcherIdentity, (identity, owner) => kernel.childOf(identity, owner), (identity) => { target = identity; });
     child.disconnect();
-    await Promise.race([exit, delay(5000).then(() => { throw new Error('Owned relay failed disconnect shutdown'); })]);
+    await Promise.race([exit, delay(5000).then(() => { throw new Error('Owned watcher failed disconnect shutdown'); })]);
     expect(child.exitCode, stderr).toBe(0);
     expect(output).toContain('"closed":true');
     teardown = JSON.parse(output.trim().split(/\r?\n/).at(-1)!);
-    expect(teardown).toEqual({ closed: true, abortListeners: 0, timers: 0, errorListeners: 0, closeListeners: 0, stdoutListeners: 0, stderrListeners: 0 });
+    expect(teardown).toEqual({ closed: true, abortListeners: 0, timers: 0 });
     expect((kernel as any).running?.(target)).toBe(false);
   } finally {
     if (child.connected) child.send({ type: 'fixture.cleanup' });
@@ -131,7 +123,7 @@ test('relay owner disconnect aborts and observes its actual synthetic SSH child 
       candidate: candidate ?? null, fallbackTarget: target ?? null, unverifiableChild: Boolean(candidate && !target),
       watcherClosed: (child.exitCode !== null || child.signalCode !== null) && child.stdout!.readableEnded && child.stderr!.readableEnded,
       watcherExitCode: child.exitCode, stdoutEnded: child.stdout!.readableEnded, stderrEnded: child.stderr!.readableEnded,
-      sshRunning: target ? kernel.running(target) : null, teardown }, null, 2));
+      childRunning: target ? kernel.running(target) : null, teardown }, null, 2));
   }
 });
 

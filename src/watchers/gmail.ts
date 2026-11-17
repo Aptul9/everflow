@@ -3,7 +3,8 @@ import { cliJson } from './cli-json.ts';
 import type { JsonQuery } from './cli-json.ts';
 import { oeGoogleRead } from './oe-google.ts';
 import type { OeGoogleRead } from './oe-google.ts';
-import { sshOeCall } from './oemail.ts';
+import { oeEndpoint } from './oe-endpoint.ts';
+import { httpOeCall } from './oemail.ts';
 import { accountNames, emitChanged, isEntrypoint, publishAccounts, requiredOption, runSource, sourceStamp, sourceText, SourceError, watcherArguments, writeDiagnostic, writeRecord } from './source.ts';
 import type { Emit, SourceMessage } from './source.ts';
 import { htmlToText } from './teams.ts';
@@ -106,7 +107,7 @@ export async function scanGmail(query: JsonQuery, state: ReturnType<typeof creat
 }
 
 // Through the OE agent: the agent's Gmail paths answer Google's own JSON, so pages and messages parse as above; the message
-// reads of one scan share SSH sessions.
+// reads of one scan share endpoint calls.
 export async function scanOeGmail(read: OeGoogleRead, state: ReturnType<typeof createGmailState>, emit: Emit, now = () => new Date().toISOString(), signal?: AbortSignal): Promise<void> {
   const started = sourceStamp(now());
   const list = (pageToken?: string) => ({ path: `messages?q=${encodeURIComponent(search(state))}&maxResults=500${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}` });
@@ -140,12 +141,12 @@ export async function scanOeGmails(mailboxes: { read: OeGoogleRead; state: Retur
 }
 
 export async function gmailMain(args = process.argv.slice(2)): Promise<number> {
-  const options = watcherArguments(args, { account: { type: 'string', multiple: true }, executable: { type: 'string' }, host: { type: 'string' } });
+  const options = watcherArguments(args, { account: { type: 'string', multiple: true }, executable: { type: 'string' }, oe: { type: 'boolean' } });
   const accounts = accountNames(options.values.account ?? []);
-  if (options.values.host !== undefined) {
+  if (options.values.oe === true) {
     // The agent can hold several Gmail grants: --account once per mailbox.
     if (!accounts.length || options.expectedAccounts.some((name) => !accounts.includes(name))) throw new SourceError('gmail', 'gmail.account-mismatch');
-    const call = sshOeCall(requiredOption(options.values, 'host'), 'gmail');
+    const call = httpOeCall(oeEndpoint('gmail', 'oemail'), 'gmail');
     const mailboxes = accounts.map((account) => ({ read: oeGoogleRead(call, 'gmail', account, 50), state: createGmailState({ account, since: options.since }) }));
     return runSource('gmail', options, (signal) => scanOeGmails(mailboxes, writeRecord, undefined, signal));
   }

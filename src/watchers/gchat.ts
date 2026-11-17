@@ -3,7 +3,8 @@ import { cliJson } from './cli-json.ts';
 import type { JsonQuery } from './cli-json.ts';
 import { oeGoogleRead } from './oe-google.ts';
 import type { OeGoogleRead } from './oe-google.ts';
-import { sshOeCall } from './oemail.ts';
+import { oeEndpoint } from './oe-endpoint.ts';
+import { httpOeCall } from './oemail.ts';
 import { accountNames, emitChanged, isEntrypoint, publishAccounts, requiredOption, runSource, sourceStamp, sourceText, SourceError, watcherArguments, writeDiagnostic, writeRecord } from './source.ts';
 import type { Emit, SourceMessage } from './source.ts';
 
@@ -97,7 +98,7 @@ export async function scanGchat(query: JsonQuery, state: ReturnType<typeof creat
   emit({ source: 'gchat', accounts: [state.account], checkpoint: state.floor, coverage: 'recent-topics', observed_at: observed });
 }
 
-// Through the OE agent: one list, then only the conversations with activity since the floor, several reads per SSH session.
+// Through the OE agent: one list, then only the conversations with activity since the floor, several reads per endpoint call.
 export async function scanOeGchat(read: OeGoogleRead, state: ReturnType<typeof createGchatState>, emit: Emit, now = () => new Date().toISOString(), signal?: AbortSignal): Promise<void> {
   const observed = sourceStamp(now());
   const listed = agentList.safeParse((await read([{ action: 'list' }], signal))[0]);
@@ -129,13 +130,13 @@ export async function scanOeGchat(read: OeGoogleRead, state: ReturnType<typeof c
 }
 
 export async function gchatMain(args = process.argv.slice(2)): Promise<number> {
-  const options = watcherArguments(args, { account: { type: 'string' }, 'self-id': { type: 'string' }, executable: { type: 'string' }, topics: { type: 'string' }, 'browser-refresh': { type: 'boolean' }, host: { type: 'string' },
+  const options = watcherArguments(args, { account: { type: 'string' }, 'self-id': { type: 'string' }, executable: { type: 'string' }, topics: { type: 'string' }, 'browser-refresh': { type: 'boolean' }, oe: { type: 'boolean' },
     'full-space': { type: 'string', multiple: true }, 'self-name': { type: 'string' } });
   const state = createGchatState({ account: requiredOption(options.values, 'account'), selfId: requiredOption(options.values, 'self-id'), since: new Date(Date.parse(options.since) - 120000).toISOString(),
     topics: options.values.topics === undefined ? 200 : Number(options.values.topics), expectedAccounts: options.expectedAccounts, browserRefresh: options.values['browser-refresh'] === true,
     fullSpaces: options.values['full-space'] ?? [], selfName: options.values['self-name'] });
-  if (options.values.host !== undefined) {
-    const read = oeGoogleRead(sshOeCall(requiredOption(options.values, 'host'), 'gchat'), 'gchat', state.account, 8);
+  if (options.values.oe === true) {
+    const read = oeGoogleRead(httpOeCall(oeEndpoint('gchat', 'oemail'), 'gchat'), 'gchat', state.account, 8);
     return runSource('gchat', options, (signal) => scanOeGchat(read, state, writeRecord, undefined, signal));
   }
   const executable = options.values.executable ?? 'gweb';

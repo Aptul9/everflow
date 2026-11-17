@@ -1,11 +1,12 @@
 import { z } from 'zod';
-import { sshRun } from './relay.ts';
-import { accountNames, emitChanged, isEntrypoint, publishAccounts, requiredOption, runSource, sourceStamp, sourceText, SourceError, watcherArguments, writeDiagnostic, writeRecord } from './source.ts';
+import { oeEndpoint, oeRequest } from './oe-endpoint.ts';
+import type { OeEndpoint } from './oe-endpoint.ts';
+import { accountNames, emitChanged, isEntrypoint, publishAccounts, runSource, sourceStamp, sourceText, SourceError, watcherArguments, writeDiagnostic, writeRecord } from './source.ts';
 import type { Emit, Source, SourceMessage } from './source.ts';
 import { htmlToText } from './teams.ts';
 
-// Mail of the OE Copilot agent mailboxes, read through its /api/communication gateway on the OE host.
-// Same call shape as OE-Copilot mcp/src/service.ts sshGateway: the agent API_KEY and Microsoft tokens never leave the container.
+// Mail of the OE Copilot agent mailboxes, read through its /api/communication gateway behind the OE endpoint.
+// The agent API_KEY and Microsoft tokens never leave the OE host.
 export interface OeRequest { path: string; body?: unknown }
 export type OeCall = (requests: OeRequest[], signal?: AbortSignal) => Promise<{ status: number; body: string }[]>;
 
@@ -19,45 +20,15 @@ const mailSchema = z.object({ Id: z.string().min(1), InternetMessageId: z.string
 const pageSchema = z.object({ value: z.array(z.unknown()), '@odata.nextLink': z.string().nullish() });
 const accountsSchema = z.object({ accounts: z.array(z.object({ upn: z.string(), status: z.string().nullish() })) });
 
-// The agent image is a static binary with no shell or node (Rust agent, 2026-11-12), so the request runs on the OE host with bash and curl,
-// against the agent port published on the host's loopback. The key is read from the container environment into a 0700 temporary file
-// (never a command-line argument) and stays on the host. Output: one line per request, "<HTTP status> <base64 body>".
-const B64 = (text: string) => Buffer.from(text).toString('base64');
+const responsesSchema = z.object({ responses: z.array(z.object({ status: z.number().int(), body: z.string() })) });
 
-export function oeCommand(requests: OeRequest[], container = 'oe-copilot-agent', port = 3180): string {
-  if (!/^[A-Za-z0-9_][\w.-]*$/.test(container) || !Number.isInteger(port) || port < 1 || port > 65535) throw new SourceError('oemail', 'oemail.invalid-argument');
-  const entries = requests.map((r) => `${B64(r.path)}:${r.body === undefined ? '' : B64(JSON.stringify(r.body))}`).join(' ');
-  const curl = `curl -sg --noproxy '*' --max-time 30 -H @"$d/h" -o "$d/o" -w '%{http_code}'`;
-  const script = [
-    'set -eu',
-    `k=$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' ${container} | sed -n 's/^API_KEY=//p' | head -n 1)`,
-    '[ -n "$k" ] || exit 2',
-    'd=$(mktemp -d); chmod 700 "$d"; trap \'rm -rf "$d"\' EXIT',
-    'printf \'Authorization: Bearer %s\\nContent-Type: application/json\\n\' "$k" > "$d/h"',
-    `for r in ${entries}; do`,
-    '  p=$(printf %s "${r%%:*}" | base64 -d); b=${r#*:}; : > "$d/o"',
-    `  if [ -n "$b" ]; then c=$(printf %s "$b" | base64 -d | ${curl} --data-binary @- "http://127.0.0.1:${port}$p") || c=000`,
-    `  else c=$(${curl} "http://127.0.0.1:${port}$p") || c=000; fi`,
-    '  printf \'%s %s\\n\' "${c:-000}" "$(base64 -w0 < "$d/o")"',
-    'done',
-  ].join('\n');
-  // Script and requests travel as base64, so the remote shell never interprets request data.
-  return `bash -c "$(printf %s '${B64(script)}' | base64 -d)"`;
-}
-
-/** The lines of oeCommand: HTTP status and body of each request, in order. */
-export function parseOeOutput(output: string, expected: number, source: Source = 'oemail'): { status: number; body: string }[] {
-  const lines = output.split('\n').filter((line) => line !== '');
-  const parsed = lines.map((line) => /^(\d{3}) ([A-Za-z0-9+/=]*)$/.exec(line));
-  if (lines.length !== expected || parsed.some((m) => !m)) throw new SourceError(source, 'oemail.response-shape');
-  return parsed.map((m) => ({ status: Number(m![1]), body: Buffer.from(m![2]!, 'base64').toString('utf8') }));
-}
-
+// The requests go to the agent through the OE endpoint (/everflow/agent), which answers each one's status and body in order.
 // Gmail and Google Chat read the same agent through this call; their errors keep the oemail.* transport codes under their own source.
-export function sshOeCall(host: string, source: Source = 'oemail'): OeCall {
+export function httpOeCall(endpoint: OeEndpoint, source: Source = 'oemail'): OeCall {
   return async (requests, signal) => {
-    const output = await sshRun(source, 'oemail', { host, timeoutMs: 90_000, maxBytes: 32 * 1024 * 1024 }, oeCommand(requests), signal);
-    return parseOeOutput(output.toString('utf8'), requests.length, source);
+    const answer = responsesSchema.safeParse(await oeRequest(source, 'oemail', endpoint, 'agent', { method: 'POST', body: { requests } }, signal));
+    if (!answer.success || answer.data.responses.length !== requests.length) throw new SourceError(source, 'oemail.response-shape');
+    return answer.data.responses;
   };
 }
 
@@ -160,9 +131,9 @@ export async function scanOeMail(call: OeCall, state: ReturnType<typeof createOe
 }
 
 export async function oeMailMain(args = process.argv.slice(2)): Promise<number> {
-  const options = watcherArguments(args, { host: { type: 'string' }, account: { type: 'string', multiple: true } });
+  const options = watcherArguments(args, { account: { type: 'string', multiple: true } });
   const state = createOeMailState({ accounts: options.values.account ?? [], since: options.since, expectedAccounts: options.expectedAccounts });
-  const call = sshOeCall(requiredOption(options.values, 'host'));
+  const call = httpOeCall(oeEndpoint('oemail', 'oemail'));
   return runSource('oemail', options, (signal) => scanOeMail(call, state, writeRecord, undefined, signal));
 }
 
