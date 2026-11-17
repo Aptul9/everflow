@@ -47,6 +47,10 @@ receipt=$(sed -n 's/^{"buildReceipt":"\(.*\)"}$/\1/p' "$build_log" | tail -n 1)
 echo "built $receipt"
 
 vm=$release/deploy/vm
+# the running config goes back with the running build when the new one does not answer: an older build can refuse a
+# newer config (2026-11-17: [oe] replaced the sources' host)
+rm -f "$instance/config.toml.prev"
+[ ! -f "$instance/config.toml" ] || cp -p "$instance/config.toml" "$instance/config.toml.prev"
 install -m 644 "$vm/config.toml" "$instance/config.toml"
 rm -f "$instance/providers.jsonc"
 # the chat folders the config names ([opencode] and each client's directory)
@@ -83,6 +87,7 @@ if ! healthy; then
   journalctl --user -u everflow.service -n 30 --no-pager >&2 || true
   if [ -n "$previous" ] && [ -f "$previous" ]; then
     printf '%s\n' "$previous" > "$instance/build.txt"
+    [ ! -f "$instance/config.toml.prev" ] || cp -p "$instance/config.toml.prev" "$instance/config.toml"
     systemctl --user restart everflow.service
     healthy && echo "rolled back to $previous" >&2 || echo "rollback to $previous did not answer either" >&2
   fi
