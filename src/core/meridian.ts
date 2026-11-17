@@ -11,6 +11,7 @@ import { utc } from './time.ts';
 // Each read makes Meridian ask Anthropic's usage endpoint for every profile once its 30 s cache is gone, and that endpoint rate limits
 // per account across every Meridian signed into it; a limit hit between checks still reaches failover through the triage call itself.
 export const ACCOUNT_CHECK_MS = 5 * 60_000;
+export const ACCOUNT_CHECK_MAX_MS = 30 * 60_000;
 
 const windowSchema = z.looseObject({ type: z.string(), utilization: z.number().nullish(), resetsAt: z.number().nullish() });
 const quotaSchema = z.looseObject({ profiles: z.array(z.looseObject({ id: z.string(), error: z.unknown().optional(),
@@ -18,7 +19,7 @@ const quotaSchema = z.looseObject({ profiles: z.array(z.looseObject({ id: z.stri
 
 export type Usage = Partial<Record<'five_hour' | 'seven_day', number>>;
 export type AccountVerdict = { id: string } & ({ state: 'ok'; usage: Usage } | { state: 'limited'; usage: Usage; window: string; resets_at: string }
-  | { state: 'unavailable'; error: string; usage?: Usage });
+  | { state: 'unavailable'; error: string; usage?: Usage } | { state: 'throttled' });
 
 function problem(value: unknown): string | null {
   if (value === null || value === undefined || value === false) return null;
@@ -66,19 +67,26 @@ export async function readAccounts(cfg: Config, options: { providers?: Readonly<
       const full = windows.filter((item) => (item.utilization ?? 0) >= 1 && typeof item.resetsAt === 'number').sort((a, b) => b.resetsAt! - a.resetsAt!)[0];
       if (error && error !== 'rate_limited') verdicts.push({ id: route.id, state: 'unavailable', error: `Meridian: ${error}`, usage });
       else if (full) verdicts.push({ id: route.id, state: 'limited', usage, window: full.type, resets_at: new Date(full.resetsAt!).toISOString() });
-      else if (!error) verdicts.push({ id: route.id, state: 'ok', usage });
+      else if (error) verdicts.push({ id: route.id, state: 'throttled' });
+      else verdicts.push({ id: route.id, state: 'ok', usage });
     }
   }
   return verdicts;
 }
 
+/** The wait before the next check doubles while Meridian says the usage endpoint is rate limiting, and is back to the base once it answers. */
+export function nextAccountCheck(previous: number, verdicts: readonly AccountVerdict[]): number {
+  return verdicts.some((verdict) => verdict.state === 'throttled') ? Math.min(previous * 2, ACCOUNT_CHECK_MAX_MS) : ACCOUNT_CHECK_MS;
+}
+
 /** Health rows from the verdicts: an unavailable account is skipped until the next check, a limited one until its window resets,
- *  and an account Meridian calls fine is tried again at once, whatever its last triage call did. */
+ *  an account Meridian calls fine is tried again at once, whatever its last triage call did, and a throttled one keeps its row. */
 export function applyAccounts(db: DatabaseSync, cfg: Config, verdicts: readonly AccountVerdict[], at = Date.now()): void {
   const now = utc(new Date(at).toISOString());
   transaction(db, () => {
     for (const verdict of verdicts) {
       const dependency = `provider:${verdict.id}`;
+      if (verdict.state === 'throttled') continue;
       if (verdict.state === 'ok') { healthOk(db, dependency, now, { retry_at: null, usage: verdict.usage }); continue; }
       const limited = verdict.state === 'limited';
       healthError(db, cfg, dependency, limited ? `Limit reached (${verdict.window.replace('_', '-')}), resets ${verdict.resets_at.slice(0, 16).replace('T', ' ')} UTC` : verdict.error, now, true);
