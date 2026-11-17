@@ -262,23 +262,89 @@ test('a ticket with a chat says where the chat is, from the moment it opens', ()
   expect(within(card).queryByRole('link', { name: /OpenChamber web/ })).toBeNull();
 });
 
-test('with a chat origin the card opens the chat in the app or in OpenChamber web', () => {
+test('with a chat origin Open shows the chat on the board: the chat view framed with the folder the server resolved', async () => {
+  fetcher.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => init?.method === 'POST' && String(input) === '/api/ticket/3/open-chat'
+    ? Response.json({ ticket: 3, session_id: 'ses_synthetic123', directory: '/home/aptul/Vault' }) : new Response(null, { status: 304 }));
   const state = uiState();
   Object.assign(state.groups.working[0]!, { session_id: 'ses_synthetic123', chat_running: true });
   state.chat_origin = 'https://chat.everflow.example.invalid';
   board(state);
   const card = screen.getByRole('article', { name: 'Ticket #3: Active work' });
   expect(within(card).getByText('Chat working now, project Vault')).toBeTruthy();
-  expect(within(card).queryByRole('link', { name: 'Open the chat of ticket #3 in OpenChamber' })).toBeNull();
-  const app = within(card).getByRole('link', { name: 'Open the chat of ticket #3 in the OpenChamber app' });
-  expect(app.getAttribute('href')).toBe('openchamber://session/ses_synthetic123');
-  expect(app.textContent).toBe('App');
-  expect(app.getAttribute('target')).toBeNull();
-  const web = within(card).getByRole('link', { name: 'Open the chat of ticket #3 in OpenChamber web' });
+  expect(within(card).queryByRole('link')).toBeNull();
+  const open = within(card).getByRole('button', { name: 'Open the chat of ticket #3' });
+  expect(open.textContent).toBe('Open');
+  await userEvent.click(open);
+  const dialog = await screen.findByRole('dialog', { name: '#3Active work' });
+  expect(fetcher).toHaveBeenCalledWith('/api/ticket/3/open-chat', expect.objectContaining({ method: 'POST', body: '{}',
+    headers: expect.objectContaining({ 'x-everflow-token': 'per-start-token' }) }));
+  const frame = await within(dialog).findByTitle('Chat of ticket #3');
+  expect(frame.getAttribute('src')).toBe('https://chat.everflow.example.invalid/mini-chat.html?mode=session&sessionId=ses_synthetic123&directory=%2Fhome%2Faptul%2FVault');
+  expect(frame.getAttribute('allow')).toBe('clipboard-read; clipboard-write; microphone');
+  expect(screen.queryByText('Local action saved.')).toBeNull();
+  expect(dialog.className).toMatch(/\bh-dvh\b.*\bw-screen\b/);
+  expect(dialog.className).toMatch(/sm:h-\[90vh\].*sm:w-\[95vw\]/);
+  const web = within(dialog).getByRole('link', { name: 'Open the chat of ticket #3 in OpenChamber' });
   expect(web.getAttribute('href')).toBe('https://chat.everflow.example.invalid/?session=ses_synthetic123');
-  expect(web.textContent).toBe('Web');
   expect(web.getAttribute('target')).toBe('_blank');
-  expect(web.getAttribute('rel')).toBe('noopener');
+  expect(web.textContent).toBe('OpenChamber');
+  expect(within(dialog).getByRole('link', { name: 'Open the chat of ticket #3 in the OpenChamber app' }).getAttribute('href')).toBe('openchamber://session/ses_synthetic123');
+  await userEvent.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+});
+
+test('the chat dialog says why a chat cannot open instead of showing an empty chat', async () => {
+  fetcher.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === 'POST'
+    ? Response.json({ error: { code: 'chat.not-found', message: 'OpenChamber has no session ses_synthetic123' } }, { status: 404 }) : new Response(null, { status: 304 }));
+  const state = uiState();
+  state.groups.working[0]!.session_id = 'ses_synthetic123';
+  state.chat_origin = 'https://chat.everflow.example.invalid';
+  board(state);
+  await userEvent.click(screen.getByRole('button', { name: 'Open the chat of ticket #3' }));
+  const dialog = await screen.findByRole('dialog');
+  expect((await within(dialog).findByRole('alert')).textContent).toBe('OpenChamber has no session ses_synthetic123');
+  expect(dialog.querySelector('iframe')).toBeNull();
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+});
+
+test('with a chat origin the header opens OpenChamber web left of the search; without one the board is as before', () => {
+  const state = uiState();
+  state.groups.working[0]!.session_id = 'ses_synthetic123';
+  state.chat_origin = 'https://chat.everflow.example.invalid';
+  board(state);
+  const link = screen.getByRole('link', { name: 'OpenChamber' });
+  expect(link.getAttribute('href')).toBe('https://chat.everflow.example.invalid');
+  expect(link.getAttribute('target')).toBe('_blank');
+  expect(link.compareDocumentPosition(screen.getByRole('searchbox')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  cleanup();
+  const plain = uiState();
+  plain.groups.working[0]!.session_id = 'ses_synthetic123';
+  board(plain);
+  expect(screen.queryByRole('link', { name: 'OpenChamber' })).toBeNull();
+  expect(screen.queryByRole('button', { name: /^Open the chat/ })).toBeNull();
+  expect(screen.getByRole('link', { name: 'Open the chat of ticket #3 in OpenChamber' }).getAttribute('href')).toBe('openchamber://session/ses_synthetic123');
+  expect(screen.queryByRole('dialog')).toBeNull();
+});
+
+test('after Discuss the chat dialog opens as soon as the daemon has created the chat', async () => {
+  const state = uiState();
+  state.chat_origin = 'https://chat.everflow.example.invalid';
+  const created = structuredClone(state);
+  Object.assign(created.groups.needs_you.find((item) => item.id === 1)!, { session_id: 'ses_discussed1' });
+  let polls = 0;
+  fetcher.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === 'POST') return String(input) === '/api/ticket/1/open-chat'
+      ? Response.json({ ticket: 1, session_id: 'ses_discussed1', directory: '/home/aptul/Vault' }) : Response.json({ ticket: 1 });
+    // the first refresh still has no chat, the next one has it
+    return ++polls < 2 ? new Response(null, { status: 304 }) : Response.json(created, { headers: { etag: '"created"' } });
+  });
+  board(state);
+  await userEvent.click(within(ticket()).getByRole('button', { name: 'Discuss' }));
+  await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Open chat' }));
+  const frame = await screen.findByTitle('Chat of ticket #1', {}, { timeout: 5_000 });
+  expect(frame.getAttribute('src')).toContain('sessionId=ses_discussed1');
+  expect(screen.getByRole('dialog', { name: '#1Reset access' })).toBeTruthy();
 });
 
 test('a ticket whose chat is running says so on the card', () => {
