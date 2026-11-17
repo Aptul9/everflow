@@ -227,9 +227,9 @@ export function TicketCard(props: {
           onClick={() => { void post(keys.clear, `/api/ticket/${ticket.id}/clear`).catch(() => {}); }}><X aria-hidden="true" /></Button>}
       </div>
       <h4 id={heading} className="text-sm leading-snug font-semibold"><span className="sr-only">{`Ticket #${ticket.id}:`}</span>{' '}{ticket.title}</h4>
-      {ticket.session_id && !terminal && <p title={`Session ${ticket.session_id}`} className="flex min-w-0 items-center gap-1.5 rounded-md bg-info-soft px-2 py-1 text-xs font-medium text-info">
+      {ticket.session_id && !terminal && <p title={`Session ${ticket.session_id}`} className={cn('flex min-w-0 items-center gap-1.5 rounded-md bg-info-soft px-2 py-1 text-xs font-medium text-info', props.chatOrigin && 'flex-wrap gap-y-0.5')}>
         {ticket.chat_running ? <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin" /> : <MessagesSquare aria-hidden="true" className="size-3.5 shrink-0" />}
-        <span className="min-w-0">{`${ticket.chat_running ? 'Chat working now' : 'Chat open in OpenChamber'}${props.chatProject ? `, project ${props.chatProject}` : ''}`}</span>
+        <span className={cn('min-w-0', props.chatOrigin && 'min-w-32 flex-1')}>{`${ticket.chat_running ? 'Chat working now' : 'Chat open in OpenChamber'}${props.chatProject ? `, project ${props.chatProject}` : ''}`}</span>
         {props.chatOrigin ? <span className="ml-auto inline-flex shrink-0 items-center gap-0.5">
           <a href={`openchamber://session/${encodeURIComponent(ticket.session_id)}`} aria-label={`Open the chat of ticket #${ticket.id} in the OpenChamber app`} className={chatLink}>App</a>
           <a href={`${props.chatOrigin}/?session=${encodeURIComponent(ticket.session_id)}`} target="_blank" rel="noopener" aria-label={`Open the chat of ticket #${ticket.id} in OpenChamber web`} className={chatLink}>
