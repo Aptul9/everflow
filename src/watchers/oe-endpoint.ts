@@ -7,7 +7,7 @@ export interface OeEndpoint { url: string; token: string }
 
 const LOCAL = new Set(['localhost', '127.0.0.1', '[::1]']);
 
-export function oeEndpoint(source: Source, prefix: string, env: NodeJS.ProcessEnv = process.env): OeEndpoint {
+export function oeEndpoint(source: Source, prefix: string, env: Record<string, string | undefined> = process.env): OeEndpoint {
   const fail = () => new SourceError(source, `${prefix}.oe-config`);
   const raw = env.EVERFLOW_OE_URL?.trim(), token = env.EVERFLOW_OE_TOKEN?.trim();
   if (!raw || !token || !/^[\x21-\x7e]+$/.test(token)) throw fail();

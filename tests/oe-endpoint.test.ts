@@ -29,7 +29,7 @@ async function failure(promise: Promise<unknown>): Promise<SourceError> {
 }
 
 test('sends the bearer and json body to the everflow route', async () => {
-  const seen: { method?: string; url?: string; auth?: string; type?: string; body?: string }[] = [];
+  const seen: { method: string | undefined; url: string | undefined; auth: string | undefined; type: string | undefined; body: string }[] = [];
   const url = await serve((req, res, body) => {
     seen.push({ method: req.method, url: req.url, auth: req.headers.authorization, type: req.headers['content-type'], body });
     res.setHeader('content-type', 'application/json');

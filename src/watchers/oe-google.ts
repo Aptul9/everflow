@@ -1,8 +1,8 @@
 import type { OeCall } from './oemail.ts';
 import { SourceError } from './source.ts';
 
-// Gmail and Google Chat read through the OE Copilot agent (/api/communication/{gmail,gchat}/read) over the oemail SSH path,
-// so the Google grant and the Chat cookies stay on the OE host. Several reads share one SSH session, `batch` per session.
+// Gmail and Google Chat read through the OE Copilot agent (/api/communication/{gmail,gchat}/read) over the oemail endpoint path,
+// so the Google grant and the Chat cookies stay on the OE host. Several reads share one endpoint call, `batch` per call.
 export type OeGoogleRead = (bodies: Record<string, unknown>[], signal?: AbortSignal) => Promise<unknown[]>;
 
 export function oeGoogleRead(call: OeCall, source: 'gmail' | 'gchat', account: string, batch: number): OeGoogleRead {

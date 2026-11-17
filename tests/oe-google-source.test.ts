@@ -1,6 +1,8 @@
-import { expect, test } from 'vitest';
-import { createGchatState, scanOeGchat } from '../src/watchers/gchat.ts';
-import { createGmailState, scanOeGmail, scanOeGmails } from '../src/watchers/gmail.ts';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { expect, test, vi } from 'vitest';
+import { createGchatState, gchatMain, scanOeGchat } from '../src/watchers/gchat.ts';
+import { createGmailState, gmailMain, scanOeGmail, scanOeGmails } from '../src/watchers/gmail.ts';
 import { oeGoogleRead } from '../src/watchers/oe-google.ts';
 import type { OeRequest } from '../src/watchers/oemail.ts';
 import type { SourceRecord } from '../src/watchers/source.ts';
@@ -171,9 +173,49 @@ test('several Gmail mailboxes through the OE agent share one checkpoint, written
   }
 });
 
-test('OE reads split into SSH sessions of the batch size, in order', async () => {
+test('OE reads split into endpoint calls of the batch size, in order', async () => {
   const { sessions, call } = agent((_, body) => ok({ n: body.n }));
   const out = await oeGoogleRead(call, 'gmail', account, 2)([1, 2, 3, 4, 5].map((n) => ({ n })));
   expect(out).toEqual([1, 2, 3, 4, 5].map((n) => ({ n })));
   expect(sessions.map((session) => session.length)).toEqual([2, 2, 1]);
+});
+
+async function endpoint(answer: (path: string, body: any) => { status: number; body: string }) {
+  const seen: { url: string; requests: OeRequest[] }[] = [];
+  const server = createServer((req, res) => {
+    let text = '';
+    req.on('data', (chunk) => { text += chunk; });
+    req.on('end', () => {
+      const { requests } = JSON.parse(text) as { requests: OeRequest[] };
+      seen.push({ url: req.url!, requests });
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ responses: requests.map((r) => answer(r.path, r.body)) }));
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, seen, close: () => { server.closeAllConnections(); server.close(); } };
+}
+
+test('gmail and gchat watchers with --oe read through the endpoint of their environment; without it they fail oemail.oe-config', async () => {
+  const oe = await endpoint((path, body) => {
+    if (path === '/api/communication/gchat/read') return ok({ self_id: 'self', conversations: [], coverage: 'recent-conversations' });
+    if (body.path === 'profile') return ok({ emailAddress: account });
+    return ok({ messages: [] });
+  });
+  const out: string[] = [];
+  const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { out.push(String(chunk)); return true; });
+  const errors = vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { out.push(String(chunk)); return true; });
+  try {
+    vi.stubEnv('EVERFLOW_OE_URL', oe.url); vi.stubEnv('EVERFLOW_OE_TOKEN', 'everflow-token-0123456789abcdef0123456789');
+    expect(await gmailMain(['--since', since, '--once', '--oe', '--account', account])).toBe(0);
+    expect(await gchatMain(['--since', since, '--once', '--oe', '--account', account, '--self-id', 'self'])).toBe(0);
+    expect(oe.seen.every((s) => s.url === '/everflow/agent')).toBe(true);
+    expect(oe.seen.map((s) => s.requests[0]!.path)).toContain('/api/communication/gmail/read');
+    expect(oe.seen.map((s) => s.requests[0]!.path)).toContain('/api/communication/gchat/read');
+    expect(out.filter((line) => line.includes('"checkpoint"'))).toHaveLength(2);
+    vi.stubEnv('EVERFLOW_OE_URL', '');
+    await expect(gmailMain(['--since', since, '--once', '--oe', '--account', account])).rejects.toMatchObject({ code: 'oemail.oe-config', source: 'gmail' });
+    await expect(gchatMain(['--since', since, '--once', '--oe', '--account', account, '--self-id', 'self'])).rejects.toMatchObject({ code: 'oemail.oe-config', source: 'gchat' });
+    await expect(gmailMain(['--since', since, '--once', '--host', 'oe-vm', '--account', account])).rejects.toThrow();
+  } finally { write.mockRestore(); errors.mockRestore(); vi.unstubAllEnvs(); oe.close(); }
 });
