@@ -69,7 +69,7 @@ Owner today: `owner = "aptul99@gmail.com"` on both instances (laptop `%LOCALAPPD
 
 ## Everflow side
 
-- New top-level config: `[oe] url = "https://teams.everbright.it/communication"` and the token from an environment variable named in config (`token_env = "EVERFLOW_OE_TOKEN"`), or a file path for the VM systemd unit. The daemon passes the token to watchers through their environment, never through arguments.
+- New top-level config: `[oe] url = "https://teams.everbright.it/communication"` and `token_file`, a path relative to `config.toml` holding the token (one mechanism for laptop, VM and a Docker secret mount). The daemon passes the token to watchers through their environment, never through arguments.
 - `teamsrelay`, `oemail`, `slack` lose `host`; `teamsrelay` loses `data_dir` and `owner` (the token decides whose slots). `gmail` and `gchat` keep the CLI mode; their `host` mode becomes "through `[oe]`" (a boolean or the presence of `[oe]`: builder's call). Config validation in `validateRuntimeConfig` follows.
 - HTTP implementations of `OeCall`, `SlackCall` and the relay reads (slot list and store snapshots, which `readRelay` today gets from two SSH sessions, now one GET) replace the SSH ones. Parsing, normalizing, checkpoints and state machines stay. Transport error codes keep their meaning: `*.ssh-failed` becomes `*.http-failed` (network or non-2xx from the endpoint itself), `*.timeout`, `*.result-limit`, `*.aborted` stay; new codes go into the `diagnosticCodes` list in `runtime.ts`.
 - The daemon's `ssh` child kind and its registration in `runtime.ts` go away with the SSH spawns.
