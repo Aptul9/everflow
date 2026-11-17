@@ -86,9 +86,9 @@ test('httpRelaySaved asks /everflow/teams since the floor for max_rows and hands
   } finally { live.close(); }
 });
 
-test('endpoint 502 or 401 is relay.http-failed, a malformed answer is relay.response-json; no checkpoint either way', async () => {
+test('endpoint 502 or 401 is relay.http-failed, JSON of the wrong shape relay.saved-shape, not JSON relay.response-json; no checkpoint either way', async () => {
   for (const [answer, code, status] of [[{ status: 502, body: '{"error":"teams relay unreachable"}' }, 'relay.http-failed', 502], [{ status: 401, body: '' }, 'relay.http-failed', 401],
-    [{ status: 200, body: '{"slots":{}}' }, 'relay.response-json', undefined]] as const) {
+    [{ status: 200, body: '{"slots":{}}' }, 'relay.saved-shape', undefined], [{ status: 200, body: '<html>' }, 'relay.response-json', undefined]] as const) {
     const oe = await endpoint(() => answer);
     try {
       const relay = { snapshot: (floor: number) => readRelay(options, floor, undefined, httpRelaySaved({ url: oe.url, token: TOKEN })) };

@@ -17,7 +17,7 @@ const savedSchema = z.object({ slots: z.array(z.union([z.object({ slot: z.unknow
 export function httpRelaySaved(endpoint: OeEndpoint): RelaySaved {
   return async (floor, maxRows, signal) => {
     const answer = savedSchema.safeParse(await oeRequest('teamsrelay', 'relay', endpoint, 'teams', { method: 'GET', query: { since: String(floor), max_rows: String(maxRows) } }, signal));
-    if (!answer.success) throw new SourceError('teamsrelay', 'relay.response-json');
+    if (!answer.success) throw new SourceError('teamsrelay', 'relay.saved-shape');
     return answer.data.slots as { slot: number; snapshot?: string; error?: string }[];
   };
 }
