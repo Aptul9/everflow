@@ -283,7 +283,7 @@ test('with a chat origin Open shows the chat on the board: the chat view framed 
   expect(frame.getAttribute('allow')).toBe('clipboard-read; clipboard-write; microphone');
   expect(screen.queryByText('Local action saved.')).toBeNull();
   expect(dialog.className).toMatch(/\bh-dvh\b.*\bw-screen\b/);
-  expect(dialog.className).toMatch(/sm:h-\[calc\(100dvh-3\.5rem\)\].*sm:w-\[min\(1100px,96vw\)\]/);
+  expect(dialog.className).toMatch(/sm:h-\[calc\(100dvh-1\.5rem\)\].*sm:w-\[min\(1100px,96vw\)\]/);
   expect(within(dialog).getByRole('button', { name: 'Close' })).toBeTruthy();
   const web = within(dialog).getByRole('link', { name: 'Open the chat of ticket #3 in OpenChamber' });
   expect(web.getAttribute('href')).toBe('https://chat.everflow.example.invalid/?session=ses_synthetic123');
