@@ -27,8 +27,9 @@ jobs:
           # the deploy job runs this straight through Node's type stripping, outside the build
           EVERFLOW_PASSWORD=synthetic node scripts/hash-password.ts | grep -Eq '^scrypt\$32768\$8\$1\$'
           docker run --rm -v "$PWD/deploy/vm/Caddyfile:/etc/caddy/Caddyfile:ro" -e EVERFLOW_DOMAIN=everflow.example.invalid \
+            -e EVERFLOW_CHAT_DOMAIN=chat.everflow.example.invalid \
             caddy:2.11.8-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-          d=$(mktemp -d) && cp deploy/vm/compose.yml deploy/vm/Caddyfile "$d" && printf "EVERFLOW_DOMAIN='x'\n" > "$d/.env"
+          d=$(mktemp -d) && cp deploy/vm/compose.yml deploy/vm/Caddyfile "$d" && printf "EVERFLOW_DOMAIN='x'\nEVERFLOW_CHAT_DOMAIN='y'\n" > "$d/.env"
           docker compose -f "$d/compose.yml" config -q
       - name: Build
         id: build
@@ -126,5 +127,15 @@ jobs:
           test "$(login -c "$jar" -d "$(jq -cn --arg e "$PAGE_USER" --arg p "$PAGE_PASSWORD" '{email:$e,password:$p}')")" = 204
           test "$(code -b "$jar" "$base/api/state")" = 200
           curl -fsS --max-time 15 -b "$jar" "$base/" | grep -q '<title>Everflow</title>'
+          # the OpenChamber web UI: the sign-in cookie opens it, without it the chat host sends to the sign-in
+          chat=$(sed -n 's|^chat_origin = "\(https://[^"]*\)"$|\1|p' deploy/vm/config.toml)
+          for _ in $(seq 1 30); do
+            if [ "$(code "$chat/")" = 302 ]; then break; fi
+            sleep 5
+          done
+          test "$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$chat/")" = "$base/login?next=$(jq -rn --arg u "$chat/" '$u|@uri')"
+          test "$(code -b "$jar" -H 'accept: application/json' "$chat/auth/session")" = 200
+          test "$(code -b "$jar" "$base/api/chat-gate")" = 404
+          echo "$chat/ ok"
           curl -s -o /dev/null --max-time 15 -b "$jar" -H "origin: $base" -X POST "$base/api/logout"
           echo "$base/ ok"

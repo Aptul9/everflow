@@ -58,9 +58,11 @@ systemctl --user enable everflow.service >/dev/null 2>&1
 
 domain=$(sed -n 's|^public_origin = "https://\([^"]*\)"$|\1|p' "$instance/config.toml")
 [ -n "$domain" ] || { echo "config.toml has no [web] public_origin" >&2; exit 1; }
+chat_domain=$(sed -n 's|^chat_origin = "https://\([^"]*\)"$|\1|p' "$instance/config.toml")
+[ -n "$chat_domain" ] || { echo "config.toml has no [web] chat_origin" >&2; exit 1; }
 install -m 644 "$vm/Caddyfile" "$root/caddy/Caddyfile"
 install -m 644 "$vm/compose.yml" "$root/caddy/compose.yml"
-(umask 077; printf "EVERFLOW_DOMAIN='%s'\n" "$domain" > "$root/caddy/.env")
+(umask 077; printf "EVERFLOW_DOMAIN='%s'\nEVERFLOW_CHAT_DOMAIN='%s'\n" "$domain" "$chat_domain" > "$root/caddy/.env")
 # single quotes: the '$' of the hash stays literal
 (umask 077; printf "EVERFLOW_LOGIN_USER='%s'\nEVERFLOW_LOGIN_HASH='%s'\n" "$user" "$hash" > "$instance/login.env")
 docker compose -f "$root/caddy/compose.yml" up -d --remove-orphans

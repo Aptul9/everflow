@@ -35,6 +35,8 @@ lookback_minutes = 0
 port = 8789
 # Caddy (deploy/vm/Caddyfile) serves the page here over TLS; the daemon asks for its own sign-in under this host and stays on 127.0.0.1
 public_origin = "https://flow.everbright.it"
+# The OpenChamber web UI (openchamber.service) behind the same sign-in; Caddy asks the daemon's gate on every request
+chat_origin = "https://chat.flow.everbright.it"
 
 [oe]
 # The OE Copilot endpoint every OE source reads through; oe.token (mode 600, next to this file) holds its read-only token
