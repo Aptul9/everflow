@@ -250,7 +250,7 @@ test('offered candidates are the union of open same-client, source-local shared 
   for (const id of foreign) expect(offered?.map((item: { id: number }) => item.id)).not.toContain(id);
 });
 
-test('shared person ids across sources are not a verified cross-source identity association', () => {
+test('a shared person across sources stays inside the batch client', () => {
   const { path, cfg } = fixture();
   using db = openDb(path);
   const input = batch(db, { text: 'No refs' });
@@ -259,6 +259,19 @@ test('shared person ids across sources are not a verified cross-source identity 
   link(db, other, conversation(db, otherBatch));
   expect(db.prepare('SELECT COUNT(DISTINCT person) AS n FROM message').get()?.n).toBe(1);
   expect(api.candidates?.(db, cfg, input, AT)).toEqual([]);
+});
+
+test('the same full name on another source is a shared person, in any word order', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const input = batch(db, { sender_name: 'Rossi Bob (Acme)', text: 'No refs' });
+  const teams = batch(db, { source: 'teams', sender: 'bob rossi', sender_name: 'bob rossi', text: 'No refs' });
+  const firstName = batch(db, { source: 'teams', sender: 'bob', sender_name: 'Bob', text: 'No refs' });
+  const shared = ticket(db, { created_at: OLD, lifecycle: 'done', closed_at: OLD, client: 'acme' });
+  const unrelated = ticket(db, { created_at: OLD, lifecycle: 'done', closed_at: OLD, client: 'acme' });
+  link(db, shared, conversation(db, teams));
+  link(db, unrelated, conversation(db, firstName));
+  expect(api.candidates?.(db, cfg, input, AT)).toEqual([expect.objectContaining({ id: shared, shared_people: true })]);
 });
 
 test('own-message people do not expand the candidate set', () => {
