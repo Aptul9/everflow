@@ -16,7 +16,7 @@ import { ingest, IngestError, retireAccounts, schedule, sourceStart } from './in
 import { claim, complete, defer, enqueue, fail, hasPendingInput, healthError, healthOk, owns, startRenewal } from './jobs.ts';
 import type { Job } from './jobs.ts';
 import { handleTriage } from './kb-agent.ts';
-import { ACCOUNT_CHECK_MS, applyAccounts, readAccounts } from './meridian.ts';
+import { ACCOUNT_CHECK_MS, applyAccounts, nextAccountCheck, readAccounts } from './meridian.ts';
 import { startRetitler, startSessionEvents } from './retitle.ts';
 import { connect } from './opencode.ts';
 import type { Peer } from './opencode.ts';
@@ -389,12 +389,12 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
       .catch((error: unknown) => log({ source: 'daemon', code: 'models.refresh-failed', ...failureFields(error, 'models.refresh') }))
       .finally(() => { refreshing = false; });
   };
-  let checking = false, checkedAt = 0;
+  let checking = false, checkedAt = 0, checkEvery = ACCOUNT_CHECK_MS;
   // Meridian says whether each triage account can serve; a local read, no tokens
   const checkAccounts = () => {
-    if (checking || !cfg.tickets.enabled || Date.now() - checkedAt < ACCOUNT_CHECK_MS) return;
+    if (checking || !cfg.tickets.enabled || Date.now() - checkedAt < checkEvery) return;
     checking = true; checkedAt = Date.now();
-    void readAccounts(cfg).then((verdicts) => { if (!stopped) applyAccounts(db, cfg, verdicts); })
+    void readAccounts(cfg).then((verdicts) => { checkEvery = nextAccountCheck(checkEvery, verdicts); if (!stopped) applyAccounts(db, cfg, verdicts); })
       .catch((error: unknown) => log({ source: 'daemon', code: 'accounts.check-failed', ...failureFields(error, 'accounts.check') }))
       .finally(() => { checking = false; });
   };

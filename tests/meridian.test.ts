@@ -1,7 +1,7 @@
 import { expect, test } from 'vitest';
 import { openDb } from '../src/core/db.ts';
 import { assess } from '../src/core/kb-agent.ts';
-import { ACCOUNT_CHECK_MS, applyAccounts, readAccounts } from '../src/core/meridian.ts';
+import { ACCOUNT_CHECK_MAX_MS, ACCOUNT_CHECK_MS, applyAccounts, nextAccountCheck, readAccounts } from '../src/core/meridian.ts';
 import type { AccountVerdict } from '../src/core/meridian.ts';
 import { readState } from '../src/web/state.ts';
 import { context, kbFixture, provider, scriptedPeer, text } from './kb-support.ts';
@@ -47,8 +47,22 @@ test('a failed usage refresh is not an account problem: cached windows still dec
   const verdicts = await readAccounts(cfg, { fetch: peer.fetch, providers: { stale: route('notarify'), blind: route('everbright'), full: route('roar') } });
   expect(verdicts).toEqual([
     { id: 'stale', state: 'ok', usage: { five_hour: 0.04 } },
+    { id: 'blind', state: 'throttled' },
     { id: 'full', state: 'limited', usage: { five_hour: 1 }, window: 'five_hour', resets_at: '2026-11-14T10:30:00.000Z' },
   ]);
+  const { cfg: other } = kbFixture();
+  using db = openDb(other.db.path);
+  applyAccounts(db, other, [{ id: 'blind', state: 'throttled' }], AT);
+  expect(db.prepare('SELECT 1 FROM health WHERE dependency=?').get('provider:blind')).toBeUndefined();
+});
+
+test('the account check backs off exponentially while usage reads are throttled and resets on a clean read', () => {
+  const throttled: AccountVerdict[] = [{ id: 'a', state: 'ok', usage: {} }, { id: 'b', state: 'throttled' }];
+  const waits = [ACCOUNT_CHECK_MS];
+  for (let n = 0; n < 4; n++) waits.push(nextAccountCheck(waits.at(-1)!, throttled));
+  expect(waits.map((ms) => ms / 60_000)).toEqual([5, 10, 20, 30, 30]);
+  expect(ACCOUNT_CHECK_MAX_MS).toBe(30 * 60_000);
+  expect(nextAccountCheck(ACCOUNT_CHECK_MAX_MS, [{ id: 'a', state: 'ok', usage: {} }])).toBe(ACCOUNT_CHECK_MS);
 });
 
 test.each([
