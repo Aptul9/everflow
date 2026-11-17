@@ -6,6 +6,8 @@ import type { Emit, Source, SourceMessage } from './source.ts';
 
 export interface RelayOptions { host: string; root: string; owner: string; maxRows?: number; maxAccounts?: number; timeoutMs?: number; maxBytes?: number }
 export type RelayQuery = (path: string, sql: string, signal?: AbortSignal) => Promise<Record<string, any>[]>;
+/** One result per query: its rows, or the error that query alone hit. */
+export type RelayBatch = (queries: readonly { path: string; sql: string }[], signal?: AbortSignal) => Promise<unknown[]>;
 export type SshSpawn = (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess;
 export interface RelaySnapshot { accounts: { slot: number; email: string; scanAt: number; muted: string[]; messages: SourceMessage[] }[]; errors: { code: string; account: string }[] }
 export function shellQuote(value: string): string {
@@ -22,13 +24,43 @@ export function relayCommand(path: string, sql: string): string {
   return ['sqlite3', '-readonly', '-json', path, `PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; BEGIN; ${statement} COMMIT;`].map(shellQuote).join(' ');
 }
 
-export async function sshQuery(options: RelayOptions, path: string, sql: string, signal?: AbortSignal, spawnProcess: SshSpawn = spawn): Promise<Record<string, any>[]> {
-  const output = await sshRun('teamsrelay', 'relay', options, relayCommand(path, sql), signal, spawnProcess);
+function relayRows(output: string): Record<string, any>[] {
   try {
-    const value: unknown = JSON.parse(output.toString('utf8'));
+    const value: unknown = JSON.parse(output);
     if (!Array.isArray(value) || value.some((row) => !row || typeof row !== 'object' || Array.isArray(row))) throw new Error('shape');
     return value;
   } catch { throw new SourceError('teamsrelay', 'relay.response-json'); }
+}
+
+export async function sshQuery(options: RelayOptions, path: string, sql: string, signal?: AbortSignal, spawnProcess: SshSpawn = spawn): Promise<Record<string, any>[]> {
+  return relayRows((await sshRun('teamsrelay', 'relay', options, relayCommand(path, sql), signal, spawnProcess)).toString('utf8'));
+}
+
+// Every query in one SSH session: each output ends with RS (\x1e), and NAK (\x15) before it marks a query whose sqlite3 failed.
+// sqlite3 -json escapes control characters, so neither byte can come from the data.
+export function relayBatchCommand(queries: readonly { path: string; sql: string }[]): string {
+  return queries.map(({ path, sql }) => `{ ${relayCommand(path, sql)} || printf '\\025'; }; printf '\\036'`).join('; ');
+}
+
+export async function sshBatch(options: RelayOptions, queries: readonly { path: string; sql: string }[], signal?: AbortSignal, spawnProcess: SshSpawn = spawn): Promise<unknown[]> {
+  const maxBytes = Math.min(64 * 1024 * 1024, (options.maxBytes ?? 8 * 1024 * 1024) * Math.max(1, queries.length));
+  const parts = (await sshRun('teamsrelay', 'relay', { ...options, maxBytes }, relayBatchCommand(queries), signal, spawnProcess)).toString('utf8').split('\x1e');
+  if (parts.length !== queries.length + 1 || parts.at(-1) !== '') throw new SourceError('teamsrelay', 'relay.response-json');
+  return parts.slice(0, -1).map((part) => {
+    if (part.endsWith('\x15')) return new SourceError('teamsrelay', 'relay.store-unavailable');
+    try { return relayRows(part); } catch (error) { return error; }
+  });
+}
+
+function serial(query: RelayQuery): RelayBatch {
+  return async (queries, signal) => {
+    const results: unknown[] = [];
+    for (const { path, sql } of queries) {
+      signal?.throwIfAborted();
+      try { results.push(await query(path, sql, signal)); } catch (error) { results.push(error); }
+    }
+    return results;
+  };
 }
 
 // One owned, bounded SSH command; error codes carry the caller's prefix (relay.timeout, oemail.timeout, ...).
@@ -111,11 +143,17 @@ function normalize(email: string, slot: number, raw: Record<string, any>): Sourc
       ...(extra.mentionsMe === true ? { mentions_me: true } : {}) } };
 }
 
+function storeQuery(floor: number, maxRows: number): string {
+  return `SELECT json_object('state',json((SELECT json_group_object(k,v) FROM state WHERE k IN ('me','last_scan_ts','state'))),'muted',json((SELECT json_group_array(name) FROM chats WHERE muted=1)),'messages',json((SELECT json_group_array(json_object('chat',chat,'mid',mid,'author',author,'text',text,'mine',mine,'extra',extra)) FROM (SELECT chat,mid,author,substr(text,1,2000) AS text,mine,extra FROM chat_messages WHERE mid GLOB '[0-9]*' AND mid NOT GLOB '*[^0-9]*' AND CAST(mid AS INTEGER)>=${floor} ORDER BY CAST(mid AS INTEGER),chat LIMIT ${maxRows + 1})))) AS snapshot`;
+}
+
 export async function readRelay(options: RelayOptions, floor: number, signal?: AbortSignal, input?: RelayQuery): Promise<RelaySnapshot> {
   if (!posix.isAbsolute(options.root) || options.root.includes('\0') || !options.owner || !Number.isSafeInteger(floor)) throw new SourceError('teamsrelay', 'relay.invalid-argument');
   const maxRows = options.maxRows ?? 10000, maxAccounts = options.maxAccounts ?? 1024;
   if (!Number.isSafeInteger(maxRows) || maxRows < 1 || maxRows > 100000 || !Number.isSafeInteger(maxAccounts) || maxAccounts < 1 || maxAccounts > 4096) throw new SourceError('teamsrelay', 'relay.invalid-limit');
   const query = input ?? ((path, sql, stop) => sshQuery(options, path, sql, stop));
+  // Two SSH sessions per scan, the slot list and then every store together, instead of one per store
+  const batch: RelayBatch = input ? serial(input) : (queries, stop) => sshBatch(options, queries, stop);
   let slots: Record<string, any>[];
   try {
     signal?.throwIfAborted();
@@ -126,10 +164,18 @@ export async function readRelay(options: RelayOptions, floor: number, signal?: A
   const ids = slots.map((row) => numericSlot(row.slot));
   if (new Set(ids).size !== ids.length) throw new SourceError('teamsrelay', 'relay.invalid-slot');
   const snapshot: RelaySnapshot = { accounts: [], errors: [] };
-  for (const slot of ids) {
+  let results: unknown[];
+  try {
+    results = await batch(ids.map((slot) => ({ path: posix.join(options.root, String(slot), 'messages.db'), sql: storeQuery(floor, maxRows) })), signal);
+  } catch (error) {
+    signal?.throwIfAborted();
+    results = ids.map(() => error);
+  }
+  for (const [index, slot] of ids.entries()) {
     signal?.throwIfAborted();
     try {
-      const rows = await query(posix.join(options.root, String(slot), 'messages.db'), `SELECT json_object('state',json((SELECT json_group_object(k,v) FROM state WHERE k IN ('me','last_scan_ts','state'))),'muted',json((SELECT json_group_array(name) FROM chats WHERE muted=1)),'messages',json((SELECT json_group_array(json_object('chat',chat,'mid',mid,'author',author,'text',text,'mine',mine,'extra',extra)) FROM (SELECT chat,mid,author,substr(text,1,2000) AS text,mine,extra FROM chat_messages WHERE mid GLOB '[0-9]*' AND mid NOT GLOB '*[^0-9]*' AND CAST(mid AS INTEGER)>=${floor} ORDER BY CAST(mid AS INTEGER),chat LIMIT ${maxRows + 1})))) AS snapshot`, signal);
+      const rows = results[index];
+      if (!Array.isArray(rows)) throw rows;
       if (rows.length !== 1) throw new SourceError('teamsrelay', 'relay.saved-shape');
       const saved = jsonObject(rows[0]!.snapshot), state = jsonObject(saved.state), me = jsonObject(state.me || '{}');
       const email = accountNames([me.email])[0]!;

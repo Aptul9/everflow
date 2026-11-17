@@ -5,7 +5,7 @@ import { EventEmitter, getEventListeners } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { DatabaseSync } from 'node:sqlite';
 import { expect, test, vi } from 'vitest';
-import { createRelayState, readRelay, relayCommand, scanRelay, shellQuote, sqlLiteral, sshQuery } from '../src/watchers/relay.ts';
+import { createRelayState, readRelay, relayBatchCommand, relayCommand, scanRelay, shellQuote, sqlLiteral, sshBatch, sshQuery } from '../src/watchers/relay.ts';
 import type { RelayOptions, RelayQuery, SshSpawn } from '../src/watchers/relay.ts';
 import { safeSourceDiagnostic } from '../src/watchers/source.ts';
 import type { SourceMessage, SourceRecord } from '../src/watchers/source.ts';
@@ -236,6 +236,20 @@ test('SSH transport has fixed noninteractive argv and rejects option-like host b
   childFactory.mockClear();
   await expect(sshQuery({ ...options, host: '-oProxyCommand=bad' }, '/synthetic/db', 'SELECT 1;', undefined, childFactory)).rejects.toThrow(/relay.invalid-host/);
   expect(childFactory).not.toHaveBeenCalled();
+});
+
+test('every store query shares one SSH session; a failed store stays attributed to its own query', async () => {
+  const queries = [{ path: '/synthetic/1/messages.db', sql: 'SELECT 1' }, { path: '/synthetic/2/messages.db', sql: 'SELECT 2' }, { path: '/synthetic/3/messages.db', sql: 'SELECT 3' }];
+  expect(relayBatchCommand(queries)).toBe(queries.map(({ path, sql }) => `{ ${relayCommand(path, sql)} || printf '\\025'; }; printf '\\036'`).join('; '));
+  const reply = (text: string) => vi.fn((..._args: any[]) => spawn(process.execPath, ['-e', `process.stdout.write(${JSON.stringify(text)})`], { windowsHide: true }));
+  const childFactory = reply('[{"n":1}]\x1epartial\x15\x1e[]\x1e');
+  const results = await sshBatch(options, queries, undefined, childFactory);
+  expect(childFactory).toHaveBeenCalledOnce();
+  expect(childFactory.mock.calls[0]![1].at(-1)).toBe(relayBatchCommand(queries));
+  expect(results[0]).toEqual([{ n: 1 }]);
+  expect(results[1]).toMatchObject({ code: 'relay.store-unavailable' });
+  expect(results[2]).toEqual([]);
+  await expect(sshBatch(options, queries, undefined, reply('[]\x1e[]\x1e'))).rejects.toThrow(/relay.response-json/);
 });
 
 test.each(['abort', 'timeout', 'overflow'])('SSH %s closes owned child and all timer/listener state before rejecting', async (mode) => {
