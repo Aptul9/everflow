@@ -1,7 +1,7 @@
 'use client';
 
-import { Bell, BellOff, ChevronDown, ChevronUp, Clock, FilePlus, Keyboard, LoaderCircle, LogOut, MessagesSquare, CirclePause, RefreshCw, Search, TriangleAlert, WifiOff, X } from 'lucide-react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { Bell, BellOff, ChevronDown, ChevronUp, Clock, ExternalLink, FilePlus, Keyboard, LoaderCircle, LogOut, MessagesSquare, CirclePause, RefreshCw, Search, TriangleAlert, WifiOff, X } from 'lucide-react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { groups } from '../../lib/web-types.ts';
 import type { Group, OverviewState, SkippedBatch, TicketCard as CardData, TriageBatch } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
@@ -11,6 +11,7 @@ import { Button } from '../ui/button.tsx';
 import { Checkbox } from '../ui/checkbox.tsx';
 import { Input } from '../ui/input.tsx';
 import { ActionDialog, Kbd } from './action-dialog.tsx';
+import { ChatDialog } from './chat-dialog.tsx';
 import { Inline, Markdown } from './markdown.tsx';
 import { Pipeline, Problems } from './pipeline.tsx';
 import { age, Expand, Field, formatTime, MessageList, Section, TicketCard, Time, Toggle, tones } from './ticket-card.tsx';
@@ -134,13 +135,29 @@ function MutedChats(props: { state: OverviewState; expired: boolean; pending: Re
 }
 
 export function TicketBoard(props: { initialState: OverviewState; initialEtag: string; token: string; initialNow?: number; signOut?: boolean }) {
-  const { state, now, unreachable, expired, pending, errors, notice, post } = useOverview(props.initialState, props.initialEtag, props.token, props.initialNow);
+  const { state, now, unreachable, expired, pending, errors, notice, post, refresh } = useOverview(props.initialState, props.initialEtag, props.token, props.initialNow);
   useAttention(state.groups.needs_you.length + state.groups.failed.length);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const root = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const tickets = Object.values(state.groups).flat();
+  // The chat dialog ([web] chat_origin) and a discussed ticket whose chat the daemon is still creating
+  const [chat, setChat] = useState<{ id: number; title: string; session_id: string } | null>(null);
+  const [awaiting, setAwaiting] = useState<number | null>(null);
+  const openChat = useCallback((id: number) => post(`ticket:${id}:open-chat`, `/api/ticket/${id}/open-chat`, {}, true) as Promise<{ session_id: string; directory: string }>, [post]);
+  const discussed = awaiting === null ? undefined : tickets.find((ticket) => ticket.id === awaiting);
+  useEffect(() => {
+    if (awaiting === null) return;
+    if (discussed?.session_id) { setChat({ id: discussed.id, title: discussed.title, session_id: discussed.session_id }); setAwaiting(null); return; }
+    const poll = setInterval(() => { void refresh(); }, 2_000);
+    return () => clearInterval(poll);
+  }, [awaiting, discussed?.id, discussed?.title, discussed?.session_id, refresh]);
+  useEffect(() => {
+    if (awaiting === null) return;
+    const giveUp = setTimeout(() => setAwaiting(null), 120_000);
+    return () => clearTimeout(giveUp);
+  }, [awaiting]);
   const available = new Set(tickets.filter((ticket) => ticket.lifecycle === 'proposed' || ticket.lifecycle === 'active').map((ticket) => ticket.id));
   const chosen = [...selected].filter((id) => available.has(id));
   const [batchSelection, setBatchSelection] = useState<Set<number>>(new Set());
@@ -228,7 +245,10 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
           </span>
           {!state.chats_enabled && <Badge variant="outline">Chats off</Badge>}
         </div>
-        <div className="relative order-last w-full sm:order-none sm:ml-auto sm:w-80">
+        {state.chat_origin && <Button asChild variant="outline" size="sm" className="h-10 sm:ml-auto sm:h-9">
+          <a href={state.chat_origin} target="_blank" rel="noopener"><MessagesSquare aria-hidden="true" />OpenChamber<ExternalLink aria-hidden="true" className="size-3 text-muted-foreground" /></a>
+        </Button>}
+        <div className={cn('relative order-last w-full sm:order-none sm:w-80', !state.chat_origin && 'sm:ml-auto')}>
           <label htmlFor="ticket-search" className="sr-only">Search tickets</label>
           <Search aria-hidden="true" className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input ref={search} id="ticket-search" type="search" value={query} onChange={(event) => setQuery(event.target.value)}
@@ -316,7 +336,9 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
                 selected={batchSelection.has(batch.id)} onSelect={(checked) => setBatchSelection((previous) => { const next = new Set(previous); if (checked) next.add(batch.id); else next.delete(batch.id); return next; })}
                 now={now} onDrag={(active) => setDragging(active ? { kind: 'batch', id: batch.id } : null)} />)}
               {column.visible.triaging.map((batch) => <TriageCard key={batch.id} batch={batch} now={now} />)}
-              {column.visible.cards.map((ticket) => <TicketCard key={ticket.id} ticket={ticket} enabled={state.tickets_enabled} chats={state.chats_enabled} chatProject={(ticket.client && state.chat_projects?.[ticket.client]) || state.chat_project} {...(state.chat_origin ? { chatOrigin: state.chat_origin } : {})} expired={expired} now={now}
+              {column.visible.cards.map((ticket) => <TicketCard key={ticket.id} ticket={ticket} enabled={state.tickets_enabled} chats={state.chats_enabled} chatProject={(ticket.client && state.chat_projects?.[ticket.client]) || state.chat_project} expired={expired} now={now}
+                {...(state.chat_origin ? { chatOrigin: state.chat_origin, onDiscussed: () => setAwaiting(ticket.id),
+                  ...(ticket.session_id ? { onOpenChat: () => setChat({ id: ticket.id, title: ticket.title, session_id: ticket.session_id! }) } : {}) } : {})}
                 selected={clearable.has(ticket.id) ? clearSelection.has(ticket.id) : selected.has(ticket.id)}
                 onSelect={(checked) => toggle(clearable.has(ticket.id) ? setClearSelection : setSelected, ticket.id, checked)}
                 onDrag={(active) => setDragging(active ? { kind: 'ticket', ticket } : null)}
@@ -347,5 +369,6 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
         <p role="status" aria-live="polite" className="w-full">{notice}</p>
       </footer>
     </div>
+    {state.chat_origin && <ChatDialog ticket={chat} origin={state.chat_origin} open={openChat} onClose={() => setChat(null)} />}
   </div>;
 }

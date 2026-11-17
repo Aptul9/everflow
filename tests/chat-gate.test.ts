@@ -3,10 +3,11 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, expect, test } from 'vitest';
 import { loadConfig } from '../src/core/config.ts';
+import { openDb } from '../src/core/db.ts';
 import { ChatToken } from '../src/web/chat-gate.ts';
 import { hashPassword, loginKey, Sessions, SESSION_MS } from '../src/web/login.ts';
 import { webFixture } from './web-fixture.ts';
-import { http, launch } from './web-support.ts';
+import { actionHeaders, http, launch, rootToken } from './web-support.ts';
 import { scratch } from './support.ts';
 
 const PUBLIC = 'https://everflow.example.invalid';
@@ -16,7 +17,7 @@ const DAY = 24 * 60 * 60 * 1000;
 
 // OpenChamber's two auth calls the gate uses: POST /auth/session mints a client token, GET /auth/session checks one
 function openchamber() {
-  const state = { minted: 0, valid: new Set<string>(), mints: [] as unknown[], expiresAt: () => new Date(Date.now() + 7 * DAY).toISOString() };
+  const state = { minted: 0, valid: new Set<string>(), mints: [] as unknown[], registered: [] as unknown[], expiresAt: () => new Date(Date.now() + 7 * DAY).toISOString() };
   const server = createServer((request, response) => {
     let text = '';
     request.on('data', (part: Buffer) => { text += part.toString(); });
@@ -33,6 +34,23 @@ function openchamber() {
       if (request.method === 'GET' && request.url === '/auth/session') {
         const token = (request.headers.authorization ?? '').replace(/^Bearer /, '');
         response.writeHead(state.valid.has(token) ? 200 : 401, { 'content-type': 'application/json' }).end('{}');
+        return;
+      }
+      // the session lookup and project registration the chat dialog asks for, with the client token
+      if (!state.valid.has((request.headers.authorization ?? '').replace(/^Bearer /, ''))) { response.writeHead(401).end('{}'); return; }
+      const folders: Record<string, string> = { ses_vault: '/home/aptul/Vault', ses_untrusted: '/home/aptul/untrusted', ses_link: '/tmp/link' };
+      const lookup = /^\/api\/session\/([^/]+)$/.exec(request.url ?? '');
+      if (request.method === 'GET' && lookup) {
+        const folder = folders[decodeURIComponent(lookup[1]!)];
+        response.writeHead(folder ? 200 : 404, { 'content-type': 'application/json' }).end(JSON.stringify(folder ? { data: { id: lookup[1], location: { directory: folder } } } : { error: 'not found' }));
+        return;
+      }
+      if (request.method === 'POST' && request.url === '/api/projects/session-directory') {
+        const body = JSON.parse(text) as { sessionId: string; directory: string };
+        state.registered.push(body);
+        if (body.directory.endsWith('untrusted')) { response.writeHead(403, { 'content-type': 'application/json' }).end(JSON.stringify({ code: 'opencode_trust_required' })); return; }
+        const directory = body.directory === '/tmp/link' ? '/private/tmp/link' : body.directory;
+        response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ project: { path: directory }, directory }));
         return;
       }
       response.writeHead(404).end();
@@ -74,6 +92,19 @@ test('client token: minted once with the UI password, stored owner-only, reused,
   expect(peer.state.mints).toHaveLength(4);
   await expect(refused.token(Date.now() + 61_000)).rejects.toThrow(/HTTP 401/);
   expect(peer.state.mints).toHaveLength(5);
+});
+
+test('chat dialog: the session folder comes from OpenChamber and is registered as a project before the page frames the chat', async () => {
+  const peer = openchamber();
+  servers.push(peer.server);
+  const token = new ChatToken(scratch('chat-token-').path + '.chat-token', `http://127.0.0.1:${await peer.ready}`, () => UI_PASSWORD);
+  expect(await token.open('ses_vault')).toBe('/home/aptul/Vault');
+  expect(peer.state.registered).toEqual([{ sessionId: 'ses_vault', directory: '/home/aptul/Vault' }]);
+  // OpenChamber answers with the canonical spelling of a symlinked folder, which is the one its chat view matches
+  expect(await token.open('ses_link')).toBe('/private/tmp/link');
+  await expect(token.open('ses_gone')).rejects.toMatchObject({ status: 404, code: 'chat.not-found' });
+  await expect(token.open('ses_untrusted')).rejects.toMatchObject({ status: 409, code: 'chat.untrusted', message: expect.stringContaining('/home/aptul/untrusted') });
+  expect(peer.state.registered).toHaveLength(3);
 });
 
 test('config: chat_origin needs public_origin and openchamber_port', () => {
@@ -147,6 +178,19 @@ test('served gate: a page session gets the bearer on loopback, nothing under the
       'everflow_session=; Path=/; Domain=everflow.example.invalid; HttpOnly; Secure; SameSite=Lax; Max-Age=0']);
     const board = await http(server.port, '/api/state', { headers: { host: 'everflow.example.invalid', cookie } });
     expect(JSON.parse(board.text).chat_origin).toBe(CHAT);
+
+    // the chat dialog: the guarded action answers with the session and the folder OpenChamber keeps it in, registered
+    const headers = actionHeaders(server.port, rootToken((await http(server.port, '/')).text));
+    const openChat = (id: number) => http(server.port, `/api/ticket/${id}/open-chat`, { method: 'POST', body: '{}', headers });
+    expect(JSON.parse((await openChat(fixture.proposal)).text)).toEqual({ error: { code: 'chat.none', message: `Ticket #${fixture.proposal} has no chat yet` } });
+    { using db = openDb(fixture.path); db.prepare('UPDATE ticket SET session_id=? WHERE id=?').run('ses_vault', fixture.active); db.prepare('UPDATE ticket SET session_id=? WHERE id=?').run('ses_gone', fixture.waiting); }
+    const opened = await openChat(fixture.active);
+    expect(opened.status).toBe(200);
+    expect(JSON.parse(opened.text)).toEqual({ ticket: fixture.active, session_id: 'ses_vault', directory: '/home/aptul/Vault' });
+    expect(peer.state.registered).toEqual([{ sessionId: 'ses_vault', directory: '/home/aptul/Vault' }]);
+    const gone = await openChat(fixture.waiting);
+    expect([gone.status, JSON.parse(gone.text).error.code]).toEqual([404, 'chat.not-found']);
+    expect((await http(server.port, `/api/ticket/${fixture.active}/open-chat`, { method: 'POST', body: '{}', headers: { ...headers, 'x-everflow-token': 'f'.repeat(64) } })).status).toBe(403);
   } finally { await server.close(); }
 }, 120_000);
 

@@ -15,6 +15,9 @@ const RENEW_MS = 24 * 60 * 60 * 1000;
 
 interface Stored { token: string; expires_at: string | null }
 
+// Plain errors with status and code: the page's routes run in Next's module graph, with their own copy of every class
+const failure = (status: number, code: string, message: string) => Object.assign(new Error(message), { status, code });
+
 export class ChatToken {
   private readonly file: string;
   private readonly url: string;
@@ -86,6 +89,28 @@ export class ChatToken {
       return current.token;
     })().then((token) => { this.failure = undefined; return token; }, (error: unknown) => { this.failure = { at: now, error }; throw error; })
       .finally(() => { this.pending = undefined; });
+  }
+
+  /**
+   * The folder OpenChamber keeps the session in, registered as one of its projects first: its chat view (mini-chat.html)
+   * finds a session only among the projects' sessions and otherwise shows an empty chat. Registering an existing project
+   * changes nothing; the full UI does the same when it opens a session from a folder it does not list.
+   */
+  async open(session: string): Promise<string> {
+    const headers = { authorization: `Bearer ${await this.token()}`, accept: 'application/json' };
+    const call = (path: string, body?: unknown) => this.fetch(`${this.url}${path}`, { redirect: 'error', signal: AbortSignal.timeout(15_000),
+      ...(body === undefined ? { headers } : { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body) }) });
+    const found = await call(`/api/session/${encodeURIComponent(session)}`);
+    if (found.status === 404) { await found.body?.cancel(); throw failure(404, 'chat.not-found', `OpenChamber has no session ${session}`); }
+    if (!found.ok) { await found.body?.cancel(); throw failure(502, 'chat.unavailable', `OpenChamber session lookup failed (HTTP ${found.status})`); }
+    const directory = ((await found.json()) as { data?: { location?: { directory?: unknown } } }).data?.location?.directory;
+    if (typeof directory !== 'string' || !directory) throw failure(502, 'chat.unavailable', `OpenChamber gave no folder for session ${session}`);
+    const registered = await call('/api/projects/session-directory', { sessionId: session, directory });
+    const result = await registered.json().catch(() => null) as { directory?: unknown } | null;
+    if (registered.status === 403) throw failure(409, 'chat.untrusted', `OpenChamber asks to trust ${directory} before it opens this chat: open the chat once in OpenChamber`);
+    if (!registered.ok) throw failure(502, 'chat.unavailable', `OpenChamber could not add ${directory} to its projects (HTTP ${registered.status})`);
+    // a session recorded under a symlinked spelling of its folder comes back under the canonical one
+    return typeof result?.directory === 'string' && result.directory ? result.directory : directory;
   }
 }
 

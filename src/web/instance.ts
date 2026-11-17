@@ -12,8 +12,9 @@ export interface WebInstance {
   token: string;
   // Present when [web] public_origin is set: requests under that host need a signed-in session
   login?: { sessions: Sessions; limiter: Limiter; check: (user: string, password: string) => boolean };
-  // Present when [web] chat_origin is set: the OpenChamber client token the chat host's gate hands to Caddy
-  chat?: Pick<ChatToken, 'token'>;
+  // Present when [web] chat_origin is set: the OpenChamber client token the chat host's gate hands to Caddy, and the
+  // session folder the page's chat view opens with
+  chat?: Pick<ChatToken, 'token' | 'open'>;
 }
 
 const key = Symbol.for('everflow.web.instance');

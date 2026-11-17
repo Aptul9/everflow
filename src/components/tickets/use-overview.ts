@@ -81,7 +81,8 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
     return () => { mounted.current = false; clearInterval(timer); for (const controller of active) controller.abort(); active.clear(); };
   }, [refresh]);
 
-  const post = useCallback(async (key: string, path: string, input: Record<string, string | number | boolean | null> = {}) => {
+  // quiet: a call that changes nothing on the board (opening a chat) leaves the notice and the state as they are
+  const post = useCallback(async (key: string, path: string, input: Record<string, string | number | boolean | null> = {}, quiet = false) => {
     if (stale.current) throw new Error('Reload page before submitting again.');
     if (submitting.current.has(key)) throw new Error('Action already submitting');
     const controller = new AbortController();
@@ -108,7 +109,7 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
       const result = await response.json() as { ticket?: number; job?: number; conversation?: number; input?: string; setting?: string };
       const committed = result.ticket ?? result.job ?? result.conversation;
       if (typeof result.input !== 'string' && typeof result.setting !== 'string' && (!Number.isSafeInteger(committed) || (committed ?? 0) <= 0)) throw new Error('Invalid committed action response');
-      if (mounted.current) { setNotice('Local action saved.'); void refresh(); }
+      if (mounted.current && !quiet) { setNotice('Local action saved.'); void refresh(); }
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Local action failed';
