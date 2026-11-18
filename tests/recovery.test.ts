@@ -302,6 +302,55 @@ test('two nondependency recoveries maximum survives intervening dependency failu
   expect(db.prepare("SELECT COUNT(*) AS n FROM turn WHERE kind='recovery'").get()!.n).toBe(3);
 });
 
+async function exhausted(peer: Awaited<ReturnType<typeof scriptedPeer>>, cfg: ReturnType<typeof chatFixture>['cfg'], db: ReturnType<typeof openDb>) {
+  const ticket = proposed(db);
+  chat.approve(cfg, db, ticket, '');
+  await chat.startChat(cfg, db, claimed(db, cfg));
+  for (let index = 0; ; index++) {
+    const turn = db.prepare('SELECT * FROM turn ORDER BY id DESC LIMIT 1').get()!;
+    peer.finish(String(turn.session_id), String(turn.prompt_id), '', 'interrupted', undefined, Date.now() + 1);
+    const collector = claimed(db, cfg);
+    await chat.collect(cfg, db, collector);
+    if (index === 2) return { ticket, collector: collector.id };
+    vi.setSystemTime(new Date(String(db.prepare("SELECT next_at FROM job WHERE state='queued' AND kind='forward'").get()!.next_at)));
+    await chat.forward(cfg, db, claimed(db, cfg));
+  }
+}
+
+test('manual retry of a collector parked on a spent recovery budget sends one more recovery instead of parking again', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  cfg.jobs.turn_concurrency = 1;
+  using db = openDb(path);
+  const { collector } = await exhausted(peer, cfg, db);
+  expect(row(db, 'job', collector)).toMatchObject({ state: 'parked', error_class: 'job' });
+  jobs.retry(db, collector);
+  await chat.collect(cfg, db, claimed(db, cfg));
+  expect(row(db, 'job', collector).state).toBe('done');
+  const next = db.prepare("SELECT * FROM job WHERE state='queued' AND kind='forward'").get()!;
+  vi.setSystemTime(new Date(String(next.next_at)));
+  await chat.forward(cfg, db, claimed(db, cfg));
+  expect(db.prepare('SELECT recovery_count FROM turn ORDER BY id').all().map((turn) => turn.recovery_count)).toEqual([0, 1, 2, 3]);
+  expect(peer.calls.filter((call) => call.url.pathname.endsWith('/prompt'))).toHaveLength(4);
+  const last = db.prepare('SELECT * FROM turn ORDER BY id DESC LIMIT 1').get()!;
+  peer.finish(String(last.session_id), String(last.prompt_id), '', 'interrupted', undefined, Date.now() + 1);
+  const again = claimed(db, cfg);
+  await chat.collect(cfg, db, again);
+  expect(row(db, 'job', again.id)).toMatchObject({ state: 'parked', error_class: 'job' });
+});
+
+test('Done cancels a collector parked on a spent recovery budget so later input of the ticket is not held', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  cfg.jobs.turn_concurrency = 1;
+  using db = openDb(path);
+  const { ticket, collector } = await exhausted(peer, cfg, db);
+  close(db, ticket, 'Handled by hand');
+  expect(row(db, 'job', collector).state).toBe('cancelled');
+  const triage = jobs.enqueue(db, 'triage', 'after-close', {}, ticket);
+  expect(claimed(db, cfg).id).toBe(triage);
+});
+
 test.each(['queued', 'prepared', 'uncertain', 'remote-running', 'inbox', 'recent'] as const)('archive refuses %s work despite old title-update timestamps', async (blocker) => {
   await using peer = await scriptedPeer();
   const { cfg, path } = chatFixture(peer.url);

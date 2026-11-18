@@ -494,7 +494,9 @@ function recovery(cfg: Config, db: DatabaseSync, job: Job, turn: Turn, result: C
   const error = result.error ?? { type: `session.${result.outcome}`, message: `Input ${turn.prompt_id} ${result.outcome}` };
   const failure = classify(error);
   const dependent = failure.error_class === 'dependency';
-  if (!dependent && turn.recovery_count >= Math.min(2, cfg.jobs.max_recoveries)) {
+  // A turn already ended as failed comes back only through a manual Retry of its parked collector, which buys one more recovery
+  const retried = turn.state === 'done';
+  if (!dependent && !retried && turn.recovery_count >= Math.min(2, cfg.jobs.max_recoveries)) {
     failed(cfg, db, job, jobError(`Input recovery budget exhausted after ${turn.recovery_count} recoveries`, 'chat.recovery-exhausted'), options, () => {
       finishBatches(db, turn, result, 'failed');
       db.prepare('UPDATE turn SET error_class=?,last_error=? WHERE id=?').run(failure.error_class, failure.message, turn.id);
