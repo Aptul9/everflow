@@ -5,6 +5,7 @@ import { afterEach, expect, test } from 'vitest';
 import { loadConfig } from '../src/core/config.ts';
 import { openDb } from '../src/core/db.ts';
 import { ChatToken } from '../src/web/chat-gate.ts';
+import { bridgeTag, inject } from '../src/web/chat-bridge.ts';
 import { hashPassword, loginKey, Sessions, SESSION_MS } from '../src/web/login.ts';
 import { webFixture } from './web-fixture.ts';
 import { actionHeaders, http, launch, rootToken } from './web-support.ts';
@@ -17,7 +18,7 @@ const DAY = 24 * 60 * 60 * 1000;
 
 // OpenChamber's two auth calls the gate uses: POST /auth/session mints a client token, GET /auth/session checks one
 function openchamber() {
-  const state = { minted: 0, valid: new Set<string>(), mints: [] as unknown[], registered: [] as unknown[], expiresAt: () => new Date(Date.now() + 7 * DAY).toISOString() };
+  const state = { minted: 0, valid: new Set<string>(), mints: [] as unknown[], registered: [] as unknown[], pages: [] as string[], down: false, expiresAt: () => new Date(Date.now() + 7 * DAY).toISOString() };
   const server = createServer((request, response) => {
     let text = '';
     request.on('data', (part: Buffer) => { text += part.toString(); });
@@ -38,6 +39,14 @@ function openchamber() {
       }
       // the session lookup and project registration the chat dialog asks for, with the client token
       if (!state.valid.has((request.headers.authorization ?? '').replace(/^Bearer /, ''))) { response.writeHead(401).end('{}'); return; }
+      // the chat view the bridge serves: OpenChamber's page, or a dropped connection when it is down
+      if (request.method === 'GET' && (request.url ?? '').startsWith('/mini-chat.html')) {
+        state.pages.push(request.url ?? '');
+        if (state.down) { request.socket.destroy(); return; }
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'content-security-policy': "frame-ancestors 'self'", 'x-upstream': 'openchamber', etag: '"v1"' })
+          .end('<!doctype html><html><head><title>OpenChamber Mini Chat</title></head><body><div id="root"></div></body></html>');
+        return;
+      }
       const folders: Record<string, string> = { ses_vault: '/home/aptul/Vault', ses_untrusted: '/home/aptul/untrusted', ses_link: '/tmp/link' };
       const lookup = /^\/api\/session\/([^/]+)$/.exec(request.url ?? '');
       if (request.method === 'GET' && /^\/api\/session\/ses_vault\/message\?/.test(request.url ?? '')) {
@@ -204,8 +213,45 @@ test('served gate: a page session gets the bearer on loopback, nothing under the
     expect((await http(server.port, `/api/ticket/${fixture.active}/chat-file`, { method: 'POST', body: JSON.stringify({ path: '/etc/passwd', extra: 1 }), headers })).status).toBe(400);
     expect((await http(server.port, `/api/ticket/${fixture.active}/chat-files`, { method: 'POST', body: '{}', headers: { ...headers, 'x-everflow-token': 'f'.repeat(64) } })).status).toBe(403);
     expect(JSON.parse((await http(server.port, `/api/ticket/${fixture.proposal}/chat-files`, { method: 'POST', body: '{}', headers })).text).error.code).toBe('chat.none');
+
+    // the chat view through the bridge: Caddy's request for the chat host, after the gate, with the page session
+    const bridge = (path: string, extra: Record<string, string> = {}) => http(server.port, `/api/chat-bridge${path}`, { headers: { 'x-forwarded-host': 'chat.everflow.example.invalid', cookie, ...extra } });
+    const page = await bridge('/mini-chat.html?mode=session&sessionId=ses_vault&directory=%2Fhome%2Faptul%2FVault');
+    expect(page.status).toBe(200);
+    expect(page.text).toBe('<!doctype html><html><head><title>OpenChamber Mini Chat</title>'
+      + `<script src="/everflow-bridge.js?parent=${encodeURIComponent(PUBLIC)}" defer></script></head><body><div id="root"></div></body></html>`);
+    expect(page.text.match(/everflow-bridge\.js/g)).toHaveLength(1);
+    expect([page.headers['content-type'], page.headers['x-upstream'], page.headers['cache-control'], page.headers.etag]).toEqual(['text/html; charset=utf-8', 'openchamber', 'no-store', undefined]);
+    expect(Number(page.headers['content-length'] ?? Buffer.byteLength(page.text))).toBe(Buffer.byteLength(page.text));
+    expect(peer.state.pages).toEqual(['/mini-chat.html?mode=session&sessionId=ses_vault&directory=%2Fhome%2Faptul%2FVault']);
+    const script = await bridge('/everflow-bridge.js?parent=x');
+    expect([script.status, script.headers['content-type']]).toEqual([200, 'text/javascript; charset=utf-8']);
+    expect(script.text).toContain("type: 'everflow:open-file'");
+    expect((await bridge('/index.html')).status).toBe(404);
+    expect((await bridge('/mini-chat.html', { cookie: '' })).status).toBe(401);
+    // not Caddy's request for the chat host, or under the public host: 404, and OpenChamber is not asked
+    expect((await bridge('/mini-chat.html', { 'x-forwarded-host': 'everflow.example.invalid' })).status).toBe(404);
+    expect((await http(server.port, '/api/chat-bridge/mini-chat.html', { headers: { cookie } })).status).toBe(404);
+    expect((await http(server.port, '/api/chat-bridge/mini-chat.html', { headers: { host: 'everflow.example.invalid', 'x-forwarded-host': 'chat.everflow.example.invalid', cookie } })).status).toBe(404);
+    expect((await http(server.port, '/api/chat-bridge/everflow-bridge.js', { headers: { host: 'everflow.example.invalid', 'x-forwarded-host': 'chat.everflow.example.invalid', cookie } })).status).toBe(404);
+    expect(peer.state.pages).toHaveLength(1);
+    // OpenChamber down: a page that says so, never an empty frame
+    peer.state.down = true;
+    const down = await bridge('/mini-chat.html?mode=session&sessionId=ses_vault');
+    expect([down.status, down.headers['content-type']]).toEqual([502, 'text/html; charset=utf-8']);
+    expect(down.text).toContain('role="alert">The chat could not be loaded');
+    peer.state.down = false;
   } finally { await server.close(); }
 }, 120_000);
+
+test('the bridge tag goes in before </head> once, and on top of a page without a head', () => {
+  const tag = `<script src="/everflow-bridge.js?parent=${encodeURIComponent(PUBLIC)}" defer></script>`;
+  const once = inject('<html><HEAD><title>x</title></HEAD><body></body></html>', PUBLIC);
+  expect(once).toBe(`<html><HEAD><title>x</title>${tag}</HEAD><body></body></html>`);
+  expect(inject(once, PUBLIC)).toBe(once);
+  expect(inject('<p>no head</p>', PUBLIC)).toBe(`${tag}<p>no head</p>`);
+  expect(bridgeTag('https://a.invalid"><script>')).not.toContain('"><script>');
+});
 
 test('without chat_origin the gate is absent and the cookie stays host-only', async () => {
   const fixture = webFixture();

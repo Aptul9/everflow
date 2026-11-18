@@ -8,7 +8,8 @@ import type { ChatFile, ChatFileKind } from '../lib/web-types.ts';
 // The files a ticket chat produced, read from disk for the page's viewer beside the chat: the daemon runs on the same
 // machine and as the same user as OpenChamber. A file counts when the chat wrote or edited it, or named an existing
 // Office document or PDF in its text or in a shell command or its output. Files it only read, and the vault's own
-// bookkeeping (daily notes, the board, the tool-issue log), stay out.
+// bookkeeping (daily notes, the board, the tool-issue log), stay out of that list. A file clicked in the chat opens too when
+// the history names it anywhere, read-only files included (describe).
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const PAGE = 200;
 const MAX_PAGES = 200;
@@ -54,8 +55,7 @@ export function mentions(item: unknown, directory: string, home: string): [strin
   if (message?.type !== 'assistant' || !Array.isArray(message.content)) return [];
   const created = millis(record(message.time)?.completed, record(message.time)?.created);
   const found: [string, number][] = [];
-  const place = (path: string) => path.startsWith('~/') ? join(home, path.slice(2)) : resolve(directory, path);
-  const documents = (text: string, at: number) => { for (const match of text.matchAll(DOCUMENT)) found.push([place(match[1]!), at]); };
+  const documents = (text: string, at: number) => { for (const match of text.matchAll(DOCUMENT)) found.push([place(match[1]!, directory, home), at]); };
   for (const value of message.content) {
     const part = record(value);
     if (part?.type === 'text' && typeof part.text === 'string') { documents(part.text, created); continue; }
@@ -65,12 +65,64 @@ export function mentions(item: unknown, directory: string, home: string): [strin
     const at = millis(record(part.time)?.completed, record(part.time)?.created, created);
     if (WRITERS.has(part.name)) {
       const path = [input.path, input.filePath, input.file_path].find((candidate): candidate is string => typeof candidate === 'string' && !!candidate);
-      if (path) found.push([place(path), at]);
+      if (path) found.push([place(path, directory, home), at]);
     } else if (SHELLS.has(part.name)) {
       for (const text of [...texts(input.command), ...texts(state.content), ...texts(state.output), ...texts(record(state.metadata)?.output)]) documents(text, at);
     }
   }
   return found;
+}
+
+const PATH_KEYS = new Set(['path', 'filePath', 'file_path']);
+// a word of text that may name a file: what OpenChamber turns into a link, minus quotes, brackets and trailing punctuation
+const WORD = /[^\s'"`<>|;*?()[\]{},]+/g;
+
+function pathWords(text: string): string[] {
+  const found: string[] = [];
+  for (const [raw] of text.matchAll(WORD)) {
+    const word = raw.replace(/[.:!]+$/, '').replace(/(?::\d+){1,2}$/, '');
+    if (!word || word.startsWith('//') || /^[a-z][\w+.-]*:/i.test(word)) continue;
+    if (word.startsWith('/') || word.startsWith('~/') || word.includes('/') || /\.\w{1,10}$/.test(word)) found.push(word);
+  }
+  return found;
+}
+
+function strings(value: unknown, depth = 0): string[] {
+  if (typeof value === 'string') return [value];
+  if (depth > 4 || !value || typeof value !== 'object') return [];
+  return Object.values(value).flatMap((inner) => strings(inner, depth + 1));
+}
+
+/**
+ * Every path one history item names, with when, for a click in the chat: any tool's path input (reads included), and
+ * path-like words in message text and in other tool inputs such as shell commands. Relative paths are taken from the
+ * session folder. Whether the file exists and where it really lives is checked when it is opened.
+ */
+export function references(item: unknown, directory: string, home: string): [string, number][] {
+  const message = record(item);
+  if (!message) return [];
+  const created = millis(record(message.time)?.completed, record(message.time)?.created);
+  const found: [string, number][] = [];
+  const add = (path: string, at: number) => { if (path.length <= 4096) found.push([place(path, directory, home), at]); };
+  for (const text of texts(message.text)) for (const word of pathWords(text)) add(word, created);
+  for (const value of Array.isArray(message.content) ? message.content : []) {
+    const part = record(value);
+    if (part?.type === 'text' && typeof part.text === 'string') { for (const word of pathWords(part.text)) add(word, created); continue; }
+    if (part?.type !== 'tool') continue;
+    const input = record(record(part.state)?.input);
+    if (!input) continue;
+    const at = millis(record(part.time)?.completed, record(part.time)?.created, created);
+    for (const [key, field] of Object.entries(input)) {
+      if (PATH_KEYS.has(key) && typeof field === 'string' && field.trim()) add(field.trim(), at);
+      else for (const text of strings(field)) for (const word of pathWords(text)) add(word, at);
+    }
+  }
+  return found;
+}
+
+/** A path as the chat spelled it, made absolute: home-relative from the home folder, relative from the session folder. */
+export function place(path: string, directory: string, home: string): string {
+  return path.startsWith('~/') ? join(home, path.slice(2)) : resolve(directory, path);
 }
 
 function kindOf(path: string): ChatFileKind {
@@ -118,7 +170,8 @@ export async function docxHtml(buffer: Buffer): Promise<string> {
 
 export interface FileContent { body: Buffer | string; type: string; name: string; download: boolean }
 interface History { get(path: string): Promise<unknown> }
-interface Seen { directory: string; items: Map<string, [string, number][]>; pending?: Promise<void> | undefined }
+interface Item { found: [string, number][]; named: [string, number][] }
+interface Seen { directory: string; items: Map<string, Item>; pending?: Promise<void> | undefined }
 
 export class ChatFiles {
   private readonly chat: History;
@@ -159,7 +212,7 @@ export class ChatFiles {
           const id = record(item)?.id;
           if (typeof id !== 'string') continue;
           if (!current.items.has(id)) fresh = true;
-          current.items.set(id, mentions(item, current.directory, this.home));
+          current.items.set(id, { found: mentions(item, current.directory, this.home), named: references(item, current.directory, this.home) });
         }
         const next = record(result?.cursor)?.next;
         if (!fresh || !data.length || typeof next !== 'string' || !next) break;
@@ -172,26 +225,59 @@ export class ChatFiles {
 
   /** Newest first: by when the chat last touched the file, then by the file's own change time. */
   async list(session: string): Promise<ChatFile[]> {
-    const seen = await this.load(session);
+    return this.listed(await this.load(session));
+  }
+
+  private entry(path: string, real: string, at: number): ChatFile & { at: number } {
+    const stat = fs.statSync(real);
+    return { path, name: basename(path), size: stat.size, mtime: stat.mtime.toISOString(), kind: kindOf(real), touched: new Date(at).toISOString(), at };
+  }
+
+  private listed(seen: Seen): ChatFile[] {
     const latest = new Map<string, number>();
-    for (const found of seen.items.values()) for (const [path, at] of found) if (!housekeeping(path)) latest.set(path, Math.max(latest.get(path) ?? 0, at));
+    for (const { found } of seen.items.values()) for (const [path, at] of found) if (!housekeeping(path)) latest.set(path, Math.max(latest.get(path) ?? 0, at));
     const files = new Map<string, ChatFile & { at: number }>();
     for (const [path, at] of latest) {
       const real = this.inside(path);
       if (!real || housekeeping(real)) continue;
       const known = files.get(real);
       if (known && known.at >= at) continue;
-      const stat = fs.statSync(real);
-      files.set(real, { path, name: basename(path), size: stat.size, mtime: stat.mtime.toISOString(), kind: kindOf(real), touched: new Date(at).toISOString(), at });
+      files.set(real, this.entry(path, real, at));
     }
     return [...files.values()].sort((a, b) => b.at - a.at || Date.parse(b.mtime) - Date.parse(a.mtime)).map(({ at: _at, ...file }) => file);
   }
 
-  /** One listed file: text as is, a Word document as sanitized HTML, PDFs and images as bytes; download gives the bytes of any. */
+  /**
+   * A file the chat can open: one of the listed files, or any other file its history names (a file it only read, a path in
+   * its text or in a command), the latter as clicked in the chat, absolute or relative to the session folder. Either way
+   * a regular file inside the home folder once links are followed.
+   */
+  async describe(session: string, path: string): Promise<ChatFile> {
+    const seen = await this.load(session);
+    const unnamed = () => failure(404, 'file.not-listed', 'This chat has not named that file');
+    // an absolute path is taken only as written, never through .. or doubled separators
+    if (!path || path.length > 4096 || path.includes('\0') || isAbsolute(path) && resolve(path) !== path) throw unnamed();
+    const target = place(path, seen.directory, this.home);
+    const real = this.inside(target);
+    const listed = this.listed(seen).find((file) => file.path === path || file.path === target || !!real && this.inside(file.path) === real);
+    if (listed) return listed;
+    let at = -1;
+    const name = basename(target);
+    for (const { named } of seen.items.values()) {
+      for (const [candidate, when] of named) {
+        if (when > at && (candidate === target || !!real && basename(candidate) === name && this.inside(candidate) === real)) at = when;
+      }
+    }
+    if (at < 0) throw unnamed();
+    if (!real) throw fs.existsSync(target) ? failure(403, 'file.outside', 'Only regular files inside the home folder open here') : failure(404, 'file.missing', `${name} does not exist`);
+    const { at: _at, ...file } = this.entry(target, real, at);
+    return file;
+  }
+
+  /** One file the chat can open: text as is, a Word document as sanitized HTML, PDFs and images as bytes; download gives the bytes of any. */
   async read(session: string, path: string, download = false): Promise<FileContent> {
-    const listed = (await this.list(session)).find((file) => file.path === path);
-    if (!listed) throw failure(404, 'file.not-listed', 'This chat has not written that file');
-    const real = this.inside(path);
+    const listed = await this.describe(session, path);
+    const real = this.inside(listed.path);
     if (!real) throw failure(403, 'file.outside', 'Only regular files inside the home folder open here');
     const fd = fs.openSync(real, 'r');
     let buffer: Buffer;

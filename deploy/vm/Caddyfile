@@ -26,7 +26,8 @@
 # and the OpenChamber client token, copied upstream as Authorization; without one, 401 and the sign-in address to go to.
 # route keeps the order: a client's own Authorization is dropped before the gate's is set. Websockets (events, terminal)
 # go through the same gate and then upstream with the same Authorization. The page frames the ticket chat (mini-chat.html):
-# the policy replaces OpenChamber's own, which allows only its desktop and mobile shells.
+# the policy replaces OpenChamber's own, which allows only its desktop and mobile shells. That page and its bridge script
+# are served by the daemon, which fetches the page from OpenChamber and adds the script.
 {$EVERFLOW_CHAT_DOMAIN} {
 	header {
 		defer
@@ -47,6 +48,14 @@
 			handle_response @login {
 				redir {rp.header.X-Everflow-Login} 302
 			}
+		}
+		# the chat view the page frames, and the bridge script it gets, come from the daemon (src/web/chat-bridge.ts)
+		@bridge path /mini-chat.html /everflow-bridge.js
+		rewrite @bridge /api/chat-bridge{path}
+		@daemon path /api/chat-bridge/*
+		reverse_proxy @daemon 127.0.0.1:8789 {
+			header_up Host 127.0.0.1:8789
+			header_up -Authorization
 		}
 		reverse_proxy 127.0.0.1:3000
 	}

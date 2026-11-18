@@ -2,7 +2,7 @@ import { mkdirSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import JSZip from 'jszip';
 import { expect, test } from 'vitest';
-import { ChatFiles, docxHtml, housekeeping, MAX_FILE_BYTES, mentions, sanitize } from '../src/web/chat-files.ts';
+import { ChatFiles, docxHtml, housekeeping, MAX_FILE_BYTES, mentions, references, sanitize } from '../src/web/chat-files.ts';
 import { scratch } from './support.ts';
 
 const AT = Date.parse('2026-11-17T16:00:00Z');
@@ -119,7 +119,8 @@ test('reading: only a listed file, after its real path, inside the home folder, 
   expect(await files.read('ses_a', sheet, true)).toMatchObject({ type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', name: 'sheet.xlsx', download: true });
   await expect(files.read('ses_a', sheet)).rejects.toMatchObject({ status: 415, code: 'file.download-only' });
   await expect(files.read('ses_a', big)).rejects.toMatchObject({ status: 413, code: 'file.too-large' });
-  await expect(files.read('ses_a', outside)).rejects.toMatchObject({ status: 404, code: 'file.not-listed' });
+  // named by the chat but outside the home folder: refused for where it is
+  await expect(files.read('ses_a', outside)).rejects.toMatchObject({ status: 403, code: 'file.outside' });
   await expect(files.read('ses_a', `${vault}/05_Daily/../99_Inbox/prompt.md`)).rejects.toMatchObject({ code: 'file.not-listed' });
   await expect(files.read('ses_a', '/etc/passwd')).rejects.toMatchObject({ code: 'file.not-listed' });
   // a listed file swapped for a link out of the home folder after it was listed
@@ -131,6 +132,59 @@ test('reading: only a listed file, after its real path, inside the home folder, 
   const linked = join(root, 'home-link');
   symlinkSync(user, linked);
   expect((await new ChatFiles(history({ ses_a: { directory: chats, items } }), linked).list('ses_a')).length).toBe(4);
+});
+
+test('a clicked file opens when the history names it anywhere: read-only files and text paths too, never others, never out of home', async () => {
+  const { root, user, vault, chats } = home();
+  mkdirSync(join(chats, 'notes'), { recursive: true });
+  const written = join(chats, 'demo.md'), plan = join(chats, 'notes', 'plan.md'), mentioned = join(vault, 'reports', 'seen.txt');
+  const quiet = join(vault, 'reports', 'never-named.md'), escape = join(vault, 'reports', 'escape.md'), outside = join(root, 'elsewhere', 'secret.md');
+  for (const [path, text] of [[written, '# Demo'], [plan, '# Plan'], [mentioned, 'seen'], [quiet, 'quiet'], [outside, 'outside']] as const) writeFileSync(path, text);
+  symlinkSync(outside, escape);
+  const items = [
+    assistant('msg_1', AT, [tool('write', { path: written, content: '# Demo' }, AT)]),
+    assistant('msg_2', AT + 1000, [tool('read', { path: 'notes/plan.md' }, AT + 1000), tool('read', { filePath: escape }, AT + 1000),
+      tool('shell', { command: `cat ${join(vault, 'reports', 'gone.md')}` }, AT + 1000)]),
+    assistant('msg_3', AT + 2000, [{ type: 'text', text: `I looked at \`${mentioned}\`, and ${join(chats, '..', 'everflow-chats', 'client', 'demo.md')}.` }]),
+  ];
+  const files = new ChatFiles(history({ ses_a: { directory: chats, items } }), user);
+  // what opens by itself stays as before: only the written file
+  expect((await files.list('ses_a')).map((file) => file.path)).toEqual([written]);
+
+  // read only, given relative to the session folder as a tool row shows it, or absolute as a text link carries it
+  expect(await files.describe('ses_a', 'notes/plan.md')).toMatchObject({ path: plan, name: 'plan.md', kind: 'markdown', touched: new Date(AT + 1000).toISOString() });
+  expect((await files.describe('ses_a', plan)).path).toBe(plan);
+  expect(await files.read('ses_a', 'notes/plan.md')).toMatchObject({ body: '# Plan', type: 'text/markdown; charset=utf-8' });
+  expect(await files.read('ses_a', mentioned)).toMatchObject({ body: 'seen', type: 'text/plain; charset=utf-8' });
+  // a listed file under another spelling is the listed entry, so the page focuses its tab
+  expect(await files.describe('ses_a', 'demo.md')).toMatchObject({ path: written, touched: new Date(AT).toISOString() });
+
+  // never named, outside the home folder through a link, gone, or spelled with ..
+  await expect(files.describe('ses_a', quiet)).rejects.toMatchObject({ status: 404, code: 'file.not-listed' });
+  await expect(files.read('ses_a', quiet)).rejects.toMatchObject({ code: 'file.not-listed' });
+  await expect(files.describe('ses_a', escape)).rejects.toMatchObject({ status: 403, code: 'file.outside' });
+  await expect(files.read('ses_a', escape)).rejects.toMatchObject({ status: 403, code: 'file.outside' });
+  await expect(files.describe('ses_a', join(vault, 'reports', 'gone.md'))).rejects.toMatchObject({ status: 404, code: 'file.missing' });
+  await expect(files.describe('ses_a', `${chats}/notes/../notes/plan.md`)).rejects.toMatchObject({ code: 'file.not-listed' });
+  await expect(files.describe('ses_a', '/etc/passwd')).rejects.toMatchObject({ code: 'file.not-listed' });
+  await expect(files.describe('ses_a', '../../../etc/passwd')).rejects.toMatchObject({ code: 'file.not-listed' });
+});
+
+test('references: every tool path input, path words in text and commands, relative ones from the session folder', () => {
+  const dir = '/home/u/chats', user = '/home/u';
+  const item = assistant('msg_1', AT, [
+    tool('read', { path: 'notes/plan.md' }, AT + 1),
+    tool('grep', { pattern: 'x', path: '/home/u/Vault' }, AT + 2),
+    tool('shell', { command: 'cat ~/out/log.txt | head' }, AT + 3),
+    { type: 'text', text: 'See `/home/u/a.md:12`, https://example.invalid/x.md and (notes/b.md).' },
+  ]);
+  expect(references(item, dir, user)).toEqual([
+    ['/home/u/chats/notes/plan.md', AT + 1],
+    ['/home/u/Vault', AT + 2],
+    ['/home/u/out/log.txt', AT + 3],
+    ['/home/u/a.md', AT],
+    ['/home/u/chats/notes/b.md', AT],
+  ]);
 });
 
 async function docx(body: string): Promise<Buffer> {

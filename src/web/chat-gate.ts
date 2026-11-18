@@ -121,6 +121,12 @@ export class ChatToken {
     if (!response.ok) { await response.body?.cancel(); throw failure(502, 'chat.unavailable', `OpenChamber read failed (HTTP ${response.status})`); }
     return response.json();
   }
+
+  /** OpenChamber's response to a page request with the client token, as it came (no redirect followed): for the chat bridge. */
+  async page(path: string): Promise<Response> {
+    const token = await this.token();
+    return this.fetch(`${this.url}${path}`, { redirect: 'manual', signal: AbortSignal.timeout(15_000), headers: { authorization: 'Bearer ' + token, accept: 'text/html' } });
+  }
 }
 
 /** Answers GATE_PATH on the loopback listener. Under any other Host the caller answers 404. */

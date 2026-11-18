@@ -174,6 +174,15 @@ async function chatFile(current: WebInstance, ticket: number, path: string, down
 }
 
 const fileBody = z.strictObject({ path: z.string().min(1).max(4_096), download: z.boolean().optional() });
+const fileInfo = z.strictObject({ path: z.string().min(1).max(4_096) });
+
+// A file clicked in the chat: its entry for the viewer when the chat's history names it, listed or not
+async function chatFileInfo(current: WebInstance, ticket: number, path: string): Promise<Response> {
+  const session = chatSession(current, ticket);
+  if (!current.files) throw new HttpError(404, 'chat.off', 'OpenChamber web is not configured');
+  const file = await current.files.describe(session, path).catch(fromChat);
+  return Response.json({ ticket, file }, { headers: { 'cache-control': 'no-store' } });
+}
 
 export async function actionPost(request: Request, scope: 'ticket' | 'batch' | 'job' | 'conversation', id: string, action: string): Promise<Response> {
   try {
@@ -181,12 +190,13 @@ export async function actionPost(request: Request, scope: 'ticket' | 'batch' | '
     guardPost(request.headers, current);
     const value = validId(id);
     const schema = scope === 'ticket' && action === 'chat' ? note : scope === 'ticket' && action === 'discuss' ? question : scope === 'ticket' && ['dismiss', 'close'].includes(action) ? reason
-      : scope === 'batch' && action === 'mute' ? muteFor : scope === 'ticket' && action === 'chat-file' ? fileBody : empty;
+      : scope === 'batch' && action === 'mute' ? muteFor : scope === 'ticket' && action === 'chat-file' ? fileBody : scope === 'ticket' && action === 'chat-file-info' ? fileInfo : empty;
     const input = await body(request, schema) as { note?: string; reason?: string; mute_minutes?: number | null; mute_hours?: number | null; minutes?: number | null; hours?: number | null; path?: string; download?: boolean };
     if (!current.config.tickets.enabled) throw new HttpError(409, 'tickets.disabled', 'Tickets disabled');
     if (scope === 'ticket' && action === 'open-chat') return Response.json(await openChat(current, value), { headers: { 'cache-control': 'no-store' } });
     if (scope === 'ticket' && action === 'chat-files') return await chatFiles(current, value);
     if (scope === 'ticket' && action === 'chat-file') return await chatFile(current, value, input.path!, input.download === true);
+    if (scope === 'ticket' && action === 'chat-file-info') return await chatFileInfo(current, value, input.path!);
     if (scope === 'ticket' && ['start', 'chat', 'discuss'].includes(action) && !current.config.chats.enabled) throw new HttpError(409, 'chats.disabled', 'Chats off');
     const result = withDatabase(true, (db) => transaction(db, () => {
       if (scope === 'ticket' && action === 'start') return { ticket: approve(current.config, db, value) };

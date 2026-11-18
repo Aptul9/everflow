@@ -53,7 +53,7 @@ export function createBuildTree(input: string): BuildTree {
       const next = join(name, entry.name);
       if (entry.isSymbolicLink()) throw new Error('Source links and junctions are not allowed');
       if (entry.isDirectory()) walk(next);
-      else if (['.ts', '.tsx', '.css'].includes(extname(entry.name)) || ['tests/fixtures/v1.sql', 'src/app/icon.png', 'src/app/apple-icon.png'].includes(next.split(sep).join('/'))) copy(next);
+      else if (['.ts', '.tsx', '.css'].includes(extname(entry.name)) || ['tests/fixtures/v1.sql', 'src/app/icon.png', 'src/app/apple-icon.png', 'src/web/everflow-bridge.js'].includes(next.split(sep).join('/'))) copy(next);
     }
   };
   for (const dir of sourceDirs) walk(dir);
