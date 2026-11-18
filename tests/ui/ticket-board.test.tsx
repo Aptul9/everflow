@@ -391,7 +391,7 @@ test('the chat dialog keeps its single column while the chat has written no file
   expect(within(dialog).queryByRole('button', { name: /files of this chat/ })).toBeNull();
 });
 
-test('with files the dialog widens: chat left, newest file right, Markdown rendered, Word shown, hide remembered, tabs on a phone', async () => {
+test('with files the panel starts closed; Files opens it: chat left, newest file right, Markdown rendered, Word shown, tabs on a phone', async () => {
   localStorage.clear();
   const { state, reads } = chatWithFiles(() => [file(MD, 'markdown', '2026-11-17T16:45:00Z'), file(DOCX, 'docx', '2026-11-17T15:00:00Z')], {
     [MD]: () => '---\ncreated: 2026-11-17\ntags: [type/prompt]\n---\n\n# Prompt\n\n- one\n- two\n\n| Field | Kept |\n|---|---|\n| IP | yes |\n\n```\ncode block\n```\n\n<script>alert(1)</script>',
@@ -401,7 +401,12 @@ test('with files the dialog widens: chat left, newest file right, Markdown rende
   await userEvent.click(screen.getByRole('button', { name: 'Open the chat of ticket #3' }));
   const dialog = await screen.findByRole('dialog');
   const viewer = await within(dialog).findByRole('region', { name: 'Files of this chat' });
+  // closed at first: the single chat column, the file one click on Files away
+  expect(dialog.className).toMatch(/sm:w-\[min\(1100px,96vw\)\]/);
+  expect(viewer.parentElement!.className.split(' ')).toContain('sm:hidden');
+  await userEvent.click(await within(dialog).findByRole('button', { name: 'Show the files of this chat (2)' }));
   expect(dialog.className).toMatch(/sm:w-\[min\(1800px,98vw\)\]/);
+  expect(viewer.parentElement!.className.split(' ')).not.toContain('sm:hidden');
   // the chat column comes first, and the links and Close sit over it, not over the viewer
   const frame = await within(dialog).findByTitle('Chat of ticket #3');
   expect(frame.compareDocumentPosition(viewer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -448,11 +453,11 @@ test('with files the dialog widens: chat left, newest file right, Markdown rende
   expect(frame.parentElement!.className).toContain('max-sm:hidden');
   expect(within(dialog).getByTitle('Chat of ticket #3')).toBe(frame);
 
-  // desktop: hiding the panel brings back the single column, and the choice holds for this session
+  // desktop: hiding the panel brings back the single column; the dialog opens with it closed every time
   await userEvent.click(within(dialog).getByRole('button', { name: 'Hide the files of this chat' }));
   expect(dialog.className).toMatch(/sm:w-\[min\(1100px,96vw\)\]/);
   expect(viewer.parentElement!.className).toContain('sm:hidden');
-  expect(localStorage.getItem('everflow.chat-files.ses_synthetic123')).toBe('hidden');
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Show the files of this chat (2)' }));
   await userEvent.keyboard('{Escape}');
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   await userEvent.click(screen.getByRole('button', { name: 'Open the chat of ticket #3' }));
@@ -461,7 +466,6 @@ test('with files the dialog widens: chat left, newest file right, Markdown rende
   expect(again.className).toMatch(/sm:w-\[min\(1100px,96vw\)\]/);
   await userEvent.click(show);
   expect(again.className).toMatch(/sm:w-\[min\(1800px,98vw\)\]/);
-  expect(localStorage.getItem('everflow.chat-files.ses_synthetic123')).toBe('shown');
 });
 
 test('the viewer asks for the file list every 10 seconds and reloads the open file when it changed on disk', async () => {
@@ -587,6 +591,7 @@ test('the file panel: copy path, preview or source, find with next and previous,
   await userEvent.click(screen.getByRole('button', { name: 'Open the chat of ticket #3' }));
   const dialog = await screen.findByRole('dialog');
   const viewer = await within(dialog).findByRole('region', { name: 'Files of this chat' });
+  await userEvent.click(await within(dialog).findByRole('button', { name: 'Show the files of this chat (1)' }));
   await within(viewer).findByRole('heading', { name: 'Plan' });
 
   await userEvent.click(within(viewer).getByRole('button', { name: 'Copy file path' }));
