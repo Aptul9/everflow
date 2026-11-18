@@ -284,7 +284,8 @@ test('with a chat origin Open shows the chat on the board: the chat view framed 
   expect(screen.queryByText('Local action saved.')).toBeNull();
   expect(dialog.className).toMatch(/\bh-dvh\b.*\bw-screen\b/);
   expect(dialog.className).toMatch(/sm:h-\[calc\(100dvh-1\.5rem\)\].*sm:w-\[min\(1100px,96vw\)\]/);
-  expect(within(dialog).getByRole('button', { name: 'Close' })).toBeTruthy();
+  // the chat view's own header carries Close (the bridge); the dialog adds none while that view may still answer
+  expect(within(dialog).queryByRole('button', { name: 'Close' })).toBeNull();
   const web = within(dialog).getByRole('link', { name: 'Open the chat of ticket #3 in OpenChamber' });
   expect(web.getAttribute('href')).toBe('https://chat.everflow.example.invalid/?session=ses_synthetic123');
   expect(web.getAttribute('target')).toBe('_blank');
@@ -350,13 +351,19 @@ test('after Discuss the chat dialog opens as soon as the daemon has created the 
 
 // The chat dialog's file viewer: a ticket chat that wrote a Markdown note and a Word document
 const MD = '/home/aptul/Vault/99_Inbox/prompt.md', DOCX = '/home/aptul/Vault/reports/audit.docx';
-function chatWithFiles(files: () => unknown[], contents: Record<string, () => string> = {}) {
-  const reads: string[] = [];
+function chatWithFiles(files: () => unknown[], contents: Record<string, () => string> = {}, named: Record<string, unknown> = {}) {
+  const reads: string[] = [], infos: string[] = [];
   fetcher.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (init?.method !== 'POST') return new Response(null, { status: 304 });
     const url = String(input);
     if (url === '/api/ticket/3/open-chat') return Response.json({ ticket: 3, session_id: 'ses_synthetic123', directory: '/home/aptul/Vault' });
     if (url === '/api/ticket/3/chat-files') return Response.json({ ticket: 3, files: files() });
+    if (url === '/api/ticket/3/chat-file-info') {
+      const { path } = JSON.parse(String(init.body)) as { path: string };
+      infos.push(path);
+      return named[path] ? Response.json({ ticket: 3, file: named[path] })
+        : Response.json({ error: { code: 'file.not-listed', message: 'This chat has not named that file' } }, { status: 404 });
+    }
     if (url === '/api/ticket/3/chat-file') {
       const { path } = JSON.parse(String(init.body)) as { path: string };
       reads.push(path);
@@ -367,7 +374,7 @@ function chatWithFiles(files: () => unknown[], contents: Record<string, () => st
   const state = uiState();
   Object.assign(state.groups.working[0]!, { session_id: 'ses_synthetic123' });
   state.chat_origin = 'https://chat.everflow.example.invalid';
-  return { state, reads };
+  return { state, reads, infos };
 }
 const file = (path: string, kind: string, touched: string, mtime = touched) => ({ path, name: path.split('/').at(-1), size: 120, mtime, kind, touched });
 
@@ -399,16 +406,15 @@ test('with files the dialog widens: chat left, newest file right, Markdown rende
   const frame = await within(dialog).findByTitle('Chat of ticket #3');
   expect(frame.compareDocumentPosition(viewer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(frame.parentElement!.className).toMatch(/sm:w-\[min\(800px,55%\)\]/);
-  const links = within(dialog).getByRole('button', { name: 'Close' }).parentElement!.parentElement!;
+  const links = within(dialog).getByRole('link', { name: 'Open the chat of ticket #3 in OpenChamber' }).parentElement!.parentElement!;
   expect(links.className).toContain('sm:w-[min(800px,55%)]');
   expect(links.className).toContain('sm:pr-[176px]');
-  expect(viewer.contains(within(dialog).getByRole('button', { name: 'Close' }))).toBe(false);
+  expect(viewer.contains(links)).toBe(false);
 
-  const picker = within(viewer).getByRole('combobox', { name: 'File' }) as HTMLSelectElement;
-  expect(picker.value).toBe(MD);
-  expect(picker.title).toBe(MD);
-  expect([...picker.options].map((option) => [option.value, option.title])).toEqual([[MD, MD], [DOCX, DOCX]]);
-  expect(picker.options[0]!.textContent).toMatch(/^prompt\.md · \d+[mhd] ago$/);
+  // the newest file opens as the first tab; the file list opens the others, each in its own tab
+  const open = within(viewer).getByRole('tablist', { name: 'Open files' });
+  expect(within(open).getAllByRole('tab').map((tab) => [tab.textContent, tab.title, tab.getAttribute('aria-selected')])).toEqual([['prompt.md', MD, 'true']]);
+  expect(within(viewer).queryByRole('combobox')).toBeNull();
   expect((await within(viewer).findByRole('heading', { name: 'Prompt' })).tagName).toBe('H1');
   // front matter shows as a block of its own, never as a heading
   expect(within(viewer).getAllByRole('heading').map((heading) => heading.textContent)).toEqual(['Prompt']);
@@ -419,7 +425,12 @@ test('with files the dialog widens: chat left, newest file right, Markdown rende
   expect(viewer.querySelector('script')).toBeNull();
   expect(reads).toEqual([MD]);
 
-  await userEvent.selectOptions(picker, DOCX);
+  await userEvent.click(within(viewer).getByRole('button', { name: 'Toggle file tree' }));
+  const list = within(viewer).getByRole('navigation', { name: 'File list' });
+  expect(within(list).getAllByRole('button').map((entry) => [entry.title, entry.getAttribute('aria-current')])).toEqual([[MD, 'true'], [DOCX, null]]);
+  expect(within(list).getAllByRole('button')[0]!.textContent).toMatch(/^prompt\.md\d+[mhd]$/);
+  await userEvent.click(within(list).getByTitle(DOCX));
+  expect(within(open).getAllByRole('tab').map((tab) => [tab.textContent, tab.getAttribute('aria-selected')])).toEqual([['prompt.md', 'false'], ['audit.docx', 'true']]);
   expect((await within(viewer).findByRole('heading', { name: 'Audit trail' })).tagName).toBe('H1');
   expect(within(viewer).getByText('Ten years')).toBeTruthy();
   expect(within(viewer).getByRole('button', { name: 'Download audit.docx' })).toBeTruthy();
@@ -442,7 +453,7 @@ test('with files the dialog widens: chat left, newest file right, Markdown rende
   expect(dialog.className).toMatch(/sm:w-\[min\(1100px,96vw\)\]/);
   expect(viewer.parentElement!.className).toContain('sm:hidden');
   expect(localStorage.getItem('everflow.chat-files.ses_synthetic123')).toBe('hidden');
-  await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await userEvent.keyboard('{Escape}');
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   await userEvent.click(screen.getByRole('button', { name: 'Open the chat of ticket #3' }));
   const again = await screen.findByRole('dialog');
@@ -472,6 +483,164 @@ test('the viewer asks for the file list every 10 seconds and reloads the open fi
   await act(() => vi.advanceTimersByTimeAsync(10_000));
   expect(await within(dialog).findByRole('heading', { name: 'Version 2' })).toBeTruthy();
   expect(reads).toEqual([MD, MD]);
+});
+
+// The chat view's bridge (src/web/everflow-bridge.js) posts from the framed chat host
+const CHAT = 'https://chat.everflow.example.invalid', PLAN = '/home/aptul/Vault/notes/plan.md';
+function fromChat(frame: HTMLElement, data: unknown, origin = CHAT, source: MessageEventSource | null = (frame as HTMLIFrameElement).contentWindow) {
+  act(() => { window.dispatchEvent(new MessageEvent('message', { origin, source, data })); });
+}
+
+test('files clicked in the chat open as tabs: A, then B the chat only read (asked from the server), then A again focuses its tab', async () => {
+  localStorage.clear();
+  const { state, reads, infos } = chatWithFiles(() => [file(MD, 'markdown', '2026-11-17T16:45:00Z')], { [MD]: () => '# Prompt', [PLAN]: () => '# Plan\n\nStep 1' },
+    { 'notes/plan.md': file(PLAN, 'markdown', '2026-11-17T16:00:00Z') });
+  board(state);
+  await userEvent.click(screen.getByRole('button', { name: 'Open the chat of ticket #3' }));
+  const dialog = await screen.findByRole('dialog');
+  const frame = await within(dialog).findByTitle('Chat of ticket #3');
+  const viewer = await within(dialog).findByRole('region', { name: 'Files of this chat' });
+  await within(viewer).findByRole('heading', { name: 'Prompt' });
+  const tabs = () => within(within(viewer).getByRole('tablist', { name: 'Open files' })).getAllByRole('tab').map((tab) => [tab.textContent, tab.getAttribute('aria-selected')]);
+
+  // A: already open under the same path, focused without asking the server
+  fromChat(frame, { type: 'everflow:open-file', path: MD });
+  expect(tabs()).toEqual([['prompt.md', 'true']]);
+  // B: a relative path from a tool row, which only the server can resolve against the session folder
+  fromChat(frame, { type: 'everflow:open-file', path: 'notes/plan.md' });
+  await waitFor(() => expect(tabs()).toEqual([['prompt.md', 'false'], ['plan.md', 'true']]));
+  expect(await within(viewer).findByRole('heading', { name: 'Plan' })).toBeTruthy();
+  expect(infos).toEqual(['notes/plan.md']);
+  // A again: its tab, no third one
+  fromChat(frame, { type: 'everflow:open-file', path: MD });
+  expect(tabs()).toEqual([['prompt.md', 'true'], ['plan.md', 'false']]);
+  expect(await within(viewer).findByRole('heading', { name: 'Prompt' })).toBeTruthy();
+  expect(reads).toEqual([MD, PLAN, MD]);
+
+  // another origin, another window, a malformed message: nothing happens
+  fromChat(frame, { type: 'everflow:open-file', path: '/etc/passwd' }, 'https://evil.example.invalid');
+  fromChat(frame, { type: 'everflow:open-file', path: '/etc/passwd' }, CHAT, window);
+  fromChat(frame, { type: 'everflow:open-file', path: 42 });
+  fromChat(frame, { type: 'everflow:close' }, 'https://evil.example.invalid');
+  expect(infos).toEqual(['notes/plan.md']);
+  expect(screen.getByRole('dialog')).toBeTruthy();
+
+  // a file the chat never named: said in the panel, no tab
+  fromChat(frame, { type: 'everflow:open-file', path: '/home/aptul/secret.md' });
+  expect((await within(viewer).findByRole('alert')).textContent).toBe('/home/aptul/secret.md: This chat has not named that file');
+  expect(tabs()).toHaveLength(2);
+
+  // a tab closes on its own; the view's Close closes the dialog
+  await userEvent.click(within(viewer).getByRole('button', { name: 'Close plan.md' }));
+  expect(tabs()).toEqual([['prompt.md', 'true']]);
+  fromChat(frame, { type: 'everflow:close' });
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+});
+
+test('a click in a chat that has written nothing yet still opens the panel with that file', async () => {
+  localStorage.setItem('everflow.chat-files.ses_synthetic123', 'hidden');
+  const { state } = chatWithFiles(() => [], { [PLAN]: () => '# Plan' }, { [PLAN]: file(PLAN, 'markdown', '2026-11-17T16:00:00Z') });
+  board(state);
+  await userEvent.click(screen.getByRole('button', { name: 'Open the chat of ticket #3' }));
+  const dialog = await screen.findByRole('dialog');
+  const frame = await within(dialog).findByTitle('Chat of ticket #3');
+  expect(within(dialog).queryByRole('region', { name: 'Files of this chat' })).toBeNull();
+  fromChat(frame, { type: 'everflow:open-file', path: PLAN });
+  const viewer = await within(dialog).findByRole('region', { name: 'Files of this chat' });
+  expect(await within(viewer).findByRole('heading', { name: 'Plan' })).toBeTruthy();
+  expect(dialog.className).toMatch(/sm:w-\[min\(1800px,98vw\)\]/);
+  expect(viewer.parentElement!.className.split(' ')).not.toContain('sm:hidden');
+});
+
+test('the dialog shows its own Close only when the chat view has not said its bridge runs within 6 seconds of loading', async () => {
+  localStorage.clear();
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  const { state } = chatWithFiles(() => []);
+  board(state);
+  await userEvent.click(screen.getByRole('button', { name: 'Open the chat of ticket #3' }));
+  const dialog = await screen.findByRole('dialog');
+  let frame = await within(dialog).findByTitle('Chat of ticket #3');
+  fireEvent.load(frame);
+  await act(() => vi.advanceTimersByTimeAsync(5_900));
+  expect(within(dialog).queryByRole('button', { name: 'Close' })).toBeNull();
+  await act(() => vi.advanceTimersByTimeAsync(200));
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+  // with the bridge running, the view's own Close stays the only one
+  await userEvent.click(screen.getByRole('button', { name: 'Open the chat of ticket #3' }));
+  const again = await screen.findByRole('dialog');
+  frame = await within(again).findByTitle('Chat of ticket #3');
+  fromChat(frame, { type: 'everflow:ready' });
+  fireEvent.load(frame);
+  await act(() => vi.advanceTimersByTimeAsync(7_000));
+  expect(within(again).queryByRole('button', { name: 'Close' })).toBeNull();
+});
+
+test('the file panel: copy path, preview or source, find with next and previous, outline, expand over the chat, close', async () => {
+  localStorage.clear();
+  const writeText = vi.fn(async () => {});
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+  const text = '# Plan\n\nAlpha beta alpha.\n\n## Steps\n\nalpha again\n\n### Last';
+  const { state } = chatWithFiles(() => [file(MD, 'markdown', '2026-11-17T16:45:00Z')], { [MD]: () => text });
+  board(state);
+  await userEvent.click(screen.getByRole('button', { name: 'Open the chat of ticket #3' }));
+  const dialog = await screen.findByRole('dialog');
+  const viewer = await within(dialog).findByRole('region', { name: 'Files of this chat' });
+  await within(viewer).findByRole('heading', { name: 'Plan' });
+
+  await userEvent.click(within(viewer).getByRole('button', { name: 'Copy file path' }));
+  expect(writeText).toHaveBeenCalledWith(MD);
+
+  await userEvent.click(within(viewer).getByRole('button', { name: 'Outline' }));
+  const outline = within(viewer).getByRole('navigation', { name: 'Outline of the file' });
+  expect(within(outline).getAllByRole('button').map((item) => [item.textContent, item.style.paddingLeft])).toEqual([['Plan', '0.75rem'], ['Steps', '1.5rem'], ['Last', '2.25rem']]);
+  await userEvent.click(within(outline).getByRole('button', { name: 'Steps' }));
+  expect(within(viewer).queryByRole('navigation', { name: 'Outline of the file' })).toBeNull();
+
+  await userEvent.click(within(viewer).getByRole('button', { name: 'Find in file' }));
+  const input = within(viewer).getByRole('searchbox', { name: 'Find in file' });
+  await userEvent.type(input, 'alpha');
+  const count = within(viewer).getByRole('status', { name: 'Matches' });
+  await waitFor(() => expect(count.textContent).toBe('1/3'));
+  await userEvent.click(within(viewer).getByRole('button', { name: 'Next match' }));
+  expect(count.textContent).toBe('2/3');
+  await userEvent.keyboard('{Enter}');
+  expect(count.textContent).toBe('3/3');
+  await userEvent.keyboard('{Enter}');
+  expect(count.textContent).toBe('1/3');
+  await userEvent.click(within(viewer).getByRole('button', { name: 'Previous match' }));
+  expect(count.textContent).toBe('3/3');
+
+  // source: the file as written, numbered lines that find leaves out
+  const preview = within(viewer).getByRole('button', { name: 'Preview' });
+  expect(preview.getAttribute('aria-pressed')).toBe('true');
+  await userEvent.click(preview);
+  expect(preview.getAttribute('aria-pressed')).toBe('false');
+  expect(within(viewer).queryByRole('heading')).toBeNull();
+  expect(within(viewer).getByLabelText('Source').textContent).toContain('## Steps');
+  await userEvent.clear(input);
+  await userEvent.type(input, '1');
+  await waitFor(() => expect(count.textContent).toBe('0/0'));
+  await userEvent.click(preview);
+  expect(await within(viewer).findByRole('heading', { name: 'Plan' })).toBeTruthy();
+
+  // expand: the panel takes the dialog, the chat and its links step aside, a Close of the dialog shows in the panel
+  const frame = within(dialog).getByTitle('Chat of ticket #3');
+  await userEvent.click(within(viewer).getByRole('button', { name: 'Expand panel' }));
+  expect(frame.parentElement!.className).toContain('sm:hidden');
+  expect(within(viewer).getByRole('button', { name: 'Close the chat' }).className).not.toContain('sm:hidden');
+  expect(within(dialog).getByRole('link', { name: 'Open the chat of ticket #3 in OpenChamber' }).parentElement!.parentElement!.className).toContain('sm:hidden');
+  await userEvent.click(within(viewer).getByRole('button', { name: 'Collapse panel' }));
+  expect(frame.parentElement!.className).not.toContain('sm:hidden');
+  expect(within(viewer).getByRole('button', { name: 'Close the chat' }).className).toContain('sm:hidden');
+
+  // close panel: the single column again, the strip's Files button brings it back
+  await userEvent.click(within(viewer).getByRole('button', { name: 'Close panel' }));
+  expect(dialog.className).toMatch(/sm:w-\[min\(1100px,96vw\)\]/);
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Show the files of this chat (1)' }));
+  expect(dialog.className).toMatch(/sm:w-\[min\(1800px,98vw\)\]/);
+  localStorage.clear();
 });
 
 test('a ticket whose chat is running says so on the card', () => {
