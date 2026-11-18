@@ -40,6 +40,10 @@ function openchamber() {
       if (!state.valid.has((request.headers.authorization ?? '').replace(/^Bearer /, ''))) { response.writeHead(401).end('{}'); return; }
       const folders: Record<string, string> = { ses_vault: '/home/aptul/Vault', ses_untrusted: '/home/aptul/untrusted', ses_link: '/tmp/link' };
       const lookup = /^\/api\/session\/([^/]+)$/.exec(request.url ?? '');
+      if (request.method === 'GET' && /^\/api\/session\/ses_vault\/message\?/.test(request.url ?? '')) {
+        response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [], cursor: { previous: null, next: null } }));
+        return;
+      }
       if (request.method === 'GET' && lookup) {
         const folder = folders[decodeURIComponent(lookup[1]!)];
         response.writeHead(folder ? 200 : 404, { 'content-type': 'application/json' }).end(JSON.stringify(folder ? { data: { id: lookup[1], location: { directory: folder } } } : { error: 'not found' }));
@@ -191,6 +195,15 @@ test('served gate: a page session gets the bearer on loopback, nothing under the
     const gone = await openChat(fixture.waiting);
     expect([gone.status, JSON.parse(gone.text).error.code]).toEqual([404, 'chat.not-found']);
     expect((await http(server.port, `/api/ticket/${fixture.active}/open-chat`, { method: 'POST', body: '{}', headers: { ...headers, 'x-everflow-token': 'f'.repeat(64) } })).status).toBe(403);
+
+    // the files beside the chat: the same guarded action route, only files the chat's history names
+    const listed = await http(server.port, `/api/ticket/${fixture.active}/chat-files`, { method: 'POST', body: '{}', headers });
+    expect([listed.status, JSON.parse(listed.text)]).toEqual([200, { ticket: fixture.active, files: [] }]);
+    const refused = await http(server.port, `/api/ticket/${fixture.active}/chat-file`, { method: 'POST', body: JSON.stringify({ path: '/etc/passwd' }), headers });
+    expect([refused.status, JSON.parse(refused.text).error.code]).toEqual([404, 'file.not-listed']);
+    expect((await http(server.port, `/api/ticket/${fixture.active}/chat-file`, { method: 'POST', body: JSON.stringify({ path: '/etc/passwd', extra: 1 }), headers })).status).toBe(400);
+    expect((await http(server.port, `/api/ticket/${fixture.active}/chat-files`, { method: 'POST', body: '{}', headers: { ...headers, 'x-everflow-token': 'f'.repeat(64) } })).status).toBe(403);
+    expect(JSON.parse((await http(server.port, `/api/ticket/${fixture.proposal}/chat-files`, { method: 'POST', body: '{}', headers })).text).error.code).toBe('chat.none');
   } finally { await server.close(); }
 }, 120_000);
 

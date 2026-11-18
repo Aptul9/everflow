@@ -18,6 +18,7 @@ import { createKernel } from './windows/kernel.ts';
 import { Limiter, loginAccount, loginKey, Sessions, verifyPassword } from './web/login.ts';
 import { signIn } from './web/login-http.ts';
 import { ChatToken, chatGate, GATE_PATH } from './web/chat-gate.ts';
+import { ChatFiles } from './web/chat-files.ts';
 
 export async function startServer(options: { configPath: string; buildReceipt: string; port?: number }) {
   const artifact = readBuildReceipt(options?.buildReceipt);
@@ -95,7 +96,7 @@ export async function startServer(options: { configPath: string; buildReceipt: s
     try { await app?.close(); } finally { if (current) release(current); }
   })();
   try {
-    current = { config, configPath: config._config_path, port, token: randomBytes(32).toString('hex'), ...(login ? { login } : {}), ...(chat ? { chat } : {}) };
+    current = { config, configPath: config._config_path, port, token: randomBytes(32).toString('hex'), ...(login ? { login } : {}), ...(chat ? { chat, files: new ChatFiles(chat) } : {}) };
     initialize(current);
     app = next({ dev: false, dir: artifact.root, hostname: '127.0.0.1', port, httpServer: server });
     await app.prepare();

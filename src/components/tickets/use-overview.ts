@@ -81,6 +81,22 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
     return () => { mounted.current = false; clearInterval(timer); for (const controller of active) controller.abort(); active.clear(); };
   }, [refresh]);
 
+  // A guarded POST with the page's action token. Every server start issues a new token, so a page left open across a
+  // restart holds the old one: the guard rejects before any change, so the call is sent once more with the token of the
+  // page as served now.
+  const send = useCallback(async (path: string, input: Record<string, string | number | boolean | null>, signal: AbortSignal) => {
+    const once = () => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-everflow-token': action.current },
+      body: JSON.stringify(input), signal, credentials: 'same-origin', mode: 'same-origin', redirect: 'error' });
+    let response = await once();
+    if (signedOut(response)) throw new Error('Session ended, sign in again');
+    if (response.status === 403) {
+      const used = action.current, next = await currentToken(signal);
+      if (next && next !== used) { action.current = next; response = await once(); }
+    }
+    if (response.status === 403) { stale.current = true; if (mounted.current) setExpired(true); }
+    return response;
+  }, []);
+
   // quiet: a call that changes nothing on the board (opening a chat) leaves the notice and the state as they are
   const post = useCallback(async (key: string, path: string, input: Record<string, string | number | boolean | null> = {}, quiet = false) => {
     if (stale.current) throw new Error('Reload page before submitting again.');
@@ -91,21 +107,8 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
     setPending(new Set(submitting.current));
     setErrors((previous) => { const next = { ...previous }; delete next[key]; return next; });
     try {
-      const send = () => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', 'x-everflow-token': action.current },
-        body: JSON.stringify(input), signal: controller.signal, credentials: 'same-origin', mode: 'same-origin', redirect: 'error' });
-      let response = await send();
-      if (signedOut(response)) throw new Error('Session ended, sign in again');
-      // Every server start issues a new token, so a page left open across a restart holds the old one. The guard rejects
-      // before any change, so the action is sent once more with the token of the page as served now.
-      if (response.status === 403) {
-        const used = action.current, next = await currentToken(controller.signal);
-        if (next && next !== used) { action.current = next; response = await send(); }
-      }
-      if (response.status === 403) { stale.current = true; if (mounted.current) setExpired(true); }
-      if (!response.ok) {
-        const failure = await response.json().catch(() => null) as { error?: { message?: unknown } } | null;
-        throw new Error(typeof failure?.error?.message === 'string' ? failure.error.message : `Action failed (${response.status})`);
-      }
+      const response = await send(path, input, controller.signal);
+      if (!response.ok) throw new Error(await failureMessage(response));
       const result = await response.json() as { ticket?: number; job?: number; conversation?: number; input?: string; setting?: string };
       const committed = result.ticket ?? result.job ?? result.conversation;
       if (typeof result.input !== 'string' && typeof result.setting !== 'string' && (!Number.isSafeInteger(committed) || (committed ?? 0) <= 0)) throw new Error('Invalid committed action response');
@@ -120,9 +123,23 @@ export function useOverview(initialState: OverviewState, initialEtag: string, to
       submitting.current.delete(key);
       if (mounted.current) setPending(new Set(submitting.current));
     }
-  }, [refresh]);
+  }, [refresh, send]);
 
-  return { state, now, unreachable, expired, pending, errors, notice, post, refresh };
+  // A read through the guarded POST routes whose answer the caller takes as it is (the chat's files): no pending state,
+  // no notice, the error message of a refused call thrown
+  const request = useCallback(async (path: string, input: Record<string, string | number | boolean | null> = {}, signal?: AbortSignal) => {
+    if (stale.current) throw new Error('Reload page before submitting again.');
+    const response = await send(path, input, signal ?? new AbortController().signal);
+    if (!response.ok) throw new Error(await failureMessage(response));
+    return response;
+  }, [send]);
+
+  return { state, now, unreachable, expired, pending, errors, notice, post, request, refresh };
+}
+
+async function failureMessage(response: Response): Promise<string> {
+  const failure = await response.json().catch(() => null) as { error?: { message?: unknown } } | null;
+  return typeof failure?.error?.message === 'string' ? failure.error.message : `Action failed (${response.status})`;
 }
 
 // The token in the page the server renders now; only same-origin script can read it.

@@ -348,6 +348,132 @@ test('after Discuss the chat dialog opens as soon as the daemon has created the 
   expect(screen.getByRole('dialog', { name: '#1Reset access' })).toBeTruthy();
 });
 
+// The chat dialog's file viewer: a ticket chat that wrote a Markdown note and a Word document
+const MD = '/home/aptul/Vault/99_Inbox/prompt.md', DOCX = '/home/aptul/Vault/reports/audit.docx';
+function chatWithFiles(files: () => unknown[], contents: Record<string, () => string> = {}) {
+  const reads: string[] = [];
+  fetcher.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method !== 'POST') return new Response(null, { status: 304 });
+    const url = String(input);
+    if (url === '/api/ticket/3/open-chat') return Response.json({ ticket: 3, session_id: 'ses_synthetic123', directory: '/home/aptul/Vault' });
+    if (url === '/api/ticket/3/chat-files') return Response.json({ ticket: 3, files: files() });
+    if (url === '/api/ticket/3/chat-file') {
+      const { path } = JSON.parse(String(init.body)) as { path: string };
+      reads.push(path);
+      return new Response(contents[path]?.() ?? '', { headers: { 'content-type': path.endsWith('.md') ? 'text/markdown; charset=utf-8' : 'text/html; charset=utf-8' } });
+    }
+    return Response.json({ ticket: 3 });
+  });
+  const state = uiState();
+  Object.assign(state.groups.working[0]!, { session_id: 'ses_synthetic123' });
+  state.chat_origin = 'https://chat.everflow.example.invalid';
+  return { state, reads };
+}
+const file = (path: string, kind: string, touched: string, mtime = touched) => ({ path, name: path.split('/').at(-1), size: 120, mtime, kind, touched });
+
+test('the chat dialog keeps its single column while the chat has written no files', async () => {
+  const { state } = chatWithFiles(() => []);
+  board(state);
+  await userEvent.click(screen.getByRole('button', { name: 'Open the chat of ticket #3' }));
+  const dialog = await screen.findByRole('dialog');
+  await within(dialog).findByTitle('Chat of ticket #3');
+  await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/ticket/3/chat-files', expect.objectContaining({ method: 'POST', body: '{}' })));
+  expect(dialog.className).toMatch(/sm:w-\[min\(1100px,96vw\)\]/);
+  expect(within(dialog).queryByRole('region', { name: 'Files of this chat' })).toBeNull();
+  expect(within(dialog).queryByRole('tablist')).toBeNull();
+  expect(within(dialog).queryByRole('button', { name: /files of this chat/ })).toBeNull();
+});
+
+test('with files the dialog widens: chat left, newest file right, Markdown rendered, Word shown, hide remembered, tabs on a phone', async () => {
+  localStorage.clear();
+  const { state, reads } = chatWithFiles(() => [file(MD, 'markdown', '2026-11-17T16:45:00Z'), file(DOCX, 'docx', '2026-11-17T15:00:00Z')], {
+    [MD]: () => '---\ncreated: 2026-11-17\ntags: [type/prompt]\n---\n\n# Prompt\n\n- one\n- two\n\n| Field | Kept |\n|---|---|\n| IP | yes |\n\n```\ncode block\n```\n\n<script>alert(1)</script>',
+    [DOCX]: () => '<h1>Audit trail</h1><p>Ten years</p>',
+  });
+  board(state);
+  await userEvent.click(screen.getByRole('button', { name: 'Open the chat of ticket #3' }));
+  const dialog = await screen.findByRole('dialog');
+  const viewer = await within(dialog).findByRole('region', { name: 'Files of this chat' });
+  expect(dialog.className).toMatch(/sm:w-\[min\(1800px,98vw\)\]/);
+  // the chat column comes first, and the links and Close sit over it, not over the viewer
+  const frame = await within(dialog).findByTitle('Chat of ticket #3');
+  expect(frame.compareDocumentPosition(viewer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(frame.parentElement!.className).toMatch(/sm:w-\[min\(800px,55%\)\]/);
+  const links = within(dialog).getByRole('button', { name: 'Close' }).parentElement!.parentElement!;
+  expect(links.className).toContain('sm:w-[min(800px,55%)]');
+  expect(links.className).toContain('sm:pr-[176px]');
+  expect(viewer.contains(within(dialog).getByRole('button', { name: 'Close' }))).toBe(false);
+
+  const picker = within(viewer).getByRole('combobox', { name: 'File' }) as HTMLSelectElement;
+  expect(picker.value).toBe(MD);
+  expect(picker.title).toBe(MD);
+  expect([...picker.options].map((option) => [option.value, option.title])).toEqual([[MD, MD], [DOCX, DOCX]]);
+  expect(picker.options[0]!.textContent).toMatch(/^prompt\.md · \d+[mhd] ago$/);
+  expect((await within(viewer).findByRole('heading', { name: 'Prompt' })).tagName).toBe('H1');
+  // front matter shows as a block of its own, never as a heading
+  expect(within(viewer).getAllByRole('heading').map((heading) => heading.textContent)).toEqual(['Prompt']);
+  expect(within(viewer).getByLabelText('Front matter').textContent).toBe('created: 2026-11-17\ntags: [type/prompt]');
+  expect(within(viewer).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['one', 'two']);
+  expect(within(viewer).getByRole('table').textContent).toContain('IPyes');
+  expect(within(viewer).getByText('code block').tagName).toBe('CODE');
+  expect(viewer.querySelector('script')).toBeNull();
+  expect(reads).toEqual([MD]);
+
+  await userEvent.selectOptions(picker, DOCX);
+  expect((await within(viewer).findByRole('heading', { name: 'Audit trail' })).tagName).toBe('H1');
+  expect(within(viewer).getByText('Ten years')).toBeTruthy();
+  expect(within(viewer).getByRole('button', { name: 'Download audit.docx' })).toBeTruthy();
+  expect(within(viewer).getByRole('button', { name: 'Reload the file' })).toBeTruthy();
+
+  // phone: two tabs, the chat first, the file one tap away; the chat frame stays loaded
+  const tabs = within(dialog).getByRole('tablist', { name: 'Chat or file' });
+  expect(tabs.className).toContain('sm:hidden');
+  const [chatTab, fileTab] = within(tabs).getAllByRole('tab');
+  expect([chatTab!.textContent, chatTab!.getAttribute('aria-selected'), fileTab!.textContent]).toEqual(['Chat', 'true', 'File']);
+  expect(viewer.parentElement!.className).toContain('max-sm:hidden');
+  await userEvent.click(fileTab!);
+  expect(fileTab!.getAttribute('aria-selected')).toBe('true');
+  expect(viewer.parentElement!.className).not.toContain('max-sm:hidden');
+  expect(frame.parentElement!.className).toContain('max-sm:hidden');
+  expect(within(dialog).getByTitle('Chat of ticket #3')).toBe(frame);
+
+  // desktop: hiding the panel brings back the single column, and the choice holds for this session
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Hide the files of this chat' }));
+  expect(dialog.className).toMatch(/sm:w-\[min\(1100px,96vw\)\]/);
+  expect(viewer.parentElement!.className).toContain('sm:hidden');
+  expect(localStorage.getItem('everflow.chat-files.ses_synthetic123')).toBe('hidden');
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await userEvent.click(screen.getByRole('button', { name: 'Open the chat of ticket #3' }));
+  const again = await screen.findByRole('dialog');
+  const show = await within(again).findByRole('button', { name: 'Show the files of this chat (2)' });
+  expect(again.className).toMatch(/sm:w-\[min\(1100px,96vw\)\]/);
+  await userEvent.click(show);
+  expect(again.className).toMatch(/sm:w-\[min\(1800px,98vw\)\]/);
+  expect(localStorage.getItem('everflow.chat-files.ses_synthetic123')).toBe('shown');
+});
+
+test('the viewer asks for the file list every 10 seconds and reloads the open file when it changed on disk', async () => {
+  localStorage.clear();
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  let mtime = '2026-11-17T16:45:00Z', version = 1;
+  const { state, reads } = chatWithFiles(() => [file(MD, 'markdown', '2026-11-17T16:45:00Z', mtime)], { [MD]: () => `# Version ${version}` });
+  board(state);
+  await userEvent.click(screen.getByRole('button', { name: 'Open the chat of ticket #3' }));
+  const dialog = await screen.findByRole('dialog');
+  await within(dialog).findByRole('heading', { name: 'Version 1' });
+  const lists = () => fetcher.mock.calls.filter(([url]) => String(url) === '/api/ticket/3/chat-files').length;
+  const before = lists();
+  // unchanged: listed again, not read again
+  await act(() => vi.advanceTimersByTimeAsync(10_000));
+  await waitFor(() => expect(lists()).toBe(before + 1));
+  expect(reads).toHaveLength(1);
+  mtime = '2026-11-17T16:50:00Z'; version = 2;
+  await act(() => vi.advanceTimersByTimeAsync(10_000));
+  expect(await within(dialog).findByRole('heading', { name: 'Version 2' })).toBeTruthy();
+  expect(reads).toEqual([MD, MD]);
+});
+
 test('a ticket whose chat is running says so on the card', () => {
   const state = uiState();
   Object.assign(state.groups.working[0]!, { session_id: 'ses_synthetic123', chat_running: true });
