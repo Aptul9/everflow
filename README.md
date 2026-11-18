@@ -215,7 +215,7 @@ The implementation is in [jobs.ts](src/core/jobs.ts), [kb-agent.ts](src/core/kb-
 
 | Class | Examples | Policy |
 |---|---|---|
-| Dependency | HTTP 408, 429 or 5xx; refused/reset/timed-out connections; COM `0x800706BA` or `0x80010001`; SQLite busy/locked | Backoff starts at 10 seconds, doubles to 1800 seconds, with 20% jitter. Retry-After is a minimum and can exceed that cap. Dependency failures do not consume attempts and never park a job. |
+| Dependency | HTTP 408, 429 or 5xx; a provider rate limit (`provider.rate-limit`, Retry-After read from the upstream body too); refused/reset/timed-out connections; COM `0x800706BA` or `0x80010001`; SQLite busy/locked | Backoff starts at 10 seconds, doubles to 1800 seconds, with 20% jitter. Retry-After is a minimum and can exceed that cap. Dependency failures do not consume attempts and never park a job. |
 | Job | HTTP 400/403; 401 after fresh sign-in; missing session; programming error; triage decision still invalid after repair | Park immediately; a follow-up of an active ticket is forwarded instead. |
 | Unknown | Unclassified failures | Same backoff. Consume an attempt. Park on the fifth attempt. |
 
