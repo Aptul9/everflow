@@ -347,6 +347,13 @@ test('extracts structured Retry-After and handles circular causes', () => {
   expect(jobs.classify?.({ response: { status: 429, headers: { 'retry-after': '120' } } })).toMatchObject({ retry_after: '120' });
 });
 
+test('a provider rate limit inside a 200 stream is a dependency with the body Retry-After', () => {
+  const error = { type: 'provider.rate-limit', message: 'rate_limit_error: Claude Max rate limit reached. Wait a moment and try again.', status: 200,
+    response: { body: '{"type":"error","error":{"type":"rate_limit_error","message":"Claude Max rate limit reached. Wait a moment and try again.","retry_after":535}}' } };
+  expect(jobs.classify?.(error)).toMatchObject({ error_class: 'dependency', retry_after: 535, message: error.message });
+  expect(jobs.classify?.({ status: 500, response: { body: 'not json' } })).toMatchObject({ error_class: 'dependency', retry_after: undefined });
+});
+
 test.each([
   [1, 0, null, 8], [1, 1, null, 12], [1, 0.5, null, 10], [2, 0.5, null, 20],
   [0, 0.5, null, 10], [30, 1, null, 1800], [1000, 0, null, 1440],
