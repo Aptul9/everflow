@@ -4,6 +4,7 @@ import { parse as parseToml } from 'smol-toml';
 import { parse as parseJsonc, printParseErrorCode } from 'jsonc-parser';
 import type { ParseError } from 'jsonc-parser';
 import { z } from 'zod';
+import { isNotePath } from './policy.ts';
 import { utc } from './time.ts';
 
 const positive = z.number().int().positive();
@@ -81,6 +82,21 @@ const configSchema = z.looseObject({
     // What is Antonio's work at this client, for triage (trusted text in its system prompt)
     role: z.string().max(2_000).optional(),
   })).default({}),
+  // Initiatives on the Overview page: larger pieces of work, each summed up from its vault note. None configured, none run
+  initiatives: z.record(z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/, 'initiative ids are kebab-case'), z.strictObject({
+    title: z.string().min(1).max(80),
+    client: z.string().min(1).max(40),
+    // Note relative to [vault] path
+    note: z.string().min(1).max(1_024).refine(isNotePath, 'note must be a relative Markdown path in the vault'),
+  })).default({}),
+  overview: z.looseObject({
+    // provider/model or a model id on the triage routes; empty takes the triage model
+    model: z.string().default(''),
+    hour: z.number().int().min(0).max(23).default(8),
+    timezone: z.string().min(1).default('Europe/Rome'),
+    window_days: positive.max(90).default(21),
+    timeout_seconds: positive.max(600).default(300),
+  }).prefault({}),
 }).refine((cfg) => !cfg.web.chat_origin || !!cfg.opencode.openchamber_port, {
   path: ['web', 'chat_origin'], message: 'chat_origin needs [opencode] openchamber_port',
 });

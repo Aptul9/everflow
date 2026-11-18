@@ -16,6 +16,7 @@ import { ingest, IngestError, retireAccounts, schedule, sourceStart } from './in
 import { claim, complete, defer, enqueue, fail, hasPendingInput, healthError, healthOk, owns, startRenewal } from './jobs.ts';
 import type { Job } from './jobs.ts';
 import { handleTriage } from './kb-agent.ts';
+import { refreshDue, refreshInitiatives } from './initiatives.ts';
 import { ACCOUNT_CHECK_MS, applyAccounts, nextAccountCheck, readAccounts } from './meridian.ts';
 import { startRetitler, startSessionEvents } from './retitle.ts';
 import { connect } from './opencode.ts';
@@ -409,6 +410,16 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
       .finally(() => { refreshing = false; });
   };
   let checking = false, checkedAt = 0, checkEvery = ACCOUNT_CHECK_MS;
+  // Initiatives on the Overview page: one run at a time, stopped with the runtime
+  let summarizing = false;
+  const summaries = new AbortController();
+  const refreshOverview = () => {
+    if (summarizing || stopped || !refreshDue(db, cfg)) return;
+    summarizing = true;
+    void refreshInitiatives(cfg, db, { signal: summaries.signal })
+      .catch((error: unknown) => { if (!stopped) log({ source: 'daemon', code: 'initiatives.refresh-failed', ...failureFields(error, 'initiatives.refresh') }); })
+      .finally(() => { summarizing = false; });
+  };
   // Meridian says whether each triage account can serve; a local read, no tokens
   const checkAccounts = () => {
     if (checking || !cfg.tickets.enabled || Date.now() - checkedAt < checkEvery) return;
@@ -423,6 +434,7 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
     let stage = 'runtime.schedule';
     try {
       stage = 'runtime.models'; refreshModels(); checkAccounts();
+      stage = 'runtime.initiatives'; refreshOverview();
       stage = 'runtime.schedule';
       schedule(db, cfg); stage = 'runtime.maintenance'; scheduleMaintenance(db, cfg);
       for (const id of reconcile) if (['done', 'cancelled', 'parked'].includes(String(db.prepare('SELECT state FROM job WHERE id=?').get(id)?.state))) reconcile.delete(id);
@@ -467,7 +479,7 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
   const heartbeatTimer = setInterval(beat, cfg.jobs.heartbeat_seconds * 1000);
   interval.unref(); heartbeatTimer.unref();
   const close = () => closing ??= (async () => {
-    stopped = true; clearInterval(interval); clearInterval(heartbeatTimer);
+    stopped = true; clearInterval(interval); clearInterval(heartbeatTimer); summaries.abort();
     retitler?.close(); await events?.close();
     for (const active of inFlight.values()) active.controller.abort();
     for (const { child } of watchers) if (child.connected) child.send({ type: 'everflow.stop' }, () => {});

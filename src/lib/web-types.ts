@@ -151,3 +151,22 @@ export interface OverviewState {
 // edited or named it; mtime: the file's own last change.
 export type ChatFileKind = 'markdown' | 'text' | 'docx' | 'pdf' | 'image' | 'other';
 export interface ChatFile { path: string; name: string; size: number; mtime: string; kind: ChatFileKind; touched: string }
+
+// Overview page: an initiative summed up from its vault note. Every line keeps the log entries or tickets it rests on.
+export interface InitiativeSource { id: string; date: string; text: string }
+export interface InitiativeLine { text: string; sources: InitiativeSource[] }
+// owes them: that person owes Antonio or the work; owes you: Antonio owes them. since: date of the oldest source, days: working days since
+export interface InitiativeWait extends InitiativeLine { who: string; owes: 'you' | 'them'; since: string; days: number }
+export interface InitiativeNext extends InitiativeLine { owner: 'ai' | 'you'; draft: string | null }
+export type InitiativeStateName = 'moving' | 'waiting_them' | 'needs_you' | 'stuck' | 'quiet';
+export interface InitiativeSummary {
+  state: InitiativeStateName; headline: string; now: InitiativeLine[]; waits: InitiativeWait[]; next: InitiativeNext[]; done: InitiativeLine[];
+  // rejected: items dropped for citing no offered source; entries: log entries offered
+  rejected: number; entries: number; model: string;
+}
+export interface InitiativeView {
+  id: string; title: string; client: string; note: string; at: string | null; summary: InitiativeSummary | null; error: string | null; error_at: string | null;
+}
+export interface InitiativesState {
+  initiatives: InitiativeView[]; today: string; views: Record<string, number>; requested: boolean; refreshing: boolean; providers: boolean;
+}

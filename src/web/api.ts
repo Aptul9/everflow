@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { approve } from '../core/approval.ts';
 import { transaction } from '../core/db.ts';
+import { markSeen, readInitiatives, requestRefresh } from '../core/initiative-state.ts';
 import { retry } from '../core/jobs.ts';
 import { requestModelOptions, saveSetting } from '../core/settings.ts';
 import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, MUTE_MAX_MINUTES, muteBatch, muteTicket, pauseInput, TicketError } from '../core/tickets.ts';
@@ -120,6 +121,27 @@ export async function settingPost(request: Request): Promise<Response> {
 }
 
 const pauseBody = z.strictObject({ source: z.string().min(1).max(64), account: z.string().min(1).max(320), paused: z.boolean() });
+
+export function initiativesGet(request: Request): Response {
+  try {
+    const current = instance();
+    if (!allowedHost(request.headers.get('host'), current.port, current.config.web.public_origin)) throw new HttpError(403, 'host.forbidden', 'Local Host required');
+    return json(request, withDatabase(false, (db) => readInitiatives(db, current.config)));
+  } catch (error) { return errorResponse(error); }
+}
+
+// refresh: the daemon sums the initiatives up again at its next tick; seen: counts a page open for the pilot
+export async function initiativesPost(request: Request, action: string): Promise<Response> {
+  try {
+    const current = instance();
+    guardPost(request.headers, current);
+    await body(request, empty);
+    if (action !== 'refresh' && action !== 'seen') throw new HttpError(404, 'action.not-found', 'Action not found');
+    if (action === 'refresh' && !Object.keys(current.config.initiatives).length) throw new HttpError(409, 'initiatives.none', 'No initiative configured');
+    const result = withDatabase(true, (db) => action === 'refresh' ? (requestRefresh(db), { requested: true }) : { views: markSeen(db, current.config) });
+    return Response.json(result, { headers: { 'cache-control': 'no-store' } });
+  } catch (error) { return errorResponse(error); }
+}
 
 // Pauses a source account (its new input waits before triage and chat forwards) or switches it back on
 export async function inputPost(request: Request): Promise<Response> {

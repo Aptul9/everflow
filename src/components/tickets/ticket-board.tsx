@@ -242,6 +242,10 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
             <p className="text-xs text-muted-foreground">Local overview · {state.day}</p>
           </div>
         </div>
+        <nav aria-label="Pages" className="flex gap-0.5 rounded-lg bg-muted p-0.5 text-sm">
+          <a href="/" aria-current="page" className="rounded-md bg-card px-3 py-1 font-medium shadow-xs">Board</a>
+          <a href="/overview" className="rounded-md px-3 py-1 text-muted-foreground hover:text-foreground">Overview</a>
+        </nav>
         <div className="flex items-center gap-2">
           <span className={cn('inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs', unreachable ? 'border-destructive/25 bg-destructive-soft text-destructive' : 'bg-card text-muted-foreground')}>
             {unreachable ? <WifiOff aria-hidden="true" className="size-3.5" /> : <span aria-hidden="true" className="size-2 rounded-full bg-success" />}

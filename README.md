@@ -197,6 +197,21 @@ The brief identifies source messages and knowledge-base contents as untrusted da
 
 Each completed turn ends with `STATUS: <working|needs_you|waiting_them|done> | <one line>`; `blocked` from older sessions still parses as Needs you. Reports use the assistant message identity and completion timestamp. A later direct-chat report is not overwritten by an older collector or polling time. The session title is `[<stage>] #<id> <title>` and follows the ticket's stage whatever changed it: each sync (every `sync_seconds`) compares it with the stage computed from the database and renames the session when they differ, so page actions (Done, Dismiss), a reopen, a turn running in the session and a reply without a valid STATUS are reflected within one sync. Open tickets are compared with the session itself, closed and dismissed ones with the title last written; a dismissed ticket gets a sync job only until its title says `[Dismissed]`; a ticket with a collector or input job running is left to that job. A reply without a valid STATUS still fails that ticket's sync and leaves the report unchanged. The page shows the stored session title for finding the chat. No working session deep-link is assumed.
 
+## Overview
+
+`/overview` shows initiatives: larger pieces of work at a client, each listed under `[initiatives.<id>]` with `title`, `client` and `note`, a Markdown path relative to `[vault] path`. No entry, no run. Only listed initiatives are summed up; every other client stays on tickets alone.
+
+```toml
+[initiatives.tesco-ocp-iam]
+title = "OCP IAM"
+client = "tesco"
+note = "01_Projects/tesco-ocp-virt-iam.md"
+```
+
+The daemon sums each initiative up on weekdays from `[overview] hour` (default 8) in `[overview] timezone` (default `Europe/Rome`), once a day, again 30 minutes after a failed run, and when Refresh is pressed. One provider call per initiative on the triage routes, with `[overview] model` or, when empty, the triage model; no tools are offered and `[overview] timeout_seconds` (default 300) bounds each call. The input is the note's `## Goal`, its open `## Blockers`, the dated `## Log` entries of the last `[overview] window_days` (default 21), each with an id, and the client's Everflow tickets of the same window. Every returned line must cite those ids: a line citing none is dropped and counted on the page, and an answer with no sourced line or invalid JSON gets one repair turn, then the run fails for that initiative and the page keeps the previous summary with the error.
+
+The page shows per initiative its state, a map of who owes what (red after 5 working days of waiting), the current lines with their sources on click, and the columns AI, You, Them and Done this week. AI items may carry a draft message; the page only shows and copies it, nothing is sent. Summaries, the refresh request and a per-day count of page opens live in the `setting` table; the vault is only read.
+
 ## Backlog and migration
 
 The first explicit v2 start persists `triage_after`, defaulting to that start's UTC time. A quoted aware `[start] triage_after` can set the initial cutoff. The persisted value wins on later starts. Unbatched messages with `stored_at` strictly before the cutoff become `backlog`, regardless of their source `sent_at`. They appear under Skipped rather than generating old proposals. Make ticket converts a skipped batch into a ticket or reuses its current routed ticket. A fresh proposal is not approved for chat by that action. Dismiss reasons and Make ticket counts remain visible as feedback.
