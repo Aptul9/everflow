@@ -67,33 +67,33 @@ export function PeopleMap({ waits }: { waits: InitiativeWait[] }) {
       : person.waits.some((wait) => wait.owes === 'you') ? 'you' : 'them';
   }
   if (!people.length) return <p className="rounded-lg bg-background px-3 py-10 text-center text-xs text-muted-foreground">Nobody owes anything open.</p>;
-  const cx = 180, cy = 118, center = 22, node = 17;
+  const width = 560, height = 280, cx = width / 2, cy = height / 2, center = 24, node = 18;
   const placed = people.map((person, index) => {
     const angle = -Math.PI / 2 + index * 2 * Math.PI / people.length + (people.length % 2 ? 0 : Math.PI / people.length);
-    return { ...person, x: cx + 128 * Math.cos(angle), y: cy + 84 * Math.sin(angle) };
+    return { ...person, x: cx + 215 * Math.cos(angle), y: cy + 95 * Math.sin(angle) };
   });
-  return <svg role="img" aria-label={`Open requests: ${placed.map((person) => `${person.who} ${person.waits.length}`).join(', ')}`} viewBox="0 0 360 240"
-    className="h-[240px] w-full rounded-lg bg-background">
+  return <svg role="img" aria-label={`Open requests: ${placed.map((person) => `${person.who} ${person.waits.length}`).join(', ')}`} viewBox={`0 0 ${width} ${height}`}
+    className="h-[280px] w-full rounded-lg bg-background">
     <defs>{Object.entries(strokes).map(([tone, color]) => <marker key={tone} id={`arrow-${tone}`} viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
       <path d="M0,0L10,5L0,10z" fill={color} /></marker>)}</defs>
     {placed.map((person) => {
       const dx = person.x - cx, dy = person.y - cy, length = Math.hypot(dx, dy) || 1;
       const ux = dx / length, uy = dy / length;
-      const outward = person.waits[0]!.owes === 'you';
+      const outward = person.tone === 'you';
       const [x1, y1, x2, y2] = outward ? [cx + ux * center, cy + uy * center, person.x - ux * (node + 3), person.y - uy * (node + 3)]
         : [person.x - ux * node, person.y - uy * node, cx + ux * (center + 3), cy + uy * (center + 3)];
-      const first = person.waits[0]!;
-      const label = `${first.text.length > 22 ? `${first.text.slice(0, 21)}…` : first.text} · ${first.days}d${person.waits.length > 1 ? ` +${person.waits.length - 1}` : ''}`;
+      const days = Math.max(...person.waits.map((wait) => wait.days));
+      const label = `${person.waits.length} open · ${days}d`;
+      const below = person.y >= cy;
       return <g key={person.who} data-person={person.who} data-tone={person.tone}>
         <title>{person.waits.map((wait) => `${wait.owes === 'you' ? 'You owe' : 'Owes you'}: ${wait.text} (${wait.days} working days)\n${wait.sources.map((source) => source.text).join('\n')}`).join('\n\n')}</title>
         <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={strokes[person.tone]} strokeWidth={2} strokeDasharray="6 4" markerEnd={`url(#arrow-${person.tone})`}
           className="animate-[dash-flow_1.2s_linear_infinite]" />
-        <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 5} textAnchor="middle" fontSize="9" fontWeight="600" fill={strokes[person.tone]}
-          stroke="var(--background)" strokeWidth={3} paintOrder="stroke">{label}</text>
         {person.tone === 'overdue' && <circle cx={person.x} cy={person.y} r={node} fill="var(--destructive)" className="origin-center animate-[node-pulse_1.8s_ease-out_infinite] [transform-box:fill-box]" />}
         <circle cx={person.x} cy={person.y} r={node} fill="var(--card)" stroke={strokes[person.tone]} strokeWidth={2} />
         <text x={person.x} y={person.y + 3.5} textAnchor="middle" fontSize="10" fill="var(--foreground)">{initials(person.who)}</text>
-        <text x={person.x} y={person.y + (person.y < cy ? -node - 5 : node + 12)} textAnchor="middle" fontSize="10" fill="var(--foreground)">{person.who}</text>
+        <text x={person.x} y={below ? person.y + node + 13 : person.y - node - 18} textAnchor="middle" fontSize="11" fontWeight="600" fill="var(--foreground)">{person.who}</text>
+        <text x={person.x} y={below ? person.y + node + 25 : person.y - node - 6} textAnchor="middle" fontSize="10" fontWeight="600" fill={strokes[person.tone]}>{label}</text>
       </g>;
     })}
     <circle cx={cx} cy={cy} r={center} fill="var(--primary)" />
@@ -136,7 +136,7 @@ function Detail({ view }: { view: InitiativeView }) {
   const summary = view.summary;
   return <section aria-label={`${view.client} ${view.title}`} className="space-y-3 rounded-xl border bg-card p-3 shadow-xs sm:p-4">
     <div className="flex flex-wrap items-center gap-2">
-      <h2 className="text-base font-semibold">{view.client} · {view.title}</h2>
+      <h2 className="text-base font-semibold"><span className="mr-1.5 text-[11px] font-normal tracking-wide text-muted-foreground uppercase">{view.client}</span>{view.title}</h2>
       <StatePill view={view} />
       <span className="ml-auto truncate font-mono text-[11px] text-muted-foreground" title="Vault note">{view.note}</span>
     </div>
