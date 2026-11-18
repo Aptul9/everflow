@@ -146,21 +146,96 @@ test('proposed route is reassessed in update mode using the fresh shared title s
   expect(db.prepare('SELECT proposal,lifecycle,approved_at FROM ticket').get()).toEqual({ proposal: 'Inspect logs', lifecycle: 'proposed', approved_at: null });
 });
 
-test.each(['active', 'closed'])('current %s rule route skips the model and preserves proposal/approval markers', async (state) => {
+test('current closed rule route skips the model and preserves proposal/approval markers', async () => {
   const { cfg } = kbFixture();
   using db = openDb(cfg.db.path);
   const owner = ticket(db, { proposal: 'Kept proposal' });
   const job = batchJob(db, cfg, owner);
   // Closed the next day: same-day input no chat turn carried would reopen the chat instead
-  db.prepare('UPDATE ticket SET lifecycle=?,approved_at=?,session_id=?,closed_at=? WHERE id=?')
-    .run(state === 'active' ? 'active' : 'done', AT, 'existing-session', state === 'closed' ? '2026-11-07T00:00:01Z' : null, owner);
+  db.prepare('UPDATE ticket SET lifecycle=?,approved_at=?,session_id=?,closed_at=? WHERE id=?').run('done', AT, 'existing-session', '2026-11-07T00:00:01Z', owner);
   await using peer = await scriptedPeer(() => ({ body: text() }));
   await handle(cfg, db, job, { providers: { first: provider(peer.baseURL) } });
   expect(peer.requests).toHaveLength(0);
   expect(jobRow(db, job).state).toBe('done');
-  expect(db.prepare('SELECT outcome FROM batch').get()?.outcome).toBe(state === 'active' ? 'routed' : 'closed');
+  expect(db.prepare('SELECT outcome FROM batch').get()?.outcome).toBe('closed');
   expect(db.prepare('SELECT proposal,session_id,approved_at FROM ticket').get()).toEqual({ proposal: 'Kept proposal', session_id: 'existing-session', approved_at: AT });
   expect(db.prepare('SELECT COUNT(*) AS n FROM triage_log').get()?.n).toBe(0);
+});
+
+function runningTicket(db: DatabaseSync, fields: Record<string, SQLInputValue> = {}): number {
+  return ticket(db, { lifecycle: 'active', approved_at: AT, session_id: 'running-session', proposal: 'Kept proposal', report: 'waiting_them',
+    report_line: 'Waiting for Bob to mount /data', ...fields });
+}
+
+test('a follow-up of a running ticket chat is judged against that ticket alone, with its record and the follow-up rules', async () => {
+  const { cfg } = kbFixture();
+  using db = openDb(cfg.db.path);
+  ticket(db, { title: 'Unrelated open ticket', lifecycle: 'active', approved_at: AT });
+  const owner = runningTicket(db);
+  const job = batchJob(db, cfg, owner);
+  expect(JSON.parse(String(jobRow(db, job).payload))).toMatchObject({ mode: 'follow', ticket: owner, candidates: [], candidate_ids: [owner] });
+  await using peer = await scriptedPeer(() => ({ body: text(JSON.stringify(decision({ action: 'update', ticket: owner, title: 'Synthetic ticket', summary: '', ask: '', proposal: '' }))) }));
+  await handle(cfg, db, job, { providers: { first: provider(peer.baseURL) } });
+  const offered = JSON.parse(String(peer.requests[0]!.messages[0]!.content)) as { mode: string; candidates: { id: number }[]; context: { active_ticket: { id: number; last_report: string } } };
+  expect(offered).toMatchObject({ mode: 'follow', candidates: [{ id: owner }], context: { active_ticket: { id: owner, last_report: 'Waiting for Bob to mount /data' } } });
+  expect(peer.requests[0]!.system).toMatch(/When mode is follow/);
+  expect(jobRow(db, job).state).toBe('done');
+  expect(db.prepare('SELECT state,outcome,ticket FROM batch').get()).toEqual({ state: 'pending', outcome: 'routed', ticket: owner });
+  expect(db.prepare('SELECT proposal,lifecycle FROM ticket WHERE id=?').get(owner)).toEqual({ proposal: 'Kept proposal', lifecycle: 'active' });
+  expect(db.prepare("SELECT body FROM timeline WHERE ticket=? AND kind='triage'").get(owner)?.body).toBe('Explicit synthetic request');
+});
+
+test.each([
+  { name: 'a sure skip keeps it off the chat', confidence: 0.9, outcome: 'not_on_us', state: 'done' },
+  { name: 'an unsure skip still forwards it', confidence: 0.5, outcome: 'routed', state: 'pending' },
+])('follow-up triage: $name', async ({ confidence, outcome, state }) => {
+  const { cfg } = kbFixture();
+  cfg.chats.enabled = true;
+  using db = openDb(cfg.db.path);
+  const owner = runningTicket(db);
+  const job = batchJob(db, cfg, owner);
+  await using peer = await scriptedPeer(() => ({ body: text(JSON.stringify(decision({ on_us: false, action: 'skip', title: '', reason: 'Automatic out-of-office reply', confidence }))) }));
+  await handle(cfg, db, job, { providers: { first: provider(peer.baseURL) } });
+  expect(jobRow(db, job).state).toBe('done');
+  expect(db.prepare('SELECT state,outcome,ticket FROM batch').get()).toEqual({ state, outcome, ticket: owner });
+  expect(db.prepare('SELECT action,reason FROM triage_log').get()).toEqual({ action: 'skip', reason: 'Automatic out-of-office reply' });
+  expect(db.prepare("SELECT body FROM timeline WHERE ticket=? AND kind='triage'").get(owner)?.body).toBe('Automatic out-of-office reply');
+  expect(db.prepare('SELECT lifecycle,report FROM ticket WHERE id=?').get(owner)).toEqual({ lifecycle: 'active', report: 'waiting_them' });
+  schedule(db, cfg, AT);
+  expect(db.prepare("SELECT COUNT(*) AS n FROM job WHERE kind='forward'").get()?.n).toBe(outcome === 'routed' ? 1 : 0);
+  if (outcome === 'not_on_us') {
+    expect(tickets.makeTicket(db, 1, AT)).toBe(owner);
+    expect(schedule(db, cfg, AT)).toHaveLength(1);
+    expect(db.prepare("SELECT ticket,json_extract(payload,'$.batch_ids') AS batches FROM job WHERE kind='forward'").get()).toEqual({ ticket: owner, batches: '[1]' });
+  }
+});
+
+test('follow-up triage: a different request in the running chat gets its own proposal and the chat keeps its ticket', async () => {
+  const { cfg } = kbFixture();
+  using db = openDb(cfg.db.path);
+  const owner = runningTicket(db);
+  const job = batchJob(db, cfg, owner);
+  await using peer = await scriptedPeer(() => ({ body: text(JSON.stringify(decision({ title: 'Open the firewall for the backup' }))) }));
+  await handle(cfg, db, job, { providers: { first: provider(peer.baseURL) } });
+  const created = Number(db.prepare('SELECT ticket FROM batch').get()!.ticket);
+  expect(created).not.toBe(owner);
+  expect(db.prepare('SELECT title,lifecycle FROM ticket WHERE id=?').get(created)).toEqual({ title: 'Open the firewall for the backup', lifecycle: 'proposed' });
+  expect(db.prepare('SELECT state,outcome FROM batch').get()).toEqual({ state: 'done', outcome: 'proposed' });
+  expect(db.prepare("SELECT ticket,kind FROM ticket_conversation WHERE kind IN ('primary','linked')").all()).toEqual([{ ticket: owner, kind: 'primary' }]);
+});
+
+test('follow-up triage: an answer still invalid after repair forwards the input instead of parking the running chat', async () => {
+  const { cfg } = kbFixture();
+  using db = openDb(cfg.db.path);
+  const owner = runningTicket(db);
+  const job = batchJob(db, cfg, owner);
+  await using peer = await scriptedPeer((_request, index) => ({ body: text(index ? 'invalid repaired decision' : 'invalid initial decision') }));
+  await handle(cfg, db, job, { providers: { first: provider(peer.baseURL) } });
+  expect(peer.requests).toHaveLength(2);
+  expect(jobRow(db, job)).toMatchObject({ state: 'done', attempts: 0, error_class: null });
+  expect(db.prepare('SELECT state,outcome,ticket FROM batch').get()).toEqual({ state: 'pending', outcome: 'routed', ticket: owner });
+  expect(db.prepare('SELECT action,raw FROM triage_log').all()).toEqual([{ action: 'invalid', raw: 'invalid repaired decision' }]);
+  expect(db.prepare("SELECT actor,body FROM timeline WHERE ticket=? AND kind='triage'").get(owner)).toMatchObject({ actor: 'rule', body: expect.stringMatching(/^Forwarded without a triage decision: /) });
 });
 
 test.each([0.75, 0.749999])('triage applies configured confidence threshold at %s without creating a chat', async (confidence) => {
@@ -296,9 +371,10 @@ test('approval during provider I/O routes late input without rewriting approved 
   const job = batchJob(db, cfg, owner);
   await using peer = await scriptedPeer(() => {
     db.prepare("UPDATE ticket SET lifecycle='active',approved_at=?,session_id='approved-session' WHERE id=?").run(AT, owner);
-    return { body: text(JSON.stringify(decision({ proposal: 'Late stale proposal' }))) };
+    return { body: text(JSON.stringify(decision({ action: 'update', ticket: owner, proposal: 'Late stale proposal' }))) };
   });
   await handle(cfg, db, job, { providers: { first: provider(peer.baseURL) } });
+  expect(peer.requests).toHaveLength(1);
   expect(db.prepare('SELECT proposal,lifecycle,approved_at,session_id FROM ticket').get()).toEqual({ proposal: 'Approved proposal', lifecycle: 'active', approved_at: AT, session_id: 'approved-session' });
   expect(jobRow(db, job).state).toBe('done');
   expect(db.prepare('SELECT outcome FROM batch').get()?.outcome).toBe('routed');
@@ -418,21 +494,17 @@ test('lease loss inside a completion statement rolls back even writes already pe
   expect(snapshot(db, [...effects, 'job'])).toEqual(before);
 });
 
-test.each(['active', 'closed', 'moved-active'])('invalid repair superseded by %s rules completes without accepting the invalid decision', async (state) => {
+test('invalid repair superseded by closed rules completes without accepting the invalid decision', async () => {
   const { cfg } = kbFixture();
   using db = openDb(cfg.db.path);
   const owner = ticket(db, { proposal: 'Kept original proposal' });
-  const target = state === 'moved-active' ? ticket(db, { lifecycle: 'active', proposal: 'Kept target proposal', approved_at: AT, session_id: 'synthetic-approved-session' }) : owner;
   const job = batchJob(db, cfg, owner);
   let offered = '';
   await using peer = await scriptedPeer((_request, index) => {
     if (index === 1) {
       offered = String(jobRow(db, job).payload);
-      if (state === 'moved-active') {
-        db.prepare("UPDATE ticket_conversation SET kind='context' WHERE ticket=?").run(owner);
-        db.prepare('INSERT INTO ticket_conversation(ticket,conversation,kind,"by",created_at) VALUES (?,1,\'linked\',\'you\',?)').run(target, AT);
-      } else db.prepare('UPDATE ticket SET lifecycle=?,approved_at=?,session_id=?,closed_at=? WHERE id=?')
-        .run(state === 'closed' ? 'done' : 'active', AT, 'synthetic-approved-session', state === 'closed' ? '2026-11-07T00:00:01.000000Z' : null, owner);
+      db.prepare('UPDATE ticket SET lifecycle=?,approved_at=?,session_id=?,closed_at=? WHERE id=?')
+        .run('done', AT, 'synthetic-approved-session', '2026-11-07T00:00:01.000000Z', owner);
     }
     return { body: text(index ? 'invalid repaired decision' : 'invalid initial decision') };
   });
@@ -442,17 +514,55 @@ test.each(['active', 'closed', 'moved-active'])('invalid repair superseded by %s
   expect(peer.errors).toEqual([]);
   expect(jobRow(db, job)).toMatchObject({ state: 'done', attempts: 0, failures: 0, error_class: null, last_error: null });
   expect(String(jobRow(db, job).payload)).toBe(offered);
-  expect(db.prepare('SELECT state,outcome,ticket FROM batch').get()).toEqual({ state: state === 'closed' ? 'done' : 'pending', outcome: state === 'closed' ? 'closed' : 'routed', ticket: target });
-  expect(db.prepare('SELECT proposal,lifecycle,session_id,approved_at FROM ticket WHERE id=?').get(target)).toEqual({
-    proposal: state === 'moved-active' ? 'Kept target proposal' : 'Kept original proposal', lifecycle: state === 'closed' ? 'done' : 'active',
-    session_id: 'synthetic-approved-session', approved_at: AT,
+  expect(db.prepare('SELECT state,outcome,ticket FROM batch').get()).toEqual({ state: 'done', outcome: 'closed', ticket: owner });
+  expect(db.prepare('SELECT proposal,lifecycle,session_id,approved_at FROM ticket WHERE id=?').get(owner)).toEqual({
+    proposal: 'Kept original proposal', lifecycle: 'done', session_id: 'synthetic-approved-session', approved_at: AT,
   });
-  if (state === 'moved-active') expect(db.prepare('SELECT proposal,lifecycle,session_id,approved_at FROM ticket WHERE id=?').get(owner))
-    .toEqual({ proposal: 'Kept original proposal', lifecycle: 'proposed', session_id: null, approved_at: null });
   expect(db.prepare('SELECT action FROM triage_log').all()).toEqual([]);
   expect(statements.mock.calls.filter(([sql]) => sql.startsWith('INSERT INTO health(dependency,state,since,last_ok'))).toHaveLength(2);
   expect(db.prepare('SELECT COUNT(*) AS n FROM turn').get()?.n).toBe(0);
   expect(db.prepare('SELECT COUNT(*) AS n FROM job').get()?.n).toBe(1);
+});
+
+test('invalid repair after approval forwards the follow-up to the new chat without accepting the invalid decision', async () => {
+  const { cfg } = kbFixture();
+  using db = openDb(cfg.db.path);
+  const owner = ticket(db, { proposal: 'Kept original proposal' });
+  const job = batchJob(db, cfg, owner);
+  await using peer = await scriptedPeer((_request, index) => {
+    if (index === 1) db.prepare('UPDATE ticket SET lifecycle=?,approved_at=?,session_id=? WHERE id=?').run('active', AT, 'synthetic-approved-session', owner);
+    return { body: text(index ? 'invalid repaired decision' : 'invalid initial decision') };
+  });
+  await handle(cfg, db, job, { providers: { first: provider(peer.baseURL) } });
+  expect(peer.requests).toHaveLength(2);
+  expect(jobRow(db, job)).toMatchObject({ state: 'done', attempts: 0, failures: 0, error_class: null, last_error: null });
+  expect(db.prepare('SELECT state,outcome,ticket FROM batch').get()).toEqual({ state: 'pending', outcome: 'routed', ticket: owner });
+  expect(db.prepare('SELECT proposal,lifecycle FROM ticket WHERE id=?').get(owner)).toEqual({ proposal: 'Kept original proposal', lifecycle: 'active' });
+  expect(db.prepare('SELECT action FROM triage_log').all()).toEqual([{ action: 'invalid' }]);
+  expect(db.prepare('SELECT COUNT(*) AS n FROM turn').get()?.n).toBe(0);
+});
+
+test('invalid repair after a move to a running ticket defers for a fresh follow-up assessment', async () => {
+  const { cfg } = kbFixture();
+  using db = openDb(cfg.db.path);
+  const owner = ticket(db, { proposal: 'Kept original proposal' });
+  const target = runningTicket(db, { proposal: 'Kept target proposal' });
+  const job = batchJob(db, cfg, owner);
+  await using peer = await scriptedPeer((_request, index) => {
+    if (index === 1) {
+      db.prepare("UPDATE ticket_conversation SET kind='context' WHERE ticket=?").run(owner);
+      db.prepare('INSERT INTO ticket_conversation(ticket,conversation,kind,"by",created_at) VALUES (?,1,\'linked\',\'you\',?)').run(target, AT);
+    }
+    return { body: index < 2 ? text('invalid obsolete decision') : text(JSON.stringify(decision({ action: 'update', ticket: target }))) };
+  });
+  const options = { providers: { first: provider(peer.baseURL) } };
+  await handle(cfg, db, job, options);
+  expect(jobRow(db, job)).toMatchObject({ state: 'queued', attempts: 0, failures: 0 });
+  expect(db.prepare('SELECT action FROM triage_log').all()).toEqual([]);
+  await handle(cfg, db, jobs.claim(db, cfg, 'moved-running-retry')!, options);
+  expect(input(peer.requests[2]!)).toMatchObject({ mode: 'follow', context: { ticket: target } });
+  expect(db.prepare('SELECT state,outcome,ticket FROM batch').get()).toEqual({ state: 'pending', outcome: 'routed', ticket: target });
+  expect(db.prepare('SELECT proposal FROM ticket ORDER BY id').all()).toEqual([{ proposal: 'Kept original proposal' }, { proposal: 'Kept target proposal' }]);
 });
 
 test('invalid repair for a still-proposed route continues parking with original raw evidence', async () => {
@@ -496,7 +606,7 @@ test('invalid repair after movement to another proposal defers for a fresh asses
   expect(jobRow(db, job).state).toBe('done');
 });
 
-test('invalid repair after approval cannot complete under a reclaimed lease; the new owner finishes rules without another request', async () => {
+test('invalid repair after approval cannot complete under a reclaimed lease; the new owner judges the follow-up itself', async () => {
   const { cfg } = kbFixture();
   cfg.jobs.lease_seconds = 5;
   cfg.jobs.renew_seconds = 1;
@@ -520,10 +630,11 @@ test('invalid repair after approval cannot complete under a reclaimed lease; the
   expect(snapshot(db, [...effects, 'job'])).toEqual(before!);
   expect(jobRow(db, current!)).toMatchObject({ state: 'running', run_id: 'new-rule-owner', attempts: 0 });
   await handle(cfg, db, current!, options);
-  expect(peer.requests).toHaveLength(2);
+  expect(peer.requests).toHaveLength(4);
+  expect(input(peer.requests[2]!)).toMatchObject({ mode: 'follow', context: { ticket: owner } });
   expect(jobRow(db, current!).state).toBe('done');
   expect(db.prepare('SELECT state,outcome FROM batch').get()).toEqual({ state: 'pending', outcome: 'routed' });
-  expect(db.prepare('SELECT action FROM triage_log').all()).toEqual([]);
+  expect(db.prepare('SELECT action FROM triage_log').all()).toEqual([{ action: 'invalid' }]);
 });
 
 test('lease loss inside obsolete invalid rule completion rolls back every rule write', async () => {

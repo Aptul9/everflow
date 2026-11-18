@@ -96,9 +96,14 @@ test('P04 reopened account inventory uses oldest floor in actual child argv and 
 async function pipeline(configure?: (peer: Awaited<ReturnType<typeof chatPeer>>) => void, receipt = process.env.TEST_BUILD_RECEIPT) {
   const peer = await chatPeer();
   configure?.(peer);
-  const kb = await kbPeer((_body, index) => ({ body: index === 0 ? tools(use('search', 'vault_search', { query: 'runtime-fixture' }))
-    : index === 1 ? tools(use('read', 'vault_read', { path: '02_Areas/workflow.md' }))
-      : text(JSON.stringify(decision({ title: 'Synthetic runtime ticket', client: 'synthetic', kb_notes: ['02_Areas/workflow.md'] }))) }));
+  const kb = await kbPeer((body, index) => {
+    const offered = JSON.parse(String(body.messages[0]!.content)) as { mode: string; candidates: { id: number }[] };
+    // Later input of the approved ticket is a follow-up worth a chat turn
+    if (offered.mode === 'follow') return { body: text(JSON.stringify(decision({ action: 'update', ticket: offered.candidates[0]!.id, title: 'Synthetic runtime ticket', client: 'synthetic' }))) };
+    return { body: index === 0 ? tools(use('search', 'vault_search', { query: 'runtime-fixture' }))
+      : index === 1 ? tools(use('read', 'vault_read', { path: '02_Areas/workflow.md' }))
+        : text(JSON.stringify(decision({ title: 'Synthetic runtime ticket', client: 'synthetic', kb_notes: ['02_Areas/workflow.md'] }))) };
+  });
   const f = daemonFixture(`[tickets]\nenabled=true\n[chats]\nenabled=true\n[opencode]\nurl=${JSON.stringify(peer.url)}\ndirectory="kb"\ntimeout_seconds=1\n[triage]\nproviders=["fixture"]\nmodel="synthetic-small"\nprovider_config_path="providers.jsonc"\ntimeout_seconds=5\n[clients.synthetic]\naccounts=["me@synthetic.invalid"]\n`, receipt);
   fs.mkdirSync(join(f.root, 'kb/02_Areas'), { recursive: true });
   fs.writeFileSync(join(f.root, 'kb/02_Areas/workflow.md'), '# Runtime workflow\n\nruntime-fixture: read-only synthetic evidence.\n');
@@ -148,7 +153,8 @@ test.each(['native', 'forward'])('P07 built chain retains terminal report/refere
     await f.until(() => f.read((db) => db.prepare("SELECT id FROM turn WHERE id=? AND state='done'").get(later.id!)), 'later terminal collection');
     expect(f.peer.calls.filter((call) => call.method === 'POST' && call.url.pathname === '/api/session')).toHaveLength(1);
     expect(f.peer.calls.filter((call) => call.method === 'POST' && call.url.pathname.endsWith('/prompt'))).toHaveLength(2);
-    expect(f.kb.requests).toHaveLength(3);
+    expect(f.kb.requests).toHaveLength(4);
+    expect(JSON.parse(String(f.kb.requests[3]!.messages[0]!.content))).toMatchObject({ mode: 'follow', candidates: [{ id: Number(f.proposed.id) }] });
     expect(f.read((db) => db.prepare("SELECT COUNT(*) AS n FROM batch WHERE outcome='forwarded' AND state='done'").get()!.n)).toBe(2);
     const terminal = f.read((db) => db.prepare('SELECT lifecycle,report,report_line,report_message_id FROM ticket WHERE id=?').get(f.proposed.id!));
     expect(terminal).toEqual({ lifecycle: 'done', report: 'done', report_line: 'Later input complete', report_message_id: `asst_${later.prompt_id}` });

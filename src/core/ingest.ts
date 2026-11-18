@@ -244,10 +244,10 @@ export function schedule(db: DatabaseSync, cfg: Config, at?: string): number[] {
       // Muted in the source app: only an @mention of the owner or a reply quoting one of his messages reaches triage
       const sourceMuted = db.prepare(`SELECT 1 FROM source_mute s JOIN conversation c ON s.source=c.source AND s.account=lower(c.account) AND s.native_id=c.native_id
         WHERE c.id=?`).get(conversation.id!) !== undefined && !pending.some((message) => message.mention === 1 || message.reply === 1);
-      // A follow-up in a chat that feeds a running ticket chat always reaches that chat, muted or not
+      // A follow-up in a chat that feeds a running ticket chat always reaches triage, muted or not, which decides whether the chat gets it
       const working = db.prepare(`SELECT 1 FROM ticket_conversation l JOIN ticket t ON t.id=l.ticket WHERE l.conversation=? AND l.kind IN ('primary','linked')
         AND t.lifecycle='active' AND t.approved_at IS NOT NULL AND t.merged_into IS NULL`).get(conversation.id!) !== undefined;
-      // Antonio's reply as the newest message means he answered it himself: no triage. A running ticket chat still gets the others' messages.
+      // Antonio's reply as the newest message means he answered it himself: no triage. For a running ticket chat the others' messages are still judged.
       const newest = pending.reduce((latest, message) => utc(String(message.sent_at)) >= utc(String(latest.sent_at)) ? message : latest);
       const own = pending.every((message) => message.sender_is_me === 1) || !working && newest.sender_is_me === 1;
       const muted = !own && !working && (typeof until === 'string' && utc(until) > now || sourceMuted);
@@ -274,6 +274,8 @@ export function schedule(db: DatabaseSync, cfg: Config, at?: string): number[] {
       if (batchPaused(db, id, paused)) continue;
       const routed = route(db, id, now, cfg.jobs.reopen_days);
       if (routed.mode === 'closed' || routed.mode === 'forward') continue;
+      // A follow-up is judged once the chat's current input is through, against its latest report
+      if (routed.mode === 'follow' && inputChain(db, routed.ticket!)) continue;
       scheduled.add(enqueue(db, 'triage', `triage:batch:${id}`, assessmentPayload(db, cfg, id, routed, now), routed.ticket ?? undefined));
       db.prepare("UPDATE batch SET outcome='triage' WHERE id=?").run(id);
     }
