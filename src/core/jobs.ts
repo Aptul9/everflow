@@ -243,8 +243,18 @@ function records(error: unknown): Record<string, unknown>[] {
     const record = value as Record<string, unknown>;
     result.push(record);
     for (const key of ['cause', 'error', 'errors', 'data', 'detail', 'details', 'response']) queue.push(record[key]);
+    // a provider error relayed by OpenCode keeps the upstream body as text, Retry-After included
+    if (typeof record.body === 'string') queue.push(jsonBody(record.body));
   }
   return result;
+}
+
+function jsonBody(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
 }
 
 const networkCodes = new Set(['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ENETUNREACH', 'EHOSTUNREACH',
@@ -281,7 +291,7 @@ export function classify(error: unknown): Failure {
     });
     const sqlite = typeof node.errcode === 'number' && ((node.errcode & 255) === 5 || (node.errcode & 255) === 6);
     return networkCodes.has(code) || /^SQLITE_(BUSY|LOCKED)(_|$)/.test(code) || com || sqlite
-      || node.name === 'TimeoutError' || node.name === 'AbortError' || node.type === 'provider.transport';
+      || node.name === 'TimeoutError' || node.name === 'AbortError' || node.type === 'provider.transport' || node.type === 'provider.rate-limit';
   })) errorClass = 'dependency';
   else if (nodes.some((node) => programmingErrors.has(String(node.name)))) errorClass = 'job';
 
