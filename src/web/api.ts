@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { approve } from '../core/approval.ts';
 import { transaction } from '../core/db.ts';
-import { markSeen, readInitiatives, requestRefresh } from '../core/initiatives.ts';
+import { markSeen, readInitiatives, requestRefresh } from '../core/initiative-state.ts';
 import { retry } from '../core/jobs.ts';
 import { requestModelOptions, saveSetting } from '../core/settings.ts';
 import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, MUTE_MAX_MINUTES, muteBatch, muteTicket, pauseInput, TicketError } from '../core/tickets.ts';

@@ -1,7 +1,7 @@
 import { headers } from 'next/headers';
 import { InitiativesPage } from '@/components/initiatives/initiatives-page';
 import { instance, withDatabase } from '@/web/instance';
-import { readInitiatives } from '@/core/initiatives';
+import { readInitiatives } from '@/core/initiative-state';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
