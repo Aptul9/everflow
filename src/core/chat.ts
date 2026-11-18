@@ -53,6 +53,8 @@ const statusRule = `End every turn with STATUS: <working|needs_you|waiting_them|
 - needs_you: nothing moves until Antonio acts or decides (approve text, grant access, pick an option).
 - waiting_them: the next move belongs to someone outside (their reply, their change).
 - done: the ask is fully met; this closes the ticket.
+Everflow reads this last line and moves the ticket on its board from it; no command does that. When Antonio asks to change the ticket's status, end with the STATUS he asked for.
+Write it as plain text on the very last line: no bold, quote or code block, nothing after it.
 A tool error you logged does not change which of these applies.`;
 const contract = `Work under Antonio's normal rules. Outward-facing text gets his yes in this chat before sending.
 ${statusRule}
