@@ -112,6 +112,15 @@ export class ChatToken {
     // a session recorded under a symlinked spelling of its folder comes back under the canonical one
     return typeof result?.directory === 'string' && result.directory ? result.directory : directory;
   }
+
+  /** A JSON read from OpenChamber's API with the client token: 404 as chat.not-found, any other failure as chat.unavailable. */
+  async get(path: string): Promise<unknown> {
+    const response = await this.fetch(`${this.url}${path}`, { redirect: 'error', signal: AbortSignal.timeout(15_000),
+      headers: { authorization: `Bearer ${await this.token()}`, accept: 'application/json' } });
+    if (response.status === 404) { await response.body?.cancel(); throw failure(404, 'chat.not-found', `OpenChamber has no ${path.split('?')[0]}`); }
+    if (!response.ok) { await response.body?.cancel(); throw failure(502, 'chat.unavailable', `OpenChamber read failed (HTTP ${response.status})`); }
+    return response.json();
+  }
 }
 
 /** Answers GATE_PATH on the loopback listener. Under any other Host the caller answers 404. */

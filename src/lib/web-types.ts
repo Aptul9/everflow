@@ -146,3 +146,8 @@ export interface OverviewState {
   };
   feedback: { make_ticket_count: number; dismiss_count: number; dismiss_reasons: { ticket: number; reason: string; at: string }[] };
 }
+
+// A file a ticket chat wrote or edited on the daemon's machine, shown beside the chat. touched: when the chat last wrote,
+// edited or named it; mtime: the file's own last change.
+export type ChatFileKind = 'markdown' | 'text' | 'docx' | 'pdf' | 'image' | 'other';
+export interface ChatFile { path: string; name: string; size: number; mtime: string; kind: ChatFileKind; touched: string }

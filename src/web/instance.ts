@@ -3,6 +3,7 @@ import { isAbsolute } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../core/config.ts';
 import type { ChatToken } from './chat-gate.ts';
+import type { ChatFiles } from './chat-files.ts';
 import type { Limiter, Sessions } from './login.ts';
 
 export interface WebInstance {
@@ -15,6 +16,8 @@ export interface WebInstance {
   // Present when [web] chat_origin is set: the OpenChamber client token the chat host's gate hands to Caddy, and the
   // session folder the page's chat view opens with
   chat?: Pick<ChatToken, 'token' | 'open'>;
+  // With chat: the files the ticket's chat wrote, for the viewer beside the chat
+  files?: Pick<ChatFiles, 'list' | 'read'>;
 }
 
 const key = Symbol.for('everflow.web.instance');
