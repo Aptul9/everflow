@@ -300,7 +300,7 @@ export function candidates(db: DatabaseSync, cfg: Config, batch: number, at?: st
 
 export interface Route {
   ticket: number | null;
-  mode: 'new' | 'update' | 'forward' | 'closed' | 'reopen';
+  mode: 'new' | 'update' | 'follow' | 'forward' | 'closed' | 'reopen';
   candidates: number[];
   context: number[];
 }
@@ -360,8 +360,9 @@ export function route(db: DatabaseSync, batch: number, at?: string, reopenDays =
     }
     adoptAnswered(db, row.conversation, owner.id, now);
     attachBatch(db, batch, owner.id, now);
-    const mode = owner.lifecycle === 'proposed' ? 'update' : 'forward';
-    if (row.state === 'pending') db.prepare('UPDATE batch SET outcome=? WHERE id=?').run(mode === 'update' ? 'triage' : 'routed', batch);
+    // New input for a running ticket chat is judged first; a batch triage, a correction or Antonio already let through is forwarded
+    const mode = owner.lifecycle === 'proposed' ? 'update' : row.state === 'pending' && !['routed', 'forward'].includes(String(row.outcome)) ? 'follow' : 'forward';
+    if (row.state === 'pending') db.prepare('UPDATE batch SET outcome=? WHERE id=?').run(mode === 'forward' ? 'routed' : 'triage', batch);
     return { ticket: owner.id, mode, candidates: [], context: context.filter((id) => id !== owner!.id) };
   });
 }
@@ -394,7 +395,8 @@ export function ownContext(db: DatabaseSync, ticket: number): OwnContext {
 
 export function assessmentPayload(db: DatabaseSync, cfg: Config, batch: number, routed: Route, at?: string) {
   const row = getBatch(db, batch);
-  const offered = candidates(db, cfg, batch, at);
+  // A follow-up is judged against its running ticket alone
+  const offered = routed.mode === 'follow' ? [] : candidates(db, cfg, batch, at);
   const ids = [...new Set([...offered.map((candidate) => candidate.id), ...(routed.ticket === null ? [] : [routed.ticket])])];
   return { batch, mode: routed.mode, ticket: routed.ticket, conversation_title: row.title, candidates: offered, candidate_ids: ids,
     allowed_clients: Object.keys(cfg.clients), inferred_clients: batchClients(db, cfg, batch), context_ticket_ids: routed.context,
@@ -468,6 +470,10 @@ export function applyDecision(db: DatabaseSync, batch: number, input: unknown): 
     const reopening = routed.mode === 'reopen';
     if (routed.mode === 'closed') outcome = 'closed';
     else if (routed.mode === 'forward') outcome = 'routed';
+    // A follow-up goes to the running chat unless triage is sure the chat needs nothing from it
+    else if (routed.mode === 'follow' && (decision.action === 'update' || !decision.on_us && decision.confidence < scope.min_confidence)) outcome = 'routed';
+    // Skipped, it stays on the ticket's timeline without a turn; Make ticket still forwards it
+    else if (routed.mode === 'follow' && !decision.on_us) outcome = 'not_on_us';
     else if (!decision.on_us) {
       // Skipped input leaves a closed ticket closed; its chat keeps feeding it, so later input is judged again
       owner = null;
@@ -485,8 +491,8 @@ export function applyDecision(db: DatabaseSync, batch: number, input: unknown): 
         db.prepare("UPDATE ticket_conversation SET kind='context' WHERE ticket=? AND conversation=?").run(routed.ticket!, row.conversation);
         owner = null;
       }
-      // A different request in a chat that feeds a proposed ticket gets its own ticket; the chat keeps routing to the first one
-      const separate = routed.mode === 'update' && decision.action === 'new';
+      // A different request in a chat that feeds a proposed or running ticket gets its own ticket; the chat keeps routing to the first one
+      const separate = (routed.mode === 'update' || routed.mode === 'follow') && decision.action === 'new';
       if (separate) owner = null;
       let maybe: number | null = null;
       if (owner === null && decision.ticket !== null) {
@@ -516,6 +522,19 @@ export function applyDecision(db: DatabaseSync, batch: number, input: unknown): 
       owner === null ? null : String(owner), decision.reason, decision.confidence, JSON.stringify(scope.candidate_ids), raw);
     if (owner !== null) history(db, owner, now, 'triage', 'agent', decision.reason, `triage:batch:${batch}`);
     return owner;
+  });
+}
+
+// A follow-up triage could not judge still reaches the running chat, as it did before triage judged follow-ups
+export function forwardUnjudged(db: DatabaseSync, batch: number, reason: string, at?: string): boolean {
+  return transaction(db, () => {
+    const now = utc(at);
+    if (getBatch(db, batch).state !== 'pending') return false;
+    const routed = route(db, batch, now);
+    if (routed.mode !== 'follow') return false;
+    db.prepare("UPDATE batch SET outcome='routed' WHERE id=?").run(batch);
+    history(db, routed.ticket!, now, 'triage', 'rule', `Forwarded without a triage decision: ${reason}`, `triage:batch:${batch}`);
+    return true;
   });
 }
 
@@ -590,6 +609,8 @@ function correctionIntent(db: DatabaseSync, batch: number, target: number, at: s
 
 function moveFuture(db: DatabaseSync, source: number | null, target: number, at: string, conversation?: number): void {
   const own = source === null ? [] : ownContext(db, source).batch_ids;
+  // Input a correction moves to a running ticket is Antonio's choice: it goes to the chat without a follow-up triage
+  const moved = getTicket(db, target).lifecycle === 'active' ? 'routed' : 'pending';
   for (const row of db.prepare("SELECT id,conversation,ticket,state,outcome FROM batch WHERE state='pending' OR outcome='answered'").all()) {
     if (conversation === undefined ? row.ticket !== source : row.conversation !== conversation) continue;
     const id = Number(row.id);
@@ -597,14 +618,14 @@ function moveFuture(db: DatabaseSync, source: number | null, target: number, at:
       if (!own.includes(id)) continue;
     } else if (db.prepare("SELECT 1 FROM job WHERE kind='triage' AND json_extract(payload,'$.batch')=?").get(id)) {
       // Enqueue keys and old assessment payloads stay historical. Corrected input gets a fresh batch identity.
-      const replacement = Number(db.prepare("INSERT INTO batch(conversation,state,created_at,outcome,ticket) VALUES (?,'pending',?,'pending',?)")
-        .run(row.conversation!, at, target).lastInsertRowid);
+      const replacement = Number(db.prepare("INSERT INTO batch(conversation,state,created_at,outcome,ticket) VALUES (?,'pending',?,?,?)")
+        .run(row.conversation!, at, moved, target).lastInsertRowid);
       db.prepare('UPDATE message SET batch=? WHERE batch=?').run(replacement, id);
       db.prepare("UPDATE batch SET state='done',outcome='corrected',done_at=? WHERE id=?").run(at, id);
       attachBatch(db, replacement, target, at);
       correctionIntent(db, replacement, target, at);
       continue;
-    } else db.prepare("UPDATE batch SET outcome='pending',done_at=NULL WHERE id=?").run(id);
+    } else db.prepare('UPDATE batch SET outcome=?,done_at=NULL WHERE id=?').run(moved, id);
     attachBatch(db, id, target, at);
     if (row.outcome !== 'answered') correctionIntent(db, id, target, at);
   }

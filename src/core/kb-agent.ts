@@ -9,7 +9,7 @@ import { openDb, transaction } from './db.ts';
 import { backoff, classify, complete, defer, fail, healthError, healthOk, owns } from './jobs.ts';
 import type { Job } from './jobs.ts';
 import { modelChoice, triageRoute } from './settings.ts';
-import { applyDecision, assessmentPayload, batchMessages, conversationHistory, feedback, modelDecisionSchema, route, ticketRecord, TicketError } from './tickets.ts';
+import { applyDecision, assessmentPayload, batchMessages, conversationHistory, feedback, forwardUnjudged, modelDecisionSchema, route, ticketRecord, TicketError } from './tickets.ts';
 import type { Decision, Route, Ticket } from './tickets.ts';
 import { utc } from './time.ts';
 import { isNotePath, VAULT_LIMITS, VaultError, vaultRead, vaultSearch } from './vault.ts';
@@ -51,7 +51,7 @@ export interface AssessmentContext {
 export interface AssessmentInput {
   context: AssessmentContext;
   candidates: readonly { id: number }[];
-  mode: 'new' | 'update' | 'reopen';
+  mode: 'new' | 'update' | 'reopen' | 'follow';
 }
 
 export interface AssessmentOptions {
@@ -108,6 +108,7 @@ On mail, ref.addressed says where Antonio's mailbox stood on the message: to, cc
 Work that is already tracked, already answered or only chatter is skip, even when it is Antonio's.
 When mode is update, the conversation already feeds that ticket: use update only when the new messages continue the same request. A different request, from another person or for a different deliverable, is new even in the same chat, and gets its own ticket.
 When mode is reopen, the conversation fed closed_ticket, which Antonio already closed; it holds the request, how and when it was closed, the last chat report and its timeline. Read it all, with history, before deciding. Reopen it (update with closed_ticket.id) only when the new messages need more work from Antonio on that same request: a new or changed ask, a problem with what was delivered, a question only he can answer, a deadline that moved. Thanks, acknowledgements, "ok", greetings, call or meeting notices, "I'll check", status news that needs nothing from him, talk among others, requests to other people or teams and anything the timeline shows as already done or answered are skip. A request that is not the closed one is new. When unsure, prefer skip with a low confidence over reopening.
+When mode is follow, the conversation feeds active_ticket, an approved ticket whose chat is working on the request; it holds the request, the last chat report and its timeline. Read it, with history, and decide only whether the new messages are worth a turn of that chat. Forward them (update with active_ticket.id, title active_ticket.title; summary, ask and proposal may be empty) when the chat should act on them or know them: an answer or file it waits for, a new or changed ask on the same request, a question, a problem, a decision, a deadline that moved, news from someone the work depends on. Skip what needs nothing from the chat: automatic replies (out of office, delivery or read notices), thanks, acknowledgements, "ok", greetings, talk among others that does not touch the request, and messages that only repeat what the timeline already holds. Antonio's own messages are context, never a reason to forward by themselves. Being tracked by active_ticket is no reason to skip. A different request for Antonio is new. When unsure, forward: a skip below min_confidence is forwarded anyway.
 A message whose ref has mentions_me true tags Antonio directly; one whose ref has replies_to_me true answers a message of his (Teams reply with quote) and counts the same. Never skip it as chatter or as already tracked: update the candidate it belongs to, or make it new. Skip it only when a later message from Antonio already answered it, or when it only thanks, greets or acknowledges.
 Antonio reads the ticket card at a glance, so keep it short and plain:
 - summary: a quick sum-up in at most two short sentences, about 200 characters: who wants what, by when.
@@ -352,10 +353,11 @@ function freshOffer(cfg: Config, db: DatabaseSync, job: Job): OfferedAssessment 
       const candidates = scope.candidate_ids.map((id) => scope.candidates.find((candidate) => candidate.id === id)
         ?? db.prepare('SELECT id,title,client,lifecycle,summary FROM ticket WHERE id=?').get(id) as unknown as { id: number });
       const reopen = routed.mode === 'reopen';
-      const input: AssessmentInput | null = row.state === 'pending' && (routed.mode === 'new' || routed.mode === 'update' || reopen) ? {
+      const follow = routed.mode === 'follow';
+      const input: AssessmentInput | null = row.state === 'pending' && (routed.mode === 'new' || routed.mode === 'update' || reopen || follow) ? {
         mode: routed.mode as AssessmentInput['mode'], candidates, context: { ...scope, now: utc(), messages: batchMessages(db, batch),
           history: conversationHistory(db, Number(row.conversation), batch, cfg.triage.history_messages),
-          ...(reopen ? { closed_ticket: ticketRecord(db, routed.ticket!) } : { proposed_ticket: owner }),
+          ...(reopen ? { closed_ticket: ticketRecord(db, routed.ticket!) } : follow ? { active_ticket: ticketRecord(db, routed.ticket!) } : { proposed_ticket: owner }),
           context_tickets: routed.context.map((id) => db.prepare('SELECT id,title,client,lifecycle,summary FROM ticket WHERE id=?').get(id)), feedback: feedback(db) },
       } : null;
       return { scope, routed, input };
@@ -377,8 +379,10 @@ function assertOffer(cfg: Config, db: DatabaseSync, job: Job, offered: OfferedAs
     || JSON.stringify(current.scope.message_versions) !== JSON.stringify(offered.scope.message_versions)) {
     throw new TicketError('ticket.conflict', 'Assessment source input or conversation title changed during I/O');
   }
-  if ((current.routed.mode === 'new' || current.routed.mode === 'update' || current.routed.mode === 'reopen')
-    && (current.routed.mode !== offered.routed.mode || current.routed.ticket !== offered.routed.ticket)) {
+  // A proposal approved during I/O keeps its answer: same request, another one or skip is the follow-up question too
+  const approved = offered.routed.mode === 'update' && current.routed.mode === 'follow';
+  if ((current.routed.mode === 'new' || current.routed.mode === 'update' || current.routed.mode === 'reopen' || current.routed.mode === 'follow')
+    && (current.routed.mode !== offered.routed.mode && !approved || current.routed.ticket !== offered.routed.ticket)) {
     throw new TicketError('ticket.conflict', 'Assessment proposal route changed during I/O');
   }
   return current.routed;
@@ -389,7 +393,7 @@ function finishRules(cfg: Config, db: DatabaseSync, job: Job, offered: OfferedAs
     const row = db.prepare('SELECT state FROM batch WHERE id=?').get(offered.scope.batch);
     if (row?.state !== 'pending') return;
     const routed = route(db, offered.scope.batch, undefined, cfg.jobs.reopen_days);
-    if (routed.mode === 'new' || routed.mode === 'update' || routed.mode === 'reopen') throw new TicketError('ticket.conflict', 'Rule route requires a fresh assessment');
+    if (routed.mode === 'new' || routed.mode === 'update' || routed.mode === 'reopen' || routed.mode === 'follow') throw new TicketError('ticket.conflict', 'Rule route requires a fresh assessment');
   });
 }
 
@@ -426,12 +430,18 @@ export async function handleTriage(cfg: Config, db: DatabaseSync, job: Job, opti
             finishRules(cfg, db, job, rejected);
             return;
           }
+          const conversation = db.prepare('SELECT conversation FROM batch WHERE id=?').get(rejected.scope.batch)!.conversation;
+          const invalid = () => db.prepare('INSERT INTO triage_log(batch,conversation,at,action,reason,candidates,raw) VALUES (?,?,?,\'invalid\',?,?,?)')
+            .run(rejected.scope.batch, conversation!, utc(), error.parse_error, JSON.stringify(rejected.scope.candidate_ids), error.raw);
+          // A follow-up is not parked behind an undecidable answer: the running chat gets it
+          if (current.mode === 'follow') {
+            complete(db, job, () => { forwardUnjudged(db, rejected.scope.batch, error.parse_error); invalid(); });
+            return;
+          }
           const evidence = { raw: error.raw, parse_error: error.parse_error, responses: error.responses };
           if (!fail(db, cfg, job, error)) return;
           db.prepare('UPDATE job SET payload=? WHERE id=?').run(JSON.stringify({ ...rejected.scope, assessment_error: evidence }), job.id);
-          const conversation = db.prepare('SELECT conversation FROM batch WHERE id=?').get(rejected.scope.batch)!.conversation;
-          db.prepare('INSERT INTO triage_log(batch,conversation,at,action,reason,candidates,raw) VALUES (?,?,?,\'invalid\',?,?,?)')
-            .run(rejected.scope.batch, conversation!, utc(), error.parse_error, JSON.stringify(rejected.scope.candidate_ids), error.raw);
+          invalid();
         });
       } catch (failure) {
         if (failure instanceof TicketError && failure.code === 'ticket.conflict') defer(db, job, utc());

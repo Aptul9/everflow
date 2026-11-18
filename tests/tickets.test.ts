@@ -106,7 +106,7 @@ test.each(['proposed', 'active'])('an existing %s route wins and keeps context l
   const context = ticket(db, { lifecycle: 'active', session_id: 'unrelated-context-session' });
   link(db, primary, conversation(db, id));
   link(db, context, conversation(db, id), 'context');
-  expect(api.route?.(db, id, AT)).toMatchObject({ ticket: primary, mode: lifecycle === 'proposed' ? 'update' : 'forward', candidates: [], context: [context] });
+  expect(api.route?.(db, id, AT)).toMatchObject({ ticket: primary, mode: lifecycle === 'proposed' ? 'update' : 'follow', candidates: [], context: [context] });
   expect(db.prepare('SELECT ticket FROM batch WHERE id=?').get(id)?.ticket).toBe(primary);
   expect(db.prepare('SELECT COUNT(*) AS n FROM job').get()?.n).toBe(0);
   expect(db.prepare('SELECT COUNT(*) AS n FROM turn').get()?.n).toBe(0);
@@ -205,7 +205,7 @@ test.each(['proposed', 'active'])('one shared open reference links by rule and p
   const id = batch(db);
   const owner = ticket(db, { lifecycle });
   addRefs(db, owner, extractRefs('RCA-12', 'message'), OLD);
-  expect(api.route?.(db, id, AT)).toMatchObject({ ticket: owner, mode: lifecycle === 'proposed' ? 'update' : 'forward' });
+  expect(api.route?.(db, id, AT)).toMatchObject({ ticket: owner, mode: lifecycle === 'proposed' ? 'update' : 'follow' });
   expect(db.prepare('SELECT kind,"by" FROM ticket_conversation WHERE ticket=?').get(owner)).toEqual({ kind: 'linked', by: 'rule' });
 });
 
@@ -292,6 +292,14 @@ function decision(overrides: Record<string, unknown> = {}) {
 function offer(db: DatabaseSync, cfg: ReturnType<typeof loadConfig>, input: number) {
   expect(ingestApi.schedule?.(db, cfg, AT)).toHaveLength(1);
   return db.prepare("SELECT * FROM job WHERE kind='triage' AND json_extract(payload,'$.batch')=? ORDER BY id DESC LIMIT 1").get(input)!;
+}
+
+// The follow-up triage of a running ticket chat lets the input through to that chat
+function letThrough(db: DatabaseSync, input: number, owner: number) {
+  const job = db.prepare("SELECT id,payload FROM job WHERE kind='triage' AND json_extract(payload,'$.batch')=? ORDER BY id DESC LIMIT 1").get(input)!;
+  expect(JSON.parse(String(job.payload))).toMatchObject({ mode: 'follow', ticket: owner, candidate_ids: [owner] });
+  api.applyDecision(db, input, decision({ action: 'update', ticket: owner }));
+  db.prepare("UPDATE job SET state='done' WHERE id=?").run(job.id!);
 }
 
 test('a new on-us decision creates a proposed ticket with atomic refs, history and raw log, never a chat', () => {
@@ -403,7 +411,7 @@ test('late assessment rechecks an approved route without rewriting its proposal'
   link(db, owner, conversation(db, input));
   offer(db, cfg, input);
   db.prepare("UPDATE ticket SET lifecycle='active',approved_at=?,session_id='approved-session' WHERE id=?").run(AT, owner);
-  expect(api.applyDecision?.(db, input, decision({ proposal: 'Stale replacement' }))).toBe(owner);
+  expect(api.applyDecision?.(db, input, decision({ action: 'update', ticket: owner, proposal: 'Stale replacement' }))).toBe(owner);
   expect(db.prepare('SELECT proposal,lifecycle FROM ticket WHERE id=?').get(owner)).toEqual({ proposal: 'Approved proposal', lifecycle: 'active' });
   expect(db.prepare('SELECT outcome FROM batch').get()?.outcome).toBe('routed');
 });
@@ -439,7 +447,7 @@ test('a same-day close keeps input its chat never saw: triage judges it against 
   inputTurn(db, owner, 'done', { created_at: '2026-11-06T09:01:00.000000Z' });
   vi.setSystemTime(new Date('2026-11-06T09:03:00Z'));
   const missed = batch(db, { conversation_id: 'chat', message_id: 'during-turn' });
-  expect(api.route(db, missed, '2026-11-06T09:03:00Z')).toMatchObject({ ticket: owner, mode: 'forward' });
+  expect(api.route(db, missed, '2026-11-06T09:03:00Z')).toMatchObject({ ticket: owner, mode: 'follow' });
   api.close(db, owner, 'Chat closed it', '2026-11-06T09:05:00Z');
   expect(db.prepare('SELECT state,outcome FROM batch WHERE id=?').get(missed)).toEqual({ state: 'pending', outcome: 'routed' });
   vi.setSystemTime(new Date('2026-11-06T09:06:00Z'));
@@ -540,7 +548,7 @@ test.each(['start_chat', 'forward', 'collect', 'prepared', 'admitted', 'running'
     link(db, owner, conversation(db, input), 'linked');
     expect(ingestApi.schedule?.(db, cfg, AT)).toEqual([]);
     expect(db.prepare("SELECT COUNT(*) AS n FROM job WHERE key<>'earlier-chain'").get()?.n).toBe(0);
-    expect(db.prepare('SELECT state,outcome,ticket FROM batch').get()).toEqual({ state: 'pending', outcome: 'routed', ticket: owner });
+    expect(db.prepare('SELECT state,outcome,ticket FROM batch').get()).toEqual({ state: 'pending', outcome: 'triage', ticket: owner });
   },
 );
 
@@ -548,12 +556,16 @@ test('the next eligible forward takes durable waiting batches in FIFO after the 
   const { path, cfg } = fixture();
   using db = openDb(path);
   const owner = ticket(db, { lifecycle: 'active', approved_at: OLD, session_id: 'session' });
-  jobs.enqueue(db, 'forward', 'initial-input', {}, owner);
-  const initial = jobs.claim(db, cfg, 'input', AT)!;
   const first = batch(db);
   const second = batch(db);
   link(db, owner, conversation(db, first));
   link(db, owner, conversation(db, second), 'linked');
+  expect(ingestApi.schedule?.(db, cfg, AT)).toHaveLength(1);
+  letThrough(db, first, owner);
+  expect(ingestApi.schedule?.(db, cfg, AT)).toHaveLength(1);
+  letThrough(db, second, owner);
+  jobs.enqueue(db, 'forward', 'initial-input', {}, owner);
+  const initial = jobs.claim(db, cfg, 'input', AT)!;
   expect(jobs.complete(db, initial, () => { jobs.enqueue(db, 'collect', 'collect-chain', {}, owner); })).toBe(true);
   expect(ingestApi.schedule?.(db, cfg, AT)).toEqual([]);
   const collector = jobs.claim(db, cfg, 'collector', AT)!;
@@ -572,6 +584,10 @@ test.each([false, true])('parked forward merging preserves %s prepared input and
   const { path, cfg } = fixture();
   using db = openDb(path);
   const owner = ticket(db, { lifecycle: 'active', approved_at: OLD, session_id: 'session' });
+  const later = batch(db);
+  link(db, owner, conversation(db, later), 'linked');
+  expect(ingestApi.schedule?.(db, cfg, AT)).toHaveLength(1);
+  letThrough(db, later, owner);
   const old = batch(db);
   link(db, owner, conversation(db, old));
   db.prepare("UPDATE batch SET ticket=?,outcome='forward' WHERE id=?").run(owner, old);
@@ -582,8 +598,6 @@ test.each([false, true])('parked forward merging preserves %s prepared input and
     expect(jobs.reserveTurn(db, cfg, job, turn, AT)).toBe(true);
   }
   jobs.park(db, head, 'needs reconciliation');
-  const later = batch(db);
-  link(db, owner, conversation(db, later), 'linked');
   expect(ingestApi.schedule?.(db, cfg, AT)).toEqual([head]);
   const payload = JSON.parse(String(db.prepare('SELECT payload FROM job WHERE id=?').get(head)?.payload));
   expect(payload).toEqual(bound ? { batch_ids: [old], pending_batch_ids: [later] } : { batch_ids: [old, later] });
@@ -605,7 +619,7 @@ test('relink atomically demotes the old route, logs both tickets and reschedules
   expect(db.prepare('SELECT ticket,kind,"by" FROM ticket_conversation ORDER BY ticket').all()).toEqual([
     { ticket: from, kind: 'context', by: 'rule' }, { ticket: to, kind: 'linked', by: 'you' },
   ]);
-  expect(db.prepare('SELECT ticket,state,outcome FROM batch').get()).toEqual({ ticket: to, state: 'pending', outcome: 'pending' });
+  expect(db.prepare('SELECT ticket,state,outcome FROM batch').get()).toEqual({ ticket: to, state: 'pending', outcome: 'routed' });
   expect(db.prepare('SELECT ticket,payload,state FROM job WHERE id=?').get(oldJob)).toEqual({ ticket: from, payload, state: 'cancelled' });
   expect(db.prepare("SELECT ticket FROM timeline WHERE actor='you' ORDER BY ticket").all()).toEqual([{ ticket: from }, { ticket: to }]);
   expect(api.relink?.(db, conversation(db, input), to, AT)).toBe(to);
@@ -1094,7 +1108,7 @@ test.each(['relink', 'merge'] as const)('I1 %s preserves transferred FIFO input 
     expect(correctionSource(db)).toEqual(state.source);
     expect(correctionMarkers(db, state.target)).toEqual(state.markers);
     for (const id of state.inputs) expect(db.prepare('SELECT ticket,state,outcome FROM batch WHERE id=?').get(id))
-      .toEqual({ ticket: state.target, state: 'pending', outcome: 'pending' });
+      .toEqual({ ticket: state.target, state: 'pending', outcome: 'routed' });
   }
   using reopened = openDb(path);
   const scheduled = ingestApi.schedule(reopened, cfg, CORRECTION_AT);

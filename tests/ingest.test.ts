@@ -298,7 +298,7 @@ test('my reply on a chat whose ticket is still proposed dismisses it, outside tr
   expect(tickets.feedback(db)).toMatchObject({ dismiss_count: 1, dismiss_reasons: [{ reason: 'not mine' }] });
 });
 
-test('a mixed batch ending own on a running ticket chat still reaches that chat', () => {
+test('a mixed batch ending own on a running ticket chat still reaches triage, which judges it for that chat', () => {
   const { path, cfg } = enabledFixture();
   using db = openDb(path);
   ingest(db, line({ message_id: 'question', sent_at: '2026-11-05T23:50:00Z' }));
@@ -306,8 +306,8 @@ test('a mixed batch ending own on a running ticket chat still reaches that chat'
   const owner = Number(db.prepare("INSERT INTO ticket(title,lifecycle,approved_at,session_id,created_at) VALUES ('Active','active',?,'existing-session',?)").run(AT, AT).lastInsertRowid);
   db.prepare('INSERT INTO ticket_conversation VALUES (?,1,\'primary\',\'you\',?)').run(owner, AT);
   expect(api.schedule?.(db, cfg, AT)).toHaveLength(1);
-  expect(db.prepare('SELECT outcome,ticket FROM batch').get()).toEqual({ outcome: 'forward', ticket: owner });
-  expect(db.prepare('SELECT kind FROM job').get()?.kind).toBe('forward');
+  expect(db.prepare('SELECT outcome,ticket FROM batch').get()).toEqual({ outcome: 'triage', ticket: owner });
+  expect(db.prepare('SELECT kind,ticket,json_extract(payload,\'$.mode\') AS mode FROM job').get()).toEqual({ kind: 'triage', ticket: owner, mode: 'follow' });
 });
 
 test('tickets off leaves input durable without automatic batching, routing or triage', () => {
@@ -327,12 +327,16 @@ test('chats off retains an active routed batch until chats are enabled', () => {
   ingest(db, line());
   const owner = db.prepare("INSERT INTO ticket(title,lifecycle,approved_at,session_id,created_at) VALUES ('Active','active',?,'existing-session',?)").run(AT, AT).lastInsertRowid;
   db.prepare('INSERT INTO ticket_conversation VALUES (?,1,\'primary\',\'you\',?)').run(owner, AT);
+  const [triage] = api.schedule(db, cfg, AT);
+  tickets.applyDecision(db, 1, { on_us: true, reason: 'Answers what the chat waits for', action: 'update', ticket: Number(owner), title: 'Active', client: null,
+    summary: '', ask: '', proposal: '', kb_notes: [], confidence: 0.9 });
+  db.prepare("UPDATE job SET state='done' WHERE id=?").run(triage!);
   expect(api.schedule?.(db, cfg, AT)).toEqual([]);
   expect(db.prepare('SELECT state,outcome,ticket FROM batch').get()).toEqual({ state: 'pending', outcome: 'routed', ticket: Number(owner) });
-  expect(db.prepare('SELECT COUNT(*) AS n FROM job').get()?.n).toBe(0);
+  expect(db.prepare("SELECT COUNT(*) AS n FROM job WHERE kind<>'triage'").get()?.n).toBe(0);
   cfg.chats.enabled = true;
   expect(api.schedule?.(db, cfg, AT)).toHaveLength(1);
-  expect(db.prepare('SELECT kind FROM job').get()?.kind).toBe('forward');
+  expect(db.prepare("SELECT kind FROM job WHERE kind<>'triage'").get()?.kind).toBe('forward');
 });
 
 test('parked triage absorbs later messages of its conversation without a new job', () => {
@@ -541,7 +545,7 @@ test('I2 title-only edit keeps admitted input immutable and later metadata input
   expect(ingest(db, { ...original, conversation_title: 'RCA-12 incident' })).toBe(true);
   expect(api.schedule(db, cfg, '2026-11-06T00:10:00Z')).toEqual([]);
   expect(db.prepare('SELECT state,outcome,ticket FROM batch WHERE id<>?').get(oldBatch))
-    .toEqual({ state: 'pending', outcome: 'routed', ticket: owner });
+    .toEqual({ state: 'pending', outcome: 'triage', ticket: owner });
   expect(snapshot(db, ['turn', 'job'])).toEqual({ turn: immutable.turn, job: immutable.job });
   expect(db.prepare('SELECT lifecycle,approved_at,session_id FROM ticket WHERE id=?').get(owner))
     .toEqual({ lifecycle: 'active', approved_at: AT, session_id: 'existing-session' });

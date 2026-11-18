@@ -5,7 +5,7 @@ import { loadConfig } from '../src/core/config.ts';
 import { openDb } from '../src/core/db.ts';
 import { ingest, schedule, sourceStart } from '../src/core/ingest.ts';
 import { createSourceReader, validateRuntimeConfig } from '../src/core/runtime.ts';
-import { dismiss, makeTicket, mute, MUTE_FOREVER, muteTicket, pauseInput, TicketError } from '../src/core/tickets.ts';
+import { applyDecision, dismiss, makeTicket, mute, MUTE_FOREVER, muteTicket, pauseInput, TicketError } from '../src/core/tickets.ts';
 import { actionPost } from '../src/web/api.ts';
 import { initialize, release } from '../src/web/instance.ts';
 import { readState } from '../src/web/state.ts';
@@ -254,7 +254,7 @@ test('a paused source account holds its new input before triage and releases it 
   expect(readState(db, f.cfg, new Date(later(33))).health.find((item) => item.dependency === 'teams:me@example.invalid')).toMatchObject({ paused: false, waiting: 0 });
 });
 
-test('a muted chat that feeds a running ticket chat still forwards every follow-up to that chat', () => {
+test('a muted chat that feeds a running ticket chat still takes every follow-up to triage for that chat', () => {
   const f = instance('[chats]\nenabled = true\n');
   using db = openDb(f.path);
   const chat = 'chat-me@example.invalid';
@@ -266,9 +266,14 @@ test('a muted chat that feeds a running ticket chat still forwards every follow-
     VALUES ('Running','s','a','p','[]',?,?,'active',?,'ses_running')`).run(AT, AT, AT).lastInsertRowid);
   db.prepare("INSERT INTO ticket_conversation(ticket,conversation,kind,\"by\",created_at) VALUES (?,?,'primary','agent',?)").run(ticket, conversation, AT);
   ingest(db, message('me@example.invalid', 'follow-up', { sent_at: later(20) }));
-  expect(schedule(db, f.cfg, later(30))).toHaveLength(1);
+  const [triage] = schedule(db, f.cfg, later(30));
   const batch = db.prepare('SELECT id,ticket,outcome,cleared_at FROM batch ORDER BY id DESC').get()!;
-  expect({ ...batch }).toMatchObject({ ticket, outcome: 'forward', cleared_at: null });
+  expect({ ...batch }).toMatchObject({ ticket, outcome: 'triage', cleared_at: null });
+  expect(db.prepare("SELECT ticket,json_extract(payload,'$.mode') AS mode FROM job WHERE id=?").get(triage!)).toEqual({ ticket, mode: 'follow' });
+  applyDecision(db, Number(batch.id), { on_us: true, reason: 'News the chat waits for', action: 'update', ticket, title: 'Running', client: null,
+    summary: '', ask: '', proposal: '', kb_notes: [], confidence: 0.9 });
+  db.prepare("UPDATE job SET state='done' WHERE id=?").run(triage!);
+  expect(schedule(db, f.cfg, later(31))).toHaveLength(1);
   const job = db.prepare("SELECT ticket,payload FROM job WHERE kind='forward'").get()!;
   expect(job.ticket).toBe(ticket);
   expect(JSON.parse(String(job.payload)).batch_ids).toEqual([batch.id]);
