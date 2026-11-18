@@ -3,7 +3,7 @@
 import { Bell, BellOff, ChevronDown, ChevronUp, Clock, ExternalLink, FilePlus, Keyboard, LoaderCircle, LogOut, MessagesSquare, CirclePause, RefreshCw, Search, TriangleAlert, WifiOff, X } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { groups } from '../../lib/web-types.ts';
-import type { Group, OverviewState, SkippedBatch, TicketCard as CardData, TriageBatch } from '../../lib/web-types.ts';
+import type { ChatFile, Group, OverviewState, SkippedBatch, TicketCard as CardData, TriageBatch } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert.tsx';
 import { Badge } from '../ui/badge.tsx';
@@ -12,6 +12,7 @@ import { Checkbox } from '../ui/checkbox.tsx';
 import { Input } from '../ui/input.tsx';
 import { ActionDialog, Kbd } from './action-dialog.tsx';
 import { ChatDialog } from './chat-dialog.tsx';
+import type { ListFiles, ReadFile } from './file-viewer.tsx';
 import { Inline, Markdown } from './markdown.tsx';
 import { Pipeline, Problems } from './pipeline.tsx';
 import { age, Expand, Field, formatTime, MessageList, Section, TicketCard, Time, Toggle, tones } from './ticket-card.tsx';
@@ -135,7 +136,7 @@ function MutedChats(props: { state: OverviewState; expired: boolean; pending: Re
 }
 
 export function TicketBoard(props: { initialState: OverviewState; initialEtag: string; token: string; initialNow?: number; signOut?: boolean }) {
-  const { state, now, unreachable, expired, pending, errors, notice, post, refresh } = useOverview(props.initialState, props.initialEtag, props.token, props.initialNow);
+  const { state, now, unreachable, expired, pending, errors, notice, post, request, refresh } = useOverview(props.initialState, props.initialEtag, props.token, props.initialNow);
   useAttention(state.groups.needs_you.length + state.groups.failed.length);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -146,6 +147,8 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
   const [chat, setChat] = useState<{ id: number; title: string; session_id: string } | null>(null);
   const [awaiting, setAwaiting] = useState<number | null>(null);
   const openChat = useCallback((id: number) => post(`ticket:${id}:open-chat`, `/api/ticket/${id}/open-chat`, {}, true) as Promise<{ session_id: string; directory: string }>, [post]);
+  const chatFiles = useCallback<ListFiles>(async (id, signal) => ((await (await request(`/api/ticket/${id}/chat-files`, {}, signal)).json()) as { files: ChatFile[] }).files, [request]);
+  const chatFile = useCallback<ReadFile>((id, path, download, signal) => request(`/api/ticket/${id}/chat-file`, { path, download }, signal), [request]);
   const discussed = awaiting === null ? undefined : tickets.find((ticket) => ticket.id === awaiting);
   useEffect(() => {
     if (awaiting === null) return;
@@ -369,6 +372,6 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
         <p role="status" aria-live="polite" className="w-full">{notice}</p>
       </footer>
     </div>
-    {state.chat_origin && <ChatDialog ticket={chat} origin={state.chat_origin} open={openChat} onClose={() => setChat(null)} />}
+    {state.chat_origin && <ChatDialog ticket={chat} origin={state.chat_origin} open={openChat} files={chatFiles} file={chatFile} onClose={() => setChat(null)} />}
   </div>;
 }

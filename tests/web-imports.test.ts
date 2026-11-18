@@ -32,11 +32,11 @@ function webGraph() {
     'src/core/approval.ts', 'src/core/db.ts', 'src/core/jobs.ts', 'src/core/tickets.ts', 'src/core/time.ts', 'src/core/policy.ts', 'src/core/settings.ts',
     'src/app/page.tsx', 'src/app/layout.tsx', 'src/app/globals.css', 'src/app/api/state/route.ts', 'src/app/api/ticket/[id]/route.ts', 'src/app/api/ticket/[id]/[action]/route.ts',
     'src/app/api/batch/[id]/ticket/route.ts', 'src/app/api/batch/[id]/mute/route.ts', 'src/app/api/batch/[id]/clear/route.ts', 'src/app/api/conversation/[id]/unmute/route.ts', 'src/app/api/input/route.ts', 'src/app/api/setting/route.ts', 'src/app/api/job/[id]/retry/route.ts',
-    ...['action-dialog', 'chat-dialog', 'markdown', 'pipeline', 'ticket-board', 'ticket-card', 'use-overview'].map((name) => `src/components/tickets/${name}.${name === 'use-overview' ? 'ts' : 'tsx'}`),
+    ...['action-dialog', 'chat-dialog', 'file-viewer', 'markdown', 'pipeline', 'ticket-board', 'ticket-card', 'use-overview'].map((name) => `src/components/tickets/${name}.${name === 'use-overview' ? 'ts' : 'tsx'}`),
     ...['alert', 'badge', 'button', 'card', 'checkbox', 'dialog', 'input', 'popover', 'scroll-area', 'separator', 'tabs', 'textarea'].map((name) => `src/components/ui/${name}.tsx`),
   ];
   const allowed = new Set(paths.map((path) => resolve(path)));
-  const external = new Set(['node:crypto', 'node:fs', 'node:path', 'node:sqlite', 'next/headers', 'zod', 'react', 'radix-ui', 'lucide-react', 'clsx', 'tailwind-merge', 'class-variance-authority']);
+  const external = new Set(['node:crypto', 'node:fs', 'node:path', 'node:sqlite', 'next/headers', 'zod', 'react', 'radix-ui', 'lucide-react', 'clsx', 'tailwind-merge', 'class-variance-authority', 'react-markdown', 'remark-gfm']);
   const queue = appEntries(resolve('src/app'));
   for (const name of ['instrumentation', 'instrumentation-client', 'proxy', 'middleware']) {
     for (const ext of ['ts', 'tsx']) if (existsSync(resolve(`src/${name}.${ext}`))) queue.push(resolve(`src/${name}.${ext}`));
