@@ -648,6 +648,15 @@ test('the file panel: copy path, preview or source, find with next and previous,
   localStorage.clear();
 });
 
+test('a closed ticket still opens its chat', () => {
+  const state = uiState();
+  state.groups.done_today[0]!.session_id = 'ses_closed123';
+  board(state);
+  const card = screen.getByRole('article', { name: 'Ticket #7: Closed work' });
+  expect(within(card).getByText('Chat in OpenChamber, project Vault')).toBeTruthy();
+  expect(within(card).getByRole('link', { name: 'Open the chat of ticket #7 in OpenChamber' }).getAttribute('href')).toBe('openchamber://session/ses_closed123');
+});
+
 test('a ticket whose chat is running says so on the card', () => {
   const state = uiState();
   Object.assign(state.groups.working[0]!, { session_id: 'ses_synthetic123', chat_running: true });
