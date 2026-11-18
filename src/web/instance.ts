@@ -14,10 +14,10 @@ export interface WebInstance {
   // Present when [web] public_origin is set: requests under that host need a signed-in session
   login?: { sessions: Sessions; limiter: Limiter; check: (user: string, password: string) => boolean };
   // Present when [web] chat_origin is set: the OpenChamber client token the chat host's gate hands to Caddy, and the
-  // session folder the page's chat view opens with
-  chat?: Pick<ChatToken, 'token' | 'open'>;
-  // With chat: the files the ticket's chat wrote, for the viewer beside the chat
-  files?: Pick<ChatFiles, 'list' | 'read'>;
+  // session folder the page's chat view opens with; page fetches OpenChamber's chat view for the bridge (chat-bridge.ts)
+  chat?: Pick<ChatToken, 'token' | 'open' | 'page'>;
+  // With chat: the files the ticket's chat wrote, for the viewer beside the chat, and any other it names when clicked
+  files?: Pick<ChatFiles, 'list' | 'read' | 'describe'>;
 }
 
 const key = Symbol.for('everflow.web.instance');

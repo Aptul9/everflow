@@ -95,6 +95,8 @@
 [data-slot="dialog-overlay"][data-state="closed"] { animation: overlay-out 150ms ease-in forwards; }
 
 /* A chat's Markdown or Word file in the viewer beside the chat */
+::highlight(everflow-find) { background-color: rgb(250 204 21 / 0.45); color: inherit; }
+::highlight(everflow-find-current) { background-color: rgb(249 115 22 / 0.8); color: inherit; }
 .file-doc { font-size: 0.875rem; line-height: 1.6; max-width: 54rem; }
 .file-doc > :first-child { margin-top: 0; }
 .file-doc :is(h1, h2, h3, h4, h5, h6) { font-weight: 600; line-height: 1.3; margin: 1.4em 0 0.5em; }

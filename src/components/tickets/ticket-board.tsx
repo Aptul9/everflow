@@ -12,7 +12,7 @@ import { Checkbox } from '../ui/checkbox.tsx';
 import { Input } from '../ui/input.tsx';
 import { ActionDialog, Kbd } from './action-dialog.tsx';
 import { ChatDialog } from './chat-dialog.tsx';
-import type { ListFiles, ReadFile } from './file-viewer.tsx';
+import type { DescribeFile, ListFiles, ReadFile } from './file-viewer.tsx';
 import { Inline, Markdown } from './markdown.tsx';
 import { Pipeline, Problems } from './pipeline.tsx';
 import { age, Expand, Field, formatTime, MessageList, Section, TicketCard, Time, Toggle, tones } from './ticket-card.tsx';
@@ -149,6 +149,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
   const openChat = useCallback((id: number) => post(`ticket:${id}:open-chat`, `/api/ticket/${id}/open-chat`, {}, true) as Promise<{ session_id: string; directory: string }>, [post]);
   const chatFiles = useCallback<ListFiles>(async (id, signal) => ((await (await request(`/api/ticket/${id}/chat-files`, {}, signal)).json()) as { files: ChatFile[] }).files, [request]);
   const chatFile = useCallback<ReadFile>((id, path, download, signal) => request(`/api/ticket/${id}/chat-file`, { path, download }, signal), [request]);
+  const chatFileInfo = useCallback<DescribeFile>(async (id, path) => ((await (await request(`/api/ticket/${id}/chat-file-info`, { path })).json()) as { file: ChatFile }).file, [request]);
   const discussed = awaiting === null ? undefined : tickets.find((ticket) => ticket.id === awaiting);
   useEffect(() => {
     if (awaiting === null) return;
@@ -372,6 +373,6 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
         <p role="status" aria-live="polite" className="w-full">{notice}</p>
       </footer>
     </div>
-    {state.chat_origin && <ChatDialog ticket={chat} origin={state.chat_origin} open={openChat} files={chatFiles} file={chatFile} onClose={() => setChat(null)} />}
+    {state.chat_origin && <ChatDialog ticket={chat} origin={state.chat_origin} open={openChat} files={chatFiles} file={chatFile} describe={chatFileInfo} onClose={() => setChat(null)} />}
   </div>;
 }

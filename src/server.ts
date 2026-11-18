@@ -18,6 +18,7 @@ import { createKernel } from './windows/kernel.ts';
 import { Limiter, loginAccount, loginKey, Sessions, verifyPassword } from './web/login.ts';
 import { signIn } from './web/login-http.ts';
 import { ChatToken, chatGate, GATE_PATH } from './web/chat-gate.ts';
+import { BRIDGE_PREFIX, chatBridge } from './web/chat-bridge.ts';
 import { ChatFiles } from './web/chat-files.ts';
 
 export async function startServer(options: { configPath: string; buildReceipt: string; port?: number }) {
@@ -53,9 +54,16 @@ export async function startServer(options: { configPath: string; buildReceipt: s
       return;
     }
     // Loopback only: under the public host the token would reach a browser
-    if (new URL(request.url ?? '/', 'http://everflow.invalid').pathname === GATE_PATH) {
-      if (`https://${request.headers.host?.toLowerCase()}` === current.config.web.public_origin) response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('Not found');
+    const pathname = new URL(request.url ?? '/', 'http://everflow.invalid').pathname;
+    const loopback = `https://${request.headers.host?.toLowerCase()}` !== current.config.web.public_origin;
+    if (pathname === GATE_PATH) {
+      if (!loopback) response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('Not found');
       else chatGate(request, response, current);
+      return;
+    }
+    if (pathname.startsWith(`${BRIDGE_PREFIX}/`)) {
+      if (!loopback) response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('Not found');
+      else void chatBridge(request, response, current).catch(() => { if (!response.headersSent) response.writeHead(502); response.end(); });
       return;
     }
     // The public host needs a session; loopback stays as before (the daemon only listens there)
