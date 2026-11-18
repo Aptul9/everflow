@@ -13,10 +13,6 @@ export type OpenChat = (ticket: number) => Promise<{ session_id: string; directo
 /** How long the chat view gets, once loaded, to say its bridge runs before the dialog shows its own Close again. */
 export const BRIDGE_WAIT_MS = 6_000;
 
-const hiddenKey = (session: string) => `everflow.chat-files.${session}`;
-function storedHidden(session: string | undefined): boolean {
-  try { return !!session && localStorage.getItem(hiddenKey(session)) === 'hidden'; } catch { return false; }
-}
 const phone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 639px)').matches;
 const closeButton = 'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring';
 
@@ -44,20 +40,20 @@ export function ChatDialog(props: { ticket: { id: number; title: string; session
   }, [id, session, open, origin]);
 
   // The files: those the chat wrote (polled), and those clicked in the chat this time the dialog is open. Open tabs are
-  // their own state: the newest written file opens by itself once, clicked files open or focus their tab.
+  // their own state. The panel starts closed: the Files button opens it on the newest written file, a file clicked in the chat opens or focuses its tab.
   const { files: written, now } = useChatFiles(id, session, props.files);
   const [clicked, setClicked] = useState<ChatFile[]>([]);
   const files = [...written, ...clicked.filter((item) => !written.some((file) => file.path === item.path))];
   const [tabs, setTabs] = useState<string[]>([]);
   const [active, setActive] = useState('');
-  const [hidden, setHidden] = useState(() => storedHidden(session));
+  const [hidden, setHidden] = useState(true);
   const [expanded, setExpanded] = useState(false);
   const [tree, setTree] = useState(false);
   const [notice, setNotice] = useState('');
   const [tab, setTab] = useState<'chat' | 'file'>('chat');
   const autoOpened = useRef(false);
   useEffect(() => {
-    setHidden(storedHidden(session)); setTab('chat'); setClicked([]); setTabs([]); setActive(''); setExpanded(false); setTree(false); setNotice('');
+    setHidden(true); setTab('chat'); setClicked([]); setTabs([]); setActive(''); setExpanded(false); setTree(false); setNotice('');
     autoOpened.current = false;
   }, [session]);
   useEffect(() => {
@@ -67,10 +63,7 @@ export function ChatDialog(props: { ticket: { id: number; title: string; session
     setTabs((current) => current.length ? current : [newest]);
     setActive((current) => current || newest);
   }, [written]);
-  const remember = (next: boolean) => {
-    setHidden(next);
-    try { if (session) localStorage.setItem(hiddenKey(session), next ? 'hidden' : 'shown'); } catch { /* private mode: the choice lasts this page only */ }
-  };
+  const remember = (next: boolean) => setHidden(next);
   const focus = (path: string) => {
     setTabs((current) => current.includes(path) ? current : [...current, path]);
     setActive(path);
