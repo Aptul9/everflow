@@ -138,7 +138,7 @@ function quoteMessages(db: DatabaseSync, messages: readonly Message[]): string {
       const sender = message.sender && message.sender_name && message.sender.includes('@') && message.sender !== message.sender_name ? `${name} <${message.sender}>` : name;
       const mail = MAIL.has(message.source) ? ` | id ${message.native_id} | ref ${JSON.stringify(ref)}` : '';
       const text = ref.deleted === true ? '[Source message deleted]' : message.text || '(no text)';
-      lines.push(`[${utc(message.sent_at).slice(0, 16).replace('T', ' ')}Z] ${sender}${message.sender_is_me ? ' (Antonio)' : ''}${ref.mentions_me === true ? ', mentions Antonio' : ''}${mail}`,
+      lines.push(`[${utc(message.sent_at).slice(0, 16).replace('T', ' ')}Z] ${sender}${message.sender_is_me ? ' (Antonio)' : ''}${ref.mentions_me === true ? ', mentions Antonio' : ''}${ref.replies_to_me === true ? ', replies to Antonio' : ''}${mail}`,
         ...text.split(/\r?\n/).map((line) => `  ${line}`), ...attachments.length ? [`  attachments: ${attachments.join(', ')}`] : []);
     }
     return lines.join('\n');

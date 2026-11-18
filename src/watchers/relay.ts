@@ -36,7 +36,10 @@ function numericSlot(value: unknown): number {
   return number;
 }
 
-function normalize(email: string, slot: number, raw: Record<string, any>): SourceMessage {
+// The relay keeps a quote's author as the Teams display name, cut to 60 characters; the owner's is the account's state.me.name
+const quoteName = (value: unknown) => typeof value === 'string' ? value.trim().slice(0, 60).toLowerCase() : '';
+
+function normalize(email: string, slot: number, raw: Record<string, any>, myName = ''): SourceMessage {
   if (typeof raw.mid !== 'string' || !/^\d+$/.test(raw.mid) || !Number.isSafeInteger(Number(raw.mid)) || !Number.isFinite(new Date(Number(raw.mid)).getTime())) throw new SourceError('teamsrelay', 'relay.message-time');
   if (typeof raw.chat !== 'string' || !raw.chat || raw.mine !== 0 && raw.mine !== 1 && typeof raw.mine !== 'boolean') throw new SourceError('teamsrelay', 'relay.message-shape');
   const extra = jsonObject(raw.extra || '{}');
@@ -50,7 +53,8 @@ function normalize(email: string, slot: number, raw: Record<string, any>): Sourc
     sent_at: new Date(Number(raw.mid)).toISOString(), text: deleted ? '' : text,
     attachments: deleted ? [] : files.map((file: any) => ({ name: file && typeof file === 'object' ? String(file.name || file.title || '?') : String(file ?? '?'), size: null })),
     ref: { chat: raw.chat, id: raw.mid, account: email, relay_slot: slot, ...(quote ? { quote } : {}), ...(deleted ? { deleted: true } : {}),
-      ...(extra.mentionsMe === true ? { mentions_me: true } : {}) } };
+      ...(extra.mentionsMe === true ? { mentions_me: true } : {}),
+      ...(!deleted && raw.mine !== true && raw.mine !== 1 && quote && quoteName(myName) && quoteName(quote.author) === quoteName(myName) ? { replies_to_me: true } : {}) } };
 }
 
 // One call per scan: the endpoint reads every active slot store of the token's owner and answers each one's snapshot or error.
@@ -79,7 +83,7 @@ export async function readRelay(options: RelayOptions, floor: number, signal?: A
       if (!Array.isArray(saved.messages)) throw new SourceError('teamsrelay', 'relay.saved-shape');
       if (saved.messages.length > maxRows) throw new SourceError('teamsrelay', 'relay.result-limit');
       if (!Array.isArray(saved.muted) || saved.muted.some((name: unknown) => typeof name !== 'string' || !name)) throw new SourceError('teamsrelay', 'relay.saved-shape');
-      snapshot.accounts.push({ slot, email, scanAt, muted: [...saved.muted as string[]].sort(), messages: saved.messages.map((message: any) => normalize(email, slot, message)) });
+      snapshot.accounts.push({ slot, email, scanAt, muted: [...saved.muted as string[]].sort(), messages: saved.messages.map((message: any) => normalize(email, slot, message, typeof me.name === 'string' ? me.name : '')) });
     } catch (error) {
       snapshot.errors.push({ code: error instanceof SourceError ? error.code : 'relay.store-unavailable', account: `slot:${slot}` });
     }

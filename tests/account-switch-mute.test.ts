@@ -218,6 +218,20 @@ test('a chat muted at the source skips triage unless a message mentions the owne
   expect(() => ingest(db, { source: 'teams', account: 'me@example.invalid', muted: [''] })).toThrow();
 });
 
+test('in a chat muted at the source a reply quoting one of the owner\'s messages reaches triage like a mention', () => {
+  const f = instance();
+  using db = openDb(f.path);
+  const chat = 'chat-me@example.invalid';
+  const outcome = () => String(db.prepare('SELECT outcome FROM batch ORDER BY id DESC').get()!.outcome);
+  ingest(db, { source: 'teams', account: 'me@example.invalid', muted: [chat] });
+  ingest(db, message('me@example.invalid', 'reply-other', { ref: { quote: { author: 'Alice', text: 'x' } } }));
+  schedule(db, f.cfg, later(10));
+  expect(outcome()).toBe('muted');
+  ingest(db, message('me@example.invalid', 'reply-me', { sent_at: later(20), ref: { quote: { author: 'Owner', text: 'y' }, replies_to_me: true } }));
+  expect(schedule(db, f.cfg, later(30))).toHaveLength(1);
+  expect(outcome()).toBe('triage');
+});
+
 test('a paused source account holds its new input before triage and releases it when switched back on', () => {
   const f = instance('[sources.teams]\nenabled = true\n[clients.acme]\naccounts = ["me@example.invalid"]\n');
   using db = openDb(f.path);
