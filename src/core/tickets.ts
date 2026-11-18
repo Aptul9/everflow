@@ -686,6 +686,13 @@ export function merge(db: DatabaseSync, source: number, target: number, at?: str
   });
 }
 
+// A collector parked after its turn ended (recovery budget spent, unreadable report) has nothing left to collect; kept, it holds the ticket's later input
+function deadCollector(db: DatabaseSync, job: Job): boolean {
+  if (job.kind !== 'collect' || job.state !== 'parked') return false;
+  const turn = db.prepare('SELECT state FROM turn WHERE id=?').get(Number(job.payload.turn));
+  return turn?.state === 'done' || turn?.state === 'cancelled';
+}
+
 function closeFuture(db: DatabaseSync, ticket: number, at: string, keepUnseen = false): void {
   const jobs = correctionJobs(db);
   const triage = new Set(db.prepare(`SELECT j.id FROM job j JOIN batch b ON b.id=json_extract(j.payload,'$.batch')
@@ -702,7 +709,7 @@ function closeFuture(db: DatabaseSync, ticket: number, at: string, keepUnseen = 
   for (const job of jobs) {
     if (job.ticket !== ticket && !triage.has(job.id)) continue;
     if (!['triage', 'start_chat', 'forward', 'collect'].includes(job.kind)) continue;
-    const retained = job.kind !== 'triage' && immutableJob(job) && !(job.turn_id !== null && safe.has(job.turn_id));
+    const retained = job.kind !== 'triage' && immutableJob(job) && !(job.turn_id !== null && safe.has(job.turn_id)) && !deadCollector(db, job);
     if (retained) for (const id of jobBatches(job, false)) protectedBatches.add(id);
     else cancelJob(db, job.id, at);
   }
