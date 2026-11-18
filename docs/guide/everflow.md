@@ -88,6 +88,7 @@ All values are the defaults in `src/core/config.ts`; the running instance does n
 - During the trial every chat brief asks the chat to report a failing or missing tool in the turn and to append one line to `99_Inbox/everflow-tool-issues.md` in the Vault.
 - Mute keeps a chat out of triage for 8 hours, 1 day, 1 week or until unmuted, from a Skipped batch or from Dismiss. Its new messages land under Skipped as `Muted`. Muted chats are listed on the page with Unmute.
 - Make ticket turns a skipped, backlog or muted batch into a ticket, or adds it to the ticket the conversation already belongs to. It does not approve the ticket. On a muted batch it also ends the mute.
+- A chat muted in Teams stays off the board. Only a message that tags Antonio, or replies with a quote to one of his messages, reaches triage; the reply is recognised by the quoted author's name matching his Teams display name on that account.
 - `accounts = [...]` under a source keeps only those receiving accounts; messages of the others are dropped before storage and the page shows them as `off`. No list means every account. The list is read at start.
 - New messages on an approved ticket go to the same chat. If a turn is still running, they wait and go in the next turn.
 - New messages on a ticket closed less than 2 days ago reopen it. Later messages make a new proposal with the old ticket as context.

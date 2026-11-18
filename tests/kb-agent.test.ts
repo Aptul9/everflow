@@ -84,6 +84,7 @@ test('the triage system prompt spells out every valid action, on_us and ticket c
   expect(system).toMatch(/already tracked.*skip/i);
   expect(system).toMatch(/mode is update.*different request.*is new/is);
   expect(system).toMatch(/mentions_me true tags Antonio.*never skip/is);
+  expect(system).toMatch(/replies_to_me true answers a message of his.*counts the same/is);
   expect(system).toMatch(/only for work Antonio himself has to do.*in Cc.*does not make every request in it his/is);
   expect(system).toMatch(/clearly meant for another named person, or a step only another team carries out.*is skip unless the message names Antonio/is);
   expect(system).toMatch(/group or distribution list is his when it is his team that is asked/i);

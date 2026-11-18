@@ -157,6 +157,21 @@ test('numeric mid epochms, saved text cap, quote/files/ref and deletion markers 
   expect(snapshot.accounts[0]!.messages[1]).toMatchObject({ text: '', attachments: [], ref: { deleted: true } });
 });
 
+test('a quote of the account owner, by display name, marks the reply as one to him; other quotes and his own replies do not', async () => {
+  const fixture = relayFixture();
+  {
+    using db = new DatabaseSync(fixture.storePath);
+    db.prepare("UPDATE state SET v=? WHERE k='me'").run(JSON.stringify({ email: 'ME@Example.Invalid', name: 'Rossi, Antonio (Acme)' }));
+    db.prepare('UPDATE chat_messages SET mine=0,extra=? WHERE idx=0').run(JSON.stringify({ quote: { author: ' rossi, antonio (acme) ', text: 'Can you check?' } }));
+    db.prepare('UPDATE chat_messages SET mine=0,extra=? WHERE idx=1').run(JSON.stringify({ quote: { author: 'Alice', text: 'Other' } }));
+    db.prepare('UPDATE chat_messages SET mine=1,extra=? WHERE idx=2').run(JSON.stringify({ quote: { author: 'Rossi, Antonio (Acme)', text: 'Self quote' } }));
+  }
+  const messages = (await readRelay(options, Date.parse(since), undefined, fixture.saved)).accounts[0]!.messages;
+  expect(messages[0]!.ref).toMatchObject({ replies_to_me: true });
+  expect(messages[1]!.ref).not.toHaveProperty('replies_to_me');
+  expect(messages[2]!.ref).not.toHaveProperty('replies_to_me');
+});
+
 test('chats muted in Teams and mentions of the account owner are read from the saved store', async () => {
   const fixture = relayFixture();
   {

@@ -228,7 +228,7 @@ export function schedule(db: DatabaseSync, cfg: Config, at?: string): number[] {
     const now = utc(at);
     const scheduled = new Set<number>();
     for (const conversation of db.prepare('SELECT DISTINCT c.id,c.source FROM conversation c JOIN message m ON m.conversation=c.id WHERE m.batch IS NULL ORDER BY c.id').all()) {
-      const pending = db.prepare("SELECT id,sent_at,sender_is_me,json_extract(ref,'$.mentions_me') AS mention FROM message WHERE conversation=? AND batch IS NULL ORDER BY id").all(conversation.id!);
+      const pending = db.prepare("SELECT id,sent_at,sender_is_me,json_extract(ref,'$.mentions_me') AS mention,json_extract(ref,'$.replies_to_me') AS reply FROM message WHERE conversation=? AND batch IS NULL ORDER BY id").all(conversation.id!);
       const last = pending.map((message) => utc(String(message.sent_at))).sort().at(-1)!;
       if (last > shiftMinutes(now, -Number(cfg.windows[String(conversation.source)] ?? 300) / 60)) continue;
       const existing = triageForConversation(db, Number(conversation.id));
@@ -241,9 +241,9 @@ export function schedule(db: DatabaseSync, cfg: Config, at?: string): number[] {
         continue;
       }
       const until = db.prepare('SELECT muted_until FROM conversation WHERE id=?').get(conversation.id!)?.muted_until;
-      // Muted in the source app: only an @mention of the owner reaches triage
+      // Muted in the source app: only an @mention of the owner or a reply quoting one of his messages reaches triage
       const sourceMuted = db.prepare(`SELECT 1 FROM source_mute s JOIN conversation c ON s.source=c.source AND s.account=lower(c.account) AND s.native_id=c.native_id
-        WHERE c.id=?`).get(conversation.id!) !== undefined && !pending.some((message) => message.mention === 1);
+        WHERE c.id=?`).get(conversation.id!) !== undefined && !pending.some((message) => message.mention === 1 || message.reply === 1);
       // A follow-up in a chat that feeds a running ticket chat always reaches that chat, muted or not
       const working = db.prepare(`SELECT 1 FROM ticket_conversation l JOIN ticket t ON t.id=l.ticket WHERE l.conversation=? AND l.kind IN ('primary','linked')
         AND t.lifecycle='active' AND t.approved_at IS NOT NULL AND t.merged_into IS NULL`).get(conversation.id!) !== undefined;
