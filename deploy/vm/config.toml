@@ -28,6 +28,10 @@ model = "meridian-auto/claude-opus-5-5"
 providers = ["meridian-everbright", "meridian-notarify", "meridian-roar"]
 model = "claude-haiku-5-5"
 
+# Overview page summaries: same routes as triage, a stronger model, 3 calls a weekday
+[overview]
+model = "claude-opus-5-5"
+
 [start]
 lookback_minutes = 0
 
@@ -85,3 +89,20 @@ directory = "/home/aptul4ever/everflow-chats/notarify"
 domains = ["nposervices.com", "iveco.com"]
 keywords = ["npo", "iveco"]
 directory = "/home/aptul4ever/everflow-chats/npo"
+
+# Overview page: initiatives summed up from their vault note, weekdays from 08:00 Europe/Rome and on Refresh.
+# Only listed initiatives run; client also picks the Everflow tickets offered next to the note.
+[initiatives.tesco-ocp-iam]
+title = "OCP IAM"
+client = "tesco"
+note = "01_Projects/tesco-ocp-virt-iam.md"
+
+[initiatives.serco-eunify]
+title = "EUnify users and data"
+client = "serco"
+note = "01_Projects/serco/serco-eunify.md"
+
+[initiatives.roar-cost-reduction]
+title = "Azure cost reduction"
+client = "roar"
+note = "01_Projects/roar/roar-cost-reduction-2026-08.md"

@@ -5,7 +5,7 @@ import { excluded, isNotePath, safeComponent } from './policy.ts';
 export { isNotePath } from './policy.ts';
 
 export const VAULT_LIMITS = {
-  hits: 50, noteBytes: 32_768, searchNoteBytes: 262_144, entries: 16_384, files: 4_096, searchBytes: 67_108_864, depth: 16, queryChars: 256, snippetChars: 240,
+  hits: 50, noteBytes: 32_768, searchNoteBytes: 262_144, wholeNoteBytes: 2_097_152, entries: 16_384, files: 4_096, searchBytes: 67_108_864, depth: 16, queryChars: 256, snippetChars: 240,
 } as const;
 
 export interface Note { path: string; title: string; text: string; truncated: boolean }
@@ -109,6 +109,12 @@ function readChecked(absolute: string, stat: fs.Stats, relativePath: string, cap
 
 export function vaultRead(root: string, relativePath: string, cap = 16_384): Note {
   return readNote(root, relativePath, cap, () => {});
+}
+
+// A whole configured note (an initiative's project page), past the 32 KiB a model read gets
+export function vaultNote(root: string, relativePath: string): Note {
+  const { absolute, stat } = checkedFile(root, relativePath);
+  return readChecked(absolute, stat, relativePath, VAULT_LIMITS.wholeNoteBytes, () => {}, () => checkedFile(root, relativePath).stat);
 }
 
 // A note matches when its path or text contains every word of the query. Folders are walked in name order,
