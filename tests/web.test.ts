@@ -177,7 +177,9 @@ test('commits double Start once, note approval, dismiss feedback, Make ticket an
   expect(db.prepare('SELECT lifecycle,report_line FROM ticket WHERE id=?').get(second)).toMatchObject({ lifecycle: 'done', report_line: 'Done by hand' });
   expect((await post(`/api/ticket/${second}/close`, '{"reason":"x"}')).status).toBe(200);
   expect((await post(`/api/ticket/${fixture.active}/dismiss`, '{"reason":"Duplicate request"}')).status).toBe(200);
-  expect((await post(`/api/ticket/${fixture.active}/close`, '{}')).status).toBe(409);
+  // already closed the other way: left as it is
+  expect((await post(`/api/ticket/${fixture.active}/close`, '{}')).status).toBe(200);
+  expect(db.prepare('SELECT lifecycle FROM ticket WHERE id=?').get(fixture.active)!.lifecycle).toBe('dismissed');
   for (const batch of [fixture.skipped, fixture.backlog, fixture.answered]) expect((await post(`/api/batch/${batch}/ticket`)).status).toBe(200);
   expect((await post(`/api/batch/${fixture.skipped}/ticket`)).status).toBe(200);
   expect((await post(`/api/job/${fixture.failedJob}/retry`)).status).toBe(200);
