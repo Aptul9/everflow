@@ -1,3 +1,5 @@
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { openDb } from '../src/core/db.ts';
@@ -200,6 +202,27 @@ test('a forward input repeats only the STATUS contract, the data boundary and th
   expect(text.split('\n').filter((line) => line.startsWith('& '))).toHaveLength(1);
   expect(text).not.toContain('Everflow is in trial');
   expect(text).not.toContain('For relink or merge');
+});
+
+test('with a build.txt beside the config the close command runs the build pinned there when it runs, not the one the chat started on', async () => {
+  const f = await admittedFixture();
+  await using peer = f.peer;
+  using db = f.db;
+  peer.finish(String(f.turn.session_id), String(f.turn.prompt_id), 'STATUS: waiting_them | Waiting', 'succeeded', undefined, PEER_AT + 1000);
+  await chat.collect(f.cfg, db, claimed(db, f.cfg));
+  const build = join(f.root, "pinned build's");
+  mkdirSync(join(build, 'dist'), { recursive: true });
+  writeFileSync(join(build, 'dist', 'cli.js'), 'console.log(JSON.stringify(process.argv.slice(2)))\n');
+  const receipt = join(build, 'build-receipt.json');
+  writeFileSync(join(f.root, 'build.txt'), `${receipt}\n`);
+  jobs.enqueue(db, 'forward', 'pinned-forward', { batch_ids: [addBatch(db, f.ticket, { text: 'External follow-up' })] }, f.ticket);
+  const text = chat.prepareTurn(f.cfg, db, claimed(db, f.cfg), 'forward')!.text;
+  const command = text.split('\n').find((line) => line.endsWith(`ticket close ${f.ticket}`))!;
+  expect(command).not.toContain(String(process.env.EVERFLOW_ARTIFACT));
+  const run = process.platform === 'win32' ? spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8' })
+    : spawnSync('sh', ['-c', command], { encoding: 'utf8' });
+  expect(run.status, run.stderr).toBe(0);
+  expect(JSON.parse(run.stdout)).toEqual(['--artifact', receipt, '--config', f.cfg._config_path, 'ticket', 'close', String(f.ticket)]);
 });
 
 async function admittedFixture() {
