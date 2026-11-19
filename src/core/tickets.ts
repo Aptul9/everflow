@@ -191,13 +191,22 @@ export function stageTitle(db: DatabaseSync, ticket: number): string {
   return `[${boardColumn(stage(db, ticket), row.lifecycle)}] #${ticket} ${row.title}`;
 }
 
+// Messages a card shows and a chat brief quotes, newest first kept
+export const TICKET_MESSAGES = 50;
+
+// The ticket's own source: its primary and linked conversations and the batches attached to it, oldest first.
+// A chat it only keeps as context (it was closed, merged or relinked) feeds later tickets, not this one.
+export function ticketMessages(db: DatabaseSync, ticket: number): Message[] {
+  return (db.prepare(`SELECT DISTINCT m.* FROM message m LEFT JOIN ticket_conversation l ON l.conversation=m.conversation
+    LEFT JOIN batch b ON b.id=m.batch WHERE (l.ticket=? AND l.kind IN ('primary','linked')) OR b.ticket=?`).all(ticket, ticket) as unknown as Message[])
+    .sort((a, b) => utc(a.sent_at).localeCompare(utc(b.sent_at)) || a.id - b.id);
+}
+
 export function detail(db: DatabaseSync, ticket: number) {
   const owner = getTicket(db, ticket);
   const timeline = (db.prepare('SELECT * FROM timeline WHERE ticket=?').all(ticket) as unknown as TimelineEvent[])
     .sort((a, b) => utc(b.at).localeCompare(utc(a.at)) || b.id - a.id);
-  const messages = (db.prepare(`SELECT m.* FROM message m WHERE m.conversation IN (SELECT conversation FROM ticket_conversation WHERE ticket=?)
-    UNION SELECT m.* FROM message m WHERE m.batch IN (SELECT id FROM batch WHERE ticket=?)`).all(ticket, ticket) as unknown as Message[])
-    .sort((a, b) => utc(b.sent_at).localeCompare(utc(a.sent_at)) || b.id - a.id);
+  const messages = ticketMessages(db, ticket).slice(-TICKET_MESSAGES).reverse();
   return { ticket: owner, stage: stage(db, ticket), timeline, messages,
     refs: db.prepare('SELECT * FROM ticket_ref WHERE ticket=? ORDER BY kind,key,id').all(ticket),
     conversations: db.prepare('SELECT c.*,l.kind,l."by" FROM ticket_conversation l JOIN conversation c ON c.id=l.conversation WHERE l.ticket=? ORDER BY c.id').all(ticket),
@@ -799,7 +808,7 @@ export function clearTicket(db: DatabaseSync, ticket: number, at?: string): numb
   });
 }
 
-export function makeTicket(db: DatabaseSync, batch: number, at?: string, actor: 'you' | 'chat' = 'you'): number {
+export function makeTicket(db: DatabaseSync, batch: number, at?: string, actor: 'you' | 'chat' = 'you', cfg?: Pick<Config, 'clients'>): number {
   return transaction(db, () => {
     const now = utc(at);
     const row = getBatch(db, batch);
@@ -817,7 +826,13 @@ export function makeTicket(db: DatabaseSync, batch: number, at?: string, actor: 
     }
     if (owner === null) {
       const summary = batchMessages(db, batch).map((message) => JSON.parse(message.ref ?? '{}').deleted === true ? '[Source message deleted]' : message.text ?? '').join('\n');
-      const id = Number(db.prepare('INSERT INTO ticket(title,summary,created_at,last_activity_at) VALUES (?,?,?,?)').run(row.title || '(no title)', summary, now, now).lastInsertRowid);
+      // The client the input names, else the client of the chat's latest ticket: the ticket keeps its client's chat folder
+      const inferred = cfg ? batchClients(db, cfg, batch) : [];
+      const earlier = db.prepare(`SELECT t.client FROM ticket_conversation l JOIN ticket t ON t.id=l.ticket
+        WHERE l.conversation=? AND t.client IS NOT NULL ORDER BY t.id DESC LIMIT 1`).get(row.conversation)?.client as string | undefined;
+      const client = inferred.length === 1 ? inferred[0]! : earlier && (!inferred.length || inferred.includes(earlier)) ? earlier : null;
+      const id = Number(db.prepare('INSERT INTO ticket(title,client,summary,created_at,last_activity_at) VALUES (?,?,?,?,?)')
+        .run(row.title || '(no title)', client, summary, now, now).lastInsertRowid);
       installLink(db, id, row.conversation, 'primary', actor, now);
       owner = getTicket(db, id);
     }

@@ -1029,6 +1029,44 @@ test('Make ticket on backlog already routed to an active ticket remains durable 
   expect(db.prepare('SELECT lifecycle,approved_at,session_id FROM ticket WHERE id=?').get(owner)).toEqual({ lifecycle: 'active', approved_at: OLD, session_id: 'existing-session' });
 });
 
+test('Make ticket in the chat of a dismissed ticket keeps the client the input names', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const input = batch(db, { sender: 'Bob', text: 'anche ste robine' });
+  const dismissed = ticket(db, { lifecycle: 'dismissed', client: 'acme', closed_at: OLD });
+  link(db, dismissed, conversation(db, input));
+  db.prepare("UPDATE batch SET state='done',outcome='not_on_us' WHERE id=?").run(input);
+  const made = api.makeTicket(db, input, AT, 'you', cfg);
+  expect(made).not.toBe(dismissed);
+  expect(db.prepare('SELECT client,summary FROM ticket WHERE id=?').get(made)).toEqual({ client: 'acme', summary: 'anche ste robine' });
+});
+
+test('Make ticket on input naming no client takes the client of the chat\'s latest ticket', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const input = batch(db, { account: 'me@unmapped.invalid', sender: 'Bob', text: 'one more thing' });
+  const older = ticket(db, { lifecycle: 'done', client: 'acme', closed_at: OLD });
+  const latest = ticket(db, { lifecycle: 'dismissed', client: 'other', closed_at: OLD });
+  link(db, older, conversation(db, input), 'context');
+  link(db, latest, conversation(db, input), 'context');
+  db.prepare("UPDATE batch SET state='done',outcome='not_on_us' WHERE id=?").run(input);
+  expect(db.prepare('SELECT client FROM ticket WHERE id=?').get(api.makeTicket(db, input, AT, 'you', cfg))).toEqual({ client: 'other' });
+});
+
+test('a ticket shows the newest 50 messages of its own chats, not of chats it keeps as context', () => {
+  using db = openDb(fixture().path);
+  for (let n = 0; n < 60; n++) batch(db, { conversation_id: 'long-chat', sent_at: `2026-11-05T22:${String(n).padStart(2, '0')}:00.000000Z`, text: `Line ${n}` });
+  const chat = Number(db.prepare("SELECT id FROM conversation WHERE native_id='long-chat'").get()!.id);
+  const earlier = ticket(db, { lifecycle: 'dismissed', closed_at: OLD });
+  const owner = ticket(db, { lifecycle: 'active' });
+  link(db, earlier, chat, 'context');
+  link(db, owner, chat);
+  const shown = api.detail(db, owner).messages;
+  expect(shown).toHaveLength(api.TICKET_MESSAGES);
+  expect([shown[0]!.text, shown.at(-1)!.text]).toEqual(['Line 59', 'Line 10']);
+  expect(api.detail(db, earlier).messages).toEqual([]);
+});
+
 test('sender display-name addresses still infer only configured client domains', () => {
   const { path, cfg } = fixture();
   using db = openDb(path);
