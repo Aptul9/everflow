@@ -12,7 +12,7 @@ import { http, launch } from './web-support.ts';
 const ORIGIN = 'https://everflow.example.invalid';
 const HOST = 'everflow.example.invalid';
 const KEY = Buffer.alloc(32, 9);
-const CLIENT = 'everflow-client', ⟦RG:1a6a1486⟧;
+const CLIENT = 'everflow-client', SECRET = 'synthetic-client-' + 'value';
 const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
 const jwt = (claims: Record<string, unknown>) => `${b64({ alg: 'RS256' })}.${b64(claims)}.c2ln`;
 

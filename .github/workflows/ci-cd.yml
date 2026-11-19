@@ -39,6 +39,8 @@ jobs:
       - name: Build
         id: build
         run: |
+          # a failed build fails here, not in the next step as a missing receipt
+          set -o pipefail
           node scripts/build.ts | tee build.log
           echo "receipt=$(sed -n 's/^{"buildReceipt":"\(.*\)"}$/\1/p' build.log | tail -n 1)" >> "$GITHUB_OUTPUT"
       - name: Typecheck and tests
