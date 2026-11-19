@@ -244,6 +244,53 @@ test('served gate: a page session gets the bearer on loopback, nothing under the
   } finally { await server.close(); }
 }, 120_000);
 
+test('served gate with EverID only: an EverID session opens the chat host, websocket handshakes included; password sessions do not', async () => {
+  const peer = openchamber();
+  servers.push(peer.server);
+  const ocPort = await peer.ready;
+  const fixture = webFixture();
+  writeFileSync(fixture.config, readFileSync(fixture.config, 'utf8').replace('[opencode]\n', `[opencode]\nopenchamber_port = ${ocPort}\n`)
+    + `[web]\npublic_origin = "${PUBLIC}"\nchat_origin = "${CHAT}"\n`);
+  const account = { user: 'me@example.invalid', hash: hashPassword('synthetic secret') };
+  // never contacted here: the gate checks the session cookie only
+  const issuer = 'http://127.0.0.1:9/application/o/everflow/', clientId = 'everflow';
+  const server = await launch('web-process.ts', [], { TEST_INSTANCE_CONFIG: fixture.config, EVERFLOW_LOGIN_USER: account.user, EVERFLOW_LOGIN_HASH: account.hash,
+    OPENCHAMBER_UI_PASSWORD: UI_PASSWORD, OIDC_ISSUER: issuer, OIDC_CLIENT_ID: clientId, OIDC_CLIENT_SECRET: 'synthetic-client-secret',
+    EVERFLOW_PASSWORD_LOGIN: 'off' });
+  try {
+    const key = loginKey(fixture.path), now = Date.now();
+    // the session the EverID callback issues, bound as server.ts binds it (issuer, client, account email, no listed subjects)
+    const everid = new Sessions(key, account, { password: false, everid: [issuer, clientId, account.user].join('\0') });
+    const cookie = `everflow_session=${everid.issue(now, 'o1')}`;
+    const passwordCookie = `everflow_session=${new Sessions(key, account).issue(now)}`;
+    const gate = (headers: Record<string, string>) => http(server.port, '/api/chat-gate', { headers: { 'x-forwarded-host': 'chat.everflow.example.invalid', 'x-forwarded-uri': '/?session=ses_1', ...headers } });
+
+    const ok = await gate({ cookie });
+    expect(ok.status).toBe(204);
+    expect(ok.headers['x-everflow-chat-authorization']).toBe('Bearer oc_client_synthetic1');
+    // a websocket handshake (events, terminal) as Caddy's forward_auth sends it: Connection and Upgrade stripped (Caddyfile
+    // header_up), the handshake's other headers kept; the gate answers it like any request
+    const ws = await gate({ cookie, 'x-forwarded-method': 'GET', 'x-forwarded-uri': '/api/event', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+      'sec-websocket-version': '13' });
+    expect(ws.status).toBe(204);
+    expect(ws.headers['x-everflow-chat-authorization']).toBe('Bearer oc_client_synthetic1');
+    const wsDenied = await gate({ 'x-forwarded-uri': '/api/event', 'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==', 'sec-websocket-version': '13' });
+    expect(wsDenied.status).toBe(401);
+    expect(wsDenied.headers['x-everflow-chat-authorization']).toBeUndefined();
+    // the fallback is off: a password session no longer opens the chat host, and the password sign-in is refused
+    const old = await gate({ cookie: passwordCookie });
+    expect(old.status).toBe(401);
+    expect(old.headers['x-everflow-login']).toBe(`${PUBLIC}/login?next=${encodeURIComponent(`${CHAT}/?session=ses_1`)}`);
+    const refused = await http(server.port, '/api/login', { method: 'POST', body: JSON.stringify({ email: account.user, password: 'synthetic secret' }),
+      headers: { host: 'everflow.example.invalid', origin: PUBLIC, 'content-type': 'application/json' } });
+    expect(refused.status).toBe(403);
+    expect(JSON.parse(refused.text).error.code).toBe('login.password-off');
+    // the bridge behind the gate takes the EverID session too
+    const page = await http(server.port, '/api/chat-bridge/mini-chat.html?mode=session&sessionId=ses_vault', { headers: { 'x-forwarded-host': 'chat.everflow.example.invalid', cookie } });
+    expect(page.status).toBe(200);
+  } finally { await server.close(); }
+}, 120_000);
+
 test('the bridge tag goes in before </head> once, and on top of a page without a head', () => {
   const tag = `<script src="/everflow-bridge.js?parent=${encodeURIComponent(PUBLIC)}" defer></script>`;
   const once = inject('<html><HEAD><title>x</title></HEAD><body></body></html>', PUBLIC);

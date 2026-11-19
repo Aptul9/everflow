@@ -264,7 +264,7 @@ export function TicketBoard(props: { initialState: OverviewState; initialEtag: s
           {!query && <Kbd aria-hidden="true" className="pointer-events-none absolute top-1/2 right-2 hidden -translate-y-1/2 sm:inline-flex">/</Kbd>}
         </div>
         {props.signOut && <Button variant="ghost" size="sm" className="text-muted-foreground"
-          onClick={() => { void fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).finally(() => window.location.assign('/login')); }}>
+          onClick={() => { void fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).then((r) => r.headers.get('x-everflow-logout') ?? '/login', () => '/login').then((to) => window.location.assign(to)); }}>
           <LogOut aria-hidden="true" />Sign out
         </Button>}
       </div>

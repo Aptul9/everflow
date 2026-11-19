@@ -31,6 +31,9 @@ jobs:
           docker run --rm -v "$PWD/deploy/vm/Caddyfile:/etc/caddy/Caddyfile:ro" -e EVERFLOW_DOMAIN=everflow.example.invalid \
             -e EVERFLOW_CHAT_DOMAIN=chat.everflow.example.invalid \
             caddy:2.11.8-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          # chat host websockets: forward_auth must not pass Connection/Upgrade to the daemon gate, which would hold the request
+          awk '/forward_auth 127.0.0.1:8789/,/^\t\t}/' deploy/vm/Caddyfile > fa.txt
+          grep -q 'header_up -Connection' fa.txt && grep -q 'header_up -Upgrade' fa.txt && grep -q 'uri /api/chat-gate' fa.txt
           d=$(mktemp -d) && cp deploy/vm/compose.yml deploy/vm/Caddyfile "$d" && printf "EVERFLOW_DOMAIN='x'\nEVERFLOW_CHAT_DOMAIN='y'\n" > "$d/.env"
           docker compose -f "$d/compose.yml" config -q
       - name: Build
@@ -106,14 +109,30 @@ jobs:
       - name: Build and restart on the VM
         env:
           PAGE_USER: ${{ secrets.EVERFLOW_USER }}
+          OIDC_ISSUER: ${{ vars.OIDC_ISSUER }}
+          OIDC_CLIENT_ID: ${{ secrets.OIDC_CLIENT_ID }}
+          OIDC_CLIENT_SECRET: ${{ secrets.OIDC_CLIENT_SECRET }}
+          PASSWORD_LOGIN: ${{ vars.EVERFLOW_PASSWORD_LOGIN || 'on' }}
         run: |
+          # sign-in settings for login.env: the EverID client when all three are set, and the password fallback flag
+          set="EVERFLOW_PASSWORD_LOGIN=$PASSWORD_LOGIN"
+          if [ -n "$OIDC_ISSUER$OIDC_CLIENT_ID$OIDC_CLIENT_SECRET" ]; then
+            test -n "$OIDC_ISSUER" && test -n "$OIDC_CLIENT_ID" && test -n "$OIDC_CLIENT_SECRET" || { echo "::error::OIDC_ISSUER (variable), OIDC_CLIENT_ID and OIDC_CLIENT_SECRET go together"; exit 1; }
+            set=$(printf 'OIDC_ISSUER=%s\nOIDC_CLIENT_ID=%s\nOIDC_CLIENT_SECRET=%s\n%s' "$OIDC_ISSUER" "$OIDC_CLIENT_ID" "$OIDC_CLIENT_SECRET" "$set")
+          elif [ "$PASSWORD_LOGIN" = off ]; then
+            echo "::error::EVERFLOW_PASSWORD_LOGIN=off needs the EverID client"; exit 1
+          fi
+          settings=$(printf '%s' "$set" | base64 -w0)
+          echo "::add-mask::$settings"
           git archive --format=tar.gz -o release.tar.gz HEAD
           sum=$(sha256sum release.tar.gz | cut -d' ' -f1)
-          ssh -o BatchMode=yes "$TARGET" "${{ github.sha }} $sum $(printf '%s' "$PAGE_USER" | base64 -w0) $(printf '%s' "$PAGE_HASH" | base64 -w0)" < release.tar.gz
+          ssh -o BatchMode=yes "$TARGET" "${{ github.sha }} $sum $(printf '%s' "$PAGE_USER" | base64 -w0) $(printf '%s' "$PAGE_HASH" | base64 -w0) $settings" < release.tar.gz
       - name: Published page asks for the sign-in and opens with it
         env:
           PAGE_USER: ${{ secrets.EVERFLOW_USER }}
           PAGE_PASSWORD: ${{ secrets.EVERFLOW_PASSWORD }}
+          OIDC_ISSUER: ${{ vars.OIDC_ISSUER }}
+          PASSWORD_LOGIN: ${{ vars.EVERFLOW_PASSWORD_LOGIN || 'on' }}
         run: |
           base="https://$DOMAIN"
           code() { curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$@"; }
@@ -126,13 +145,35 @@ jobs:
           test "$(code "$base/api/state")" = 401
           test "$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$base/")" = "$base/login?next=%2F"
           curl -fsS --max-time 15 "$base/login" | grep -q '<title>Sign in · Everflow</title>'
+          chat=$(sed -n 's|^chat_origin = "\(https://[^"]*\)"$|\1|p' deploy/vm/config.toml)
+          if [ -n "$OIDC_ISSUER" ]; then
+            # EverID: the start goes to the issuer's host with this page's callback, and the sign-in page offers it
+            to=$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$base/oidc/start?next=%2F")
+            printf '%s\n' "$to" | sed 's/[?].*//'
+            case "$to" in "https://$(printf '%s' "$OIDC_ISSUER" | sed 's|^https://||; s|/.*||')/"*) ;; *) echo "::error::/oidc/start did not go to EverID"; exit 1 ;; esac
+            printf '%s' "$to" | grep -q "redirect_uri=$(jq -rn --arg u "$base/oidc/callback" '$u|@uri')"
+            printf '%s' "$to" | grep -q 'code_challenge_method=S256'
+            curl -fsS --max-time 15 "$base/login" | grep -q 'Sign in with EverID'
+            test "$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$base/oidc/callback?state=x&code=y")" = "$base/login?error=everid.expired"
+          fi
+          if [ "$PASSWORD_LOGIN" = off ]; then
+            # the fallback is off: the password is refused even when right; a session needs EverID in a browser
+            test "$(login -d "$(jq -cn --arg e "$PAGE_USER" --arg p "$PAGE_PASSWORD" '{email:$e,password:$p}')")" = 403
+            for _ in $(seq 1 30); do
+              if [ "$(code "$chat/")" = 302 ]; then break; fi
+              sleep 5
+            done
+            test "$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$chat/")" = "$base/login?next=$(jq -rn --arg u "$chat/" '$u|@uri')"
+            echo "$chat/ ok (EverID only)"
+            echo "$base/ ok (EverID only)"
+            exit 0
+          fi
           test "$(login -d "$(jq -cn --arg e "$PAGE_USER" --arg p "x$PAGE_PASSWORD" '{email:$e,password:$p}')")" = 401
           jar=$(mktemp)
           test "$(login -c "$jar" -d "$(jq -cn --arg e "$PAGE_USER" --arg p "$PAGE_PASSWORD" '{email:$e,password:$p}')")" = 204
           test "$(code -b "$jar" "$base/api/state")" = 200
           curl -fsS --max-time 15 -b "$jar" "$base/" | grep -q '<title>Everflow</title>'
           # the OpenChamber web UI: the sign-in cookie opens it, without it the chat host sends to the sign-in
-          chat=$(sed -n 's|^chat_origin = "\(https://[^"]*\)"$|\1|p' deploy/vm/config.toml)
           for _ in $(seq 1 30); do
             if [ "$(code "$chat/")" = 302 ]; then break; fi
             sleep 5

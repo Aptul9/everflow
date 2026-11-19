@@ -5,14 +5,16 @@ import type { Config } from '../core/config.ts';
 import type { ChatToken } from './chat-gate.ts';
 import type { ChatFiles } from './chat-files.ts';
 import type { Limiter, Sessions } from './login.ts';
+import type { Oidc } from './oidc.ts';
 
 export interface WebInstance {
   config: Config;
   configPath: string;
   port: number;
   token: string;
-  // Present when [web] public_origin is set: requests under that host need a signed-in session
-  login?: { sessions: Sessions; limiter: Limiter; check: (user: string, password: string) => boolean };
+  // Present when [web] public_origin is set: requests under that host need a signed-in session. `password` is the fallback
+  // sign-in (EVERFLOW_PASSWORD_LOGIN), `oidc` the EverID one (OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET); at least one is on
+  login?: { sessions: Sessions; limiter: Limiter; check: (user: string, password: string) => boolean; password: boolean; oidc?: Pick<Oidc, 'start' | 'finish' | 'logout'> };
   // Present when [web] chat_origin is set: the OpenChamber client token the chat host's gate hands to Caddy, and the
   // session folder the page's chat view opens with; page fetches OpenChamber's chat view for the bridge (chat-bridge.ts)
   chat?: Pick<ChatToken, 'token' | 'open' | 'page'>;

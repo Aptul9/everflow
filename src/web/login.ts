@@ -52,22 +52,42 @@ export function loginKey(db: string): Buffer {
   return key;
 }
 
+/** How a session was opened: v1 with the password, o1 through EverID. */
+export type SessionKind = 'v1' | 'o1';
+
 // No parameter properties here: scripts/hash-password.ts loads this file through Node's type stripping
 export class Sessions {
   private readonly key: Buffer;
-  private readonly account: string;
-  constructor(key: Buffer, account: Account) {
+  private readonly accounts: Partial<Record<SessionKind, string>>;
+  /**
+   * A password session is bound to the user and the hash, an EverID one to `everid` (issuer, client and email): a changed
+   * password ends only the first, a changed client only the second. `password: false` refuses every password session.
+   */
+  constructor(key: Buffer, account: Account, options: { password?: boolean; everid?: string } = {}) {
     if (key.length < 32) throw new Error('login.key');
     this.key = key;
-    this.account = createHash('sha256').update(account.user.toLowerCase() + '\0' + account.hash).digest('hex');
+    this.accounts = {
+      ...(options.password === false ? {} : { v1: createHash('sha256').update(account.user.toLowerCase() + '\0' + account.hash).digest('hex') }),
+      ...(options.everid ? { o1: createHash('sha256').update('everid\0' + options.everid).digest('hex') } : {}),
+    };
   }
-  private sign(expires: number): string { return b64(createHmac('sha256', this.key).update(`v1.${expires}.${this.account}`).digest()); }
-  issue(now = Date.now()): string { const expires = now + SESSION_MS; return `v1.${expires}.${this.sign(expires)}`; }
-  valid(value: string | undefined, now = Date.now()): boolean {
-    const match = /^v1\.(\d{13})\.([A-Za-z0-9_-]{43})$/.exec(value ?? '');
-    if (!match || Number(match[1]) <= now) return false;
-    const expected = Buffer.from(this.sign(Number(match[1]))), supplied = Buffer.from(match[2]!);
-    return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+  private sign(kind: SessionKind, expires: number, account: string): string {
+    return b64(createHmac('sha256', this.key).update(`${kind}.${expires}.${account}`).digest());
+  }
+  issue(now = Date.now(), kind: SessionKind = 'v1'): string {
+    const account = this.accounts[kind];
+    if (!account) throw new Error(`login.kind-${kind}`);
+    const expires = now + SESSION_MS;
+    return `${kind}.${expires}.${this.sign(kind, expires, account)}`;
+  }
+  valid(value: string | undefined, now = Date.now()): boolean { return this.kind(value, now) !== undefined; }
+  /** How a valid session was opened; undefined when it is not valid. */
+  kind(value: string | undefined, now = Date.now()): SessionKind | undefined {
+    const match = /^(v1|o1)\.(\d{13})\.([A-Za-z0-9_-]{43})$/.exec(value ?? '');
+    const kind = match?.[1] as SessionKind | undefined, account = kind && this.accounts[kind];
+    if (!match || !kind || !account || Number(match[2]) <= now) return undefined;
+    const expected = Buffer.from(this.sign(kind, Number(match[2]), account)), supplied = Buffer.from(match[3]!);
+    return supplied.length === expected.length && timingSafeEqual(supplied, expected) ? kind : undefined;
   }
 }
 
@@ -116,9 +136,18 @@ export function cookieDomain(publicOrigin: string | undefined, chatOrigin: strin
   return chat.endsWith('.' + pub) ? pub : undefined;
 }
 
-/** Paths the sign-in page itself needs before there is a session. */
+/** Paths the sign-in page itself needs before there is a session, EverID's start and callback included. */
 export function openPath(method: string, path: string): boolean {
-  return method === 'GET' && (path === '/login' || path.startsWith('/_next/static/') || ['/icon.png', '/apple-icon.png', '/favicon.ico'].includes(path));
+  return method === 'GET' && (path === '/login' || path === '/oidc/start' || path === '/oidc/callback' || path.startsWith('/_next/static/')
+    || ['/icon.png', '/apple-icon.png', '/favicon.ico'].includes(path));
+}
+
+/** The password sign-in, the fallback while EverID is proved live: on unless EVERFLOW_PASSWORD_LOGIN is "off". */
+export function passwordLogin(env: Record<string, string | undefined> = process.env): boolean {
+  const value = env.EVERFLOW_PASSWORD_LOGIN?.trim().toLowerCase() ?? '';
+  if (value === '' || value === 'on') return true;
+  if (value === 'off') return false;
+  throw Object.assign(new Error('login.password-flag: EVERFLOW_PASSWORD_LOGIN must be on or off'), { code: 'login.password-flag' });
 }
 
 /** A same-site relative target to return to after signing in, or an absolute address on the chat origin; anything else goes to the board. */
