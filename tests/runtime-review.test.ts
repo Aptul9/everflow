@@ -61,6 +61,27 @@ test('I1 old parked reservation blocks its ticket and holds one slot without fre
   } finally { await runtime.close(); }
 });
 
+test('I1 old recovery waiting out a rate-limit backoff lets independent fresh input start', async () => {
+  const f = fixture(); f.cfg.tickets.enabled = f.cfg.chats.enabled = true;
+  using db = openDb(f.path); prepareStart(db);
+  const at = new Date().toISOString(), later = new Date(Date.now() + 3_600_000).toISOString();
+  const limited = ticket(db, 'Rate limited');
+  db.prepare("UPDATE ticket SET session_id='ses_limited' WHERE id=?").run(limited);
+  const failed = Number(db.prepare("INSERT INTO turn(ticket,kind,prompt_id,text,session_id,state,outcome,created_at) VALUES (?,'brief','msg_failed','Brief','ses_limited','done','failed',?)").run(limited, at).lastInsertRowid);
+  const recovery = Number(db.prepare(`INSERT INTO turn(ticket,kind,prompt_id,text,session_id,recovery_of,input_turn,reserved_at,created_at)
+    VALUES (?,'recovery','msg_recovery','Recovery','ses_limited',?,?,?,?)`).run(limited, failed, failed, at, at).lastInsertRowid);
+  const old = enqueue(db, 'forward', 'recovery:turn:limited', { batch_ids: [] }, limited);
+  db.prepare('UPDATE job SET turn_id=?,reserved_at=?,next_at=? WHERE id=?').run(recovery, at, later, old);
+  const fresh = enqueue(db, 'start_chat', 'fresh-after-backoff', {}, ticket(db, 'Fresh'));
+  const calls: number[] = [];
+  const handler = (_cfg: unknown, connection: ReturnType<typeof openDb>, job: any) => { calls.push(job.id); complete(connection, job, () => {}); };
+  const runtime = await startRuntime(f.cfg, db, { buildReceipt: process.env.TEST_BUILD_RECEIPT!, runId: 'backoff-review-run', handlers: { start_chat: handler, forward: handler } });
+  try {
+    await delay(40); expect(calls).toEqual([fresh]);
+    expect(db.prepare('SELECT state,next_at FROM job WHERE id=?').get(old)).toMatchObject({ state: 'queued', next_at: later });
+  } finally { await runtime.close(); }
+});
+
 test('I1 chats-off old pre-turn reservation looks up and persists an accepted tag without create or prompt', async () => {
   const f = fixture(); f.cfg.tickets.enabled = true; f.cfg.chats.enabled = false;
   await using peer = await scriptedPeer(); f.cfg.opencode.url = peer.url;
