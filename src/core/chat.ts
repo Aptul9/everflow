@@ -10,7 +10,7 @@ import type { Job } from './jobs.ts';
 import { connect } from './opencode.ts';
 import type { Peer, TurnDetail } from './opencode.ts';
 import { modelChoice } from './settings.ts';
-import { addRefs, batchMessages, boardColumn, extractRefs, ownContext, route, stage, stageTitle, TicketError } from './tickets.ts';
+import { addRefs, batchMessages, boardColumn, extractRefs, ownContext, route, stage, stageTitle, TICKET_MESSAGES, TicketError, ticketMessages } from './tickets.ts';
 import type { Message, Ticket } from './tickets.ts';
 import { utc } from './time.ts';
 import type { ErrorClass, Report, TurnKind } from './types.ts';
@@ -55,6 +55,7 @@ const statusRule = `End every turn with STATUS: <working|needs_you|waiting_them|
 - waiting_them: the next move belongs to someone outside (their reply, their change).
 - done: the ask is fully met; this closes the ticket.
 Everflow reads this last line and moves the ticket on its board from it; no command does that. When Antonio asks to change the ticket's status, end with the STATUS he asked for.
+This holds after the ticket was closed or dismissed too: a later turn's STATUS reopens it, or closes it as done.
 Write it as plain text on the very last line: no bold, quote or code block, nothing after it.
 A tool error you logged does not change which of these applies.`;
 const contract = `Work under Antonio's normal rules. Outward-facing text gets his yes in this chat before sending.
@@ -123,7 +124,6 @@ function failed(cfg: Config, db: DatabaseSync, job: Job, error: unknown, options
 }
 
 const MAIL = new Set(['outlook', 'gmail', 'oemail']);
-const BRIEF_MESSAGES = 50;
 
 // A transcript, one header per conversation; text lines are indented so no message can start a line that reads as a boundary marker.
 function quoteMessages(db: DatabaseSync, messages: readonly Message[]): string {
@@ -188,10 +188,8 @@ ${closeCommand(cfg, ticket, buildReceipt)}`;
 }
 
 function brief(cfg: Config, db: DatabaseSync, owner: Ticket, own: readonly Message[], buildReceipt?: string, discuss = false): string {
-  const all = db.prepare(`SELECT DISTINCT m.* FROM message m LEFT JOIN ticket_conversation l ON l.conversation=m.conversation
-    LEFT JOIN batch b ON b.id=m.batch WHERE (l.ticket=? AND l.kind IN ('primary','linked')) OR b.ticket=? ORDER BY m.sent_at,m.id`)
-    .all(owner.id, owner.id) as unknown as Message[];
-  const messages = all.slice(-BRIEF_MESSAGES);
+  const all = ticketMessages(db, owner.id);
+  const messages = all.slice(-TICKET_MESSAGES);
   const omitted = all.length - messages.length;
   const refs = db.prepare('SELECT kind,key,url FROM ticket_ref WHERE ticket=? ORDER BY id').all(owner.id);
   return `${instructions(cfg, owner.id, buildReceipt)}
@@ -388,7 +386,9 @@ function completionAt(result: Completion): string {
 
 function newer(db: DatabaseSync, owner: Ticket, pending: PendingReport): boolean {
   const at = completionAt(pending.result);
-  if (!pending.result.assistant_id || owner.merged_into !== null || owner.lifecycle === 'dismissed' || owner.lifecycle === 'done') return false;
+  if (!pending.result.assistant_id || owner.merged_into !== null) return false;
+  // A closed ticket takes only the report of a turn its chat started after the close: that STATUS reopens or closes it again
+  if (closedTicket(owner) && (!owner.closed_at || !owner.approved_at)) return false;
   if (owner.closed_at) {
     const root = db.prepare(`SELECT COALESCE(original.created_at,t.created_at) AS at FROM turn t
       LEFT JOIN turn original ON original.id=t.input_turn WHERE t.prompt_id=? AND t.ticket=?`).get(pending.result.prompt_id, owner.id);
@@ -401,11 +401,15 @@ function newer(db: DatabaseSync, owner: Ticket, pending: PendingReport): boolean
       && owner.report_at === pending.baseline.report_at;
 }
 
+function closedTicket(owner: Ticket): boolean {
+  return owner.lifecycle === 'done' || owner.lifecycle === 'dismissed';
+}
+
 function projectedTitle(db: DatabaseSync, job: Job, pending: PendingReport): string {
   const owner = ticketRow(db, pending.ticket);
   const apply = newer(db, owner, pending);
   const report = apply ? pending.status.report : owner.report;
-  const lifecycle = apply && report === 'done' ? 'done' : owner.lifecycle;
+  const lifecycle = !apply ? owner.lifecycle : report === 'done' ? 'done' : closedTicket(owner) ? 'active' : owner.lifecycle;
   const tail = ids(currentJob(db, job).payload.pending_batch_ids);
   return `[${boardColumn(stage(db, owner.id, { exclude_job: job.id, ...(pending.turn === null ? {} : { exclude_turn: pending.turn }),
     report, lifecycle, pending: lifecycle === 'active' && tail.length > 0 }), lifecycle)}] #${owner.id} ${owner.title}`;
@@ -467,10 +471,14 @@ async function finishReport(cfg: Config, db: DatabaseSync, job: Job, pending: Pe
     if (newer(db, owner, pending)) {
       const activity = owner.last_activity_at && utc(owner.last_activity_at) > at ? owner.last_activity_at : at;
       db.prepare(`UPDATE ticket SET report=?,report_line=?,report_at=?,report_message_id=?,report_turn=?,last_activity_at=?,
-        lifecycle=CASE WHEN ?='done' THEN 'done' ELSE lifecycle END,closed_at=CASE WHEN ?='done' THEN ? ELSE closed_at END WHERE id=?`)
+        lifecycle=CASE WHEN ?='done' THEN 'done' WHEN lifecycle IN ('done','dismissed') THEN 'active' ELSE lifecycle END,
+        closed_at=CASE WHEN ?='done' THEN ? ELSE closed_at END,cleared_at=CASE WHEN lifecycle IN ('done','dismissed') THEN NULL ELSE cleared_at END WHERE id=?`)
         .run(pending.status.report, pending.status.line, at, pending.result.assistant_id, pending.turn, activity,
           pending.status.report, pending.status.report, at, owner.id);
       addRefs(db, owner.id, extractRefs(pending.result.text, 'chat'), at);
+      if (closedTicket(owner) && pending.status.report !== 'done') {
+        timeline(db, owner.id, at, 'status', `Reopened by its chat (was ${owner.lifecycle})`, `reopen:${owner.id}:chat:${pending.result.assistant_id}`);
+      }
       timeline(db, owner.id, at, 'status', `STATUS: ${pending.status.report} | ${pending.status.line}`,
         `status:${pending.session_id}:${pending.result.assistant_id}`);
       const health = db.prepare("SELECT state,since FROM health WHERE dependency='opencode:execution'").get();
@@ -626,7 +634,7 @@ async function alignTitle(db: DatabaseSync, job: Job, ticket: number, peer: Peer
 }
 
 function sessionTickets(db: DatabaseSync, job: Job): Ticket[] {
-  return db.prepare(`SELECT * FROM ticket WHERE approved_at IS NOT NULL AND session_id IS NOT NULL AND lifecycle<>'dismissed'
+  return db.prepare(`SELECT * FROM ticket WHERE approved_at IS NOT NULL AND session_id IS NOT NULL
     ${job.ticket === null ? '' : 'AND id=?'} ORDER BY id`).all(...(job.ticket === null ? [] : [job.ticket])) as unknown as Ticket[];
 }
 
@@ -674,9 +682,7 @@ async function globalSync(cfg: Config, db: DatabaseSync, job: Job, peer: Peer, o
   }, now);
   if (!migrated) return;
   const reports = currentJob(db, job).payload.pending_reports as Record<string, PendingReport> | undefined ?? {};
-  // Dismissed tickets only get their title aligned
-  const dismissed = db.prepare("SELECT id FROM ticket WHERE approved_at IS NOT NULL AND session_id IS NOT NULL AND lifecycle='dismissed'").all().map((row) => Number(row.id));
-  const tickets = [...new Set([...sessionTickets(db, job).map((owner) => owner.id), ...dismissed, ...Object.keys(reports).map(Number), ...Object.keys(syncFailures(db, job)).map(Number)])].sort((a, b) => a - b);
+  const tickets = [...new Set([...sessionTickets(db, job).map((owner) => owner.id), ...Object.keys(reports).map(Number), ...Object.keys(syncFailures(db, job)).map(Number)])].sort((a, b) => a - b);
   const failures: unknown[] = [];
   for (const ticket of tickets) {
     if (!owns(db, job, now())) return;
@@ -690,7 +696,7 @@ async function globalSync(cfg: Config, db: DatabaseSync, job: Job, peer: Peer, o
       if (pending) {
         if (!await markRunning(db, job, ticket, owner.session_id, peer, options)) return;
         if (!await finishReport(cfg, db, job, pending, { ...options, peer }, false)) return;
-      } else if (owner.lifecycle !== 'dismissed') {
+      } else {
         if (!await markRunning(db, job, ticket, owner.session_id, peer, options)) return;
         const baseline = { report_message_id: owner.report_message_id, report_at: owner.report_at };
         const result = await peer.latestReport(owner.session_id, options.signal);
@@ -701,7 +707,8 @@ async function globalSync(cfg: Config, db: DatabaseSync, job: Job, peer: Peer, o
           status, title: '', baseline }, { ...options, peer }, false)) return;
       }
       if (!await alignTitle(db, job, ticket, peer, options)) return;
-      if (invalid) throw invalid;
+      // A dismissed ticket's chat is read for a reopen only; a reply without STATUS there is no sync failure
+      if (invalid && ticketRow(db, ticket).lifecycle !== 'dismissed') throw invalid;
       if (!syncTicketResult(cfg, db, job, ticket, null, options)) return;
     } catch (error) {
       if (!owns(db, job, now())) return;
@@ -728,8 +735,7 @@ export async function sync(cfg: Config, db: DatabaseSync, job: Job, options: Cha
     if (!owns(db, job, now())) return;
     const owners = sessionTickets(db, job);
     const payload = currentJob(db, job).payload;
-    const dismissed = () => db.prepare("SELECT 1 FROM ticket WHERE approved_at IS NOT NULL AND session_id IS NOT NULL AND lifecycle='dismissed'").get() !== undefined;
-    if (job.ticket === null && (owners.length || payload.pending_report || payload.pending_reports || payload.sync_errors || dismissed())) {
+    if (job.ticket === null && (owners.length || payload.pending_report || payload.pending_reports || payload.sync_errors)) {
       await globalSync(cfg, db, job, options.peer ?? connect(cfg), options);
       return;
     }
@@ -748,12 +754,8 @@ export async function sync(cfg: Config, db: DatabaseSync, job: Job, options: Cha
         try { if (result) status = parseStatus(result.text); } catch (error) { invalid = error; }
         if (result && status && !await finishReport(cfg, db, job, { ticket: owner.id, session_id: owner.session_id!, turn: null, result, status, title: '', baseline }, { ...options, peer }, false)) return;
         if (!await alignTitle(db, job, owner.id, peer, options)) return;
-        if (invalid) throw invalid;
+        if (invalid && ticketRow(db, owner.id).lifecycle !== 'dismissed') throw invalid;
       }
-    } else if (job.ticket !== null) {
-      // Dismissed: no reports to read, only the title to align
-      const owner = ticketRow(db, job.ticket);
-      if (owner.lifecycle === 'dismissed' && owner.approved_at && owner.session_id && !await alignTitle(db, job, owner.id, options.peer ?? connect(cfg), options)) return;
     }
     if (job.ticket === null) defer(db, job, after(now(), cfg.jobs.sync_seconds), undefined, now);
     else complete(db, job, () => {

@@ -232,7 +232,7 @@ export async function actionPost(request: Request, scope: 'ticket' | 'batch' | '
       }
       if (scope === 'ticket' && action === 'close') return { ticket: close(db, value, input.reason ?? '') };
       if (scope === 'ticket' && action === 'clear') return { ticket: clearTicket(db, value) };
-      if (scope === 'batch' && action === 'ticket') return { ticket: makeTicket(db, value) };
+      if (scope === 'batch' && action === 'ticket') return { ticket: makeTicket(db, value, undefined, 'you', current.config) };
       if (scope === 'batch' && action === 'mute') return { conversation: muteBatch(db, value, inMinutes(input.minutes, input.hours)!) };
       if (scope === 'batch' && action === 'clear') return { batch: clearBatch(db, value) };
       if (scope === 'conversation' && action === 'unmute') return { conversation: mute(db, value, 0) };

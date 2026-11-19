@@ -83,6 +83,8 @@ test('the triage system prompt spells out every valid action, on_us and ticket c
   expect(system).toContain('update: on_us true, ticket set to an offered candidate id, non-empty title');
   expect(system).toMatch(/already tracked.*skip/i);
   expect(system).toMatch(/mode is update.*different request.*is new/is);
+  expect(system).toMatch(/adds to that request.*is update, never skip as already tracked/i);
+  expect(system).toMatch(/context_tickets are earlier tickets of the same conversation.*judged on its own/is);
   expect(system).toMatch(/mentions_me true tags Antonio.*never skip/is);
   expect(system).toMatch(/replies_to_me true answers a message of his.*counts the same/is);
   expect(system).toMatch(/only for work Antonio himself has to do.*in Cc.*does not make every request in it his/is);
