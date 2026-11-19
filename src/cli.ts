@@ -141,7 +141,10 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
         case 'ticket show': return tickets.detail(db, one!);
         case 'ticket merge': return { ticket: tickets.merge(db, one!, two!) };
         case 'ticket relink': return { ticket: tickets.relink(db, one!, two!) };
-        case 'ticket close': return { ticket: tickets.close(db, one!, command.reason ?? '') };
+        case 'ticket close': {
+          const ticket = tickets.close(db, one!, command.reason ?? '');
+          return { ticket, lifecycle: db.prepare('SELECT lifecycle FROM ticket WHERE id=?').get(ticket)!.lifecycle };
+        }
         case 'job list': return db.prepare('SELECT * FROM job ORDER BY id').all();
         case 'job retry': case 'job park': {
           if (!db.prepare('SELECT 1 FROM job WHERE id=?').get(one!)) throw Object.assign(new Error('job.not-found'), { code: 'job.not-found' });

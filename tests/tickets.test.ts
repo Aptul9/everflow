@@ -831,6 +831,19 @@ test('dismiss reason and feedback count persist without a chat and repeated dism
   expect(api.feedback?.(reopened)).toEqual({ make_ticket_count: 0, dismiss_count: 1, dismiss_reasons: [{ ticket: owner!, reason: 'Not our responsibility', at: AT }] });
 });
 
+test('closing a ticket that is already dismissed or done leaves it as it is, without an error', () => {
+  using db = openDb(fixture().path);
+  const dismissed = ticket(db);
+  api.dismiss(db, dismissed, 'Skipped on the board', AT);
+  expect(api.close(db, dismissed, 'Chat finished', '2026-11-06T01:00:00Z')).toBe(dismissed);
+  expect(db.prepare('SELECT lifecycle,closed_at,report_line FROM ticket WHERE id=?').get(dismissed))
+    .toEqual({ lifecycle: 'dismissed', closed_at: AT, report_line: 'Skipped on the board' });
+  const done = ticket(db, { lifecycle: 'active' });
+  api.close(db, done, 'Handled', AT);
+  expect(api.dismiss(db, done, 'Late skip', '2026-11-06T01:00:00Z')).toBe(done);
+  expect(db.prepare('SELECT lifecycle FROM ticket WHERE id=?').get(done)?.lifecycle).toBe('done');
+});
+
 test('Make ticket uses an existing open route without importing approval from an unrelated context', () => {
   using db = openDb(fixture().path);
   const input = batch(db);

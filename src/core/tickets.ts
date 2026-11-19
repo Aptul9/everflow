@@ -728,8 +728,8 @@ function finishTicket(db: DatabaseSync, ticket: number, lifecycle: 'done' | 'dis
   return transaction(db, () => {
     const now = utc(at);
     const row = getTicket(db, ticket);
-    if (row.lifecycle === lifecycle) return ticket;
-    if (row.lifecycle === 'done' || row.lifecycle === 'dismissed') throw new TicketError('ticket.conflict', 'Ticket already has a terminal lifecycle');
+    // Already closed either way (Antonio may have dismissed it while its chat was closing it): left as it is
+    if (row.lifecycle === 'done' || row.lifecycle === 'dismissed') return ticket;
     closeFuture(db, ticket, now, lifecycle === 'done');
     const reportAt = row.report_at && utc(row.report_at) > now ? row.report_at : now;
     db.prepare("UPDATE ticket SET lifecycle=?,closed_at=?,report='done',report_line=?,report_at=?,last_activity_at=? WHERE id=?")
