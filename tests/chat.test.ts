@@ -393,6 +393,35 @@ test('sync shows a ticket as Working while its chat runs a turn the owner starte
   expect(stage(db, ticket)).toBe('Waiting on them');
 });
 
+test('a turn started in a dismissed ticket\'s chat after the dismissal reopens it to its STATUS, and STATUS done then closes it', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  using db = openDb(path);
+  const ticket = proposed(db, { lifecycle: 'active', approved_at: AT, session_id: 'ses_direct' });
+  peer.sessions.set('ses_direct', remoteSession('ses_direct', cfg.opencode.directory));
+  const api = connect(cfg);
+  await api.prompt('ses_direct', 'msg_brief', 'Brief');
+  peer.finish('ses_direct', 'msg_brief', 'STATUS: working | On it', 'succeeded', undefined, PEER_AT + 1000);
+  jobs.enqueue(db, 'sync', 'sync', {});
+  await chat.sync(cfg, db, claimed(db, cfg));
+  dismiss(db, ticket, 'Not now', '2026-11-06T00:01:00Z');
+  vi.setSystemTime(new Date('2026-11-06T00:05:00Z'));
+  await chat.sync(cfg, db, claimed(db, cfg));
+  expect(row(db, 'ticket', ticket)).toMatchObject({ lifecycle: 'dismissed', report_line: 'Not now' });
+  await api.prompt('ses_direct', 'msg_after', 'Actually, put it on GitHub');
+  peer.finish('ses_direct', 'msg_after', 'Which issues?\n\nSTATUS: needs_you | Pick the issues', 'succeeded', undefined, PEER_AT + 400_000);
+  vi.setSystemTime(new Date('2026-11-06T00:10:00Z'));
+  await chat.sync(cfg, db, claimed(db, cfg));
+  expect(row(db, 'ticket', ticket)).toMatchObject({ lifecycle: 'active', report: 'needs_you', report_line: 'Pick the issues' });
+  expect(stage(db, ticket)).toBe('Needs you');
+  expect(db.prepare("SELECT body FROM timeline WHERE ticket=? AND event_key LIKE 'reopen:%'").get(ticket)).toEqual({ body: 'Reopened by its chat (was dismissed)' });
+  await api.prompt('ses_direct', 'msg_done', 'These two');
+  peer.finish('ses_direct', 'msg_done', 'Created.\n\nSTATUS: done | Issues created', 'succeeded', undefined, PEER_AT + 700_000);
+  vi.setSystemTime(new Date('2026-11-06T00:15:00Z'));
+  await chat.sync(cfg, db, claimed(db, cfg));
+  expect(row(db, 'ticket', ticket)).toMatchObject({ lifecycle: 'done', report: 'done', closed_at: '2026-11-06T00:11:40.000000Z' });
+});
+
 test('STATUS done closes, then within 2 days new linked input that triage reopens unarchives the same approved session', async () => {
   const f = await admittedFixture();
   await using peer = f.peer;
