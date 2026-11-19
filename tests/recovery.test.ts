@@ -4,6 +4,7 @@ import * as jobs from '../src/core/jobs.ts';
 import * as chat from '../src/core/chat.ts';
 import { close, merge } from '../src/core/tickets.ts';
 import { connect } from '../src/core/opencode.ts';
+import { applySessionEvent } from '../src/core/retitle.ts';
 import { AT, addBatch, chatFixture, claimed, proposed, reopenByTriage, row } from './chat-support.ts';
 import { remoteSession, scriptedPeer, PEER_AT } from './opencode-support.ts';
 import { snapshot } from './support.ts';
@@ -268,6 +269,50 @@ test('failed provider turn becomes a new reserved recovery after generic retry f
   const posts = peer.calls.filter((call) => call.url.pathname.endsWith('/prompt'));
   expect(posts.map((call) => call.body.id)).toEqual([first.prompt_id, recovery.prompt_id]);
   expect(db.prepare("SELECT detail FROM health WHERE dependency='opencode:execution'").get()).toBeTruthy();
+});
+
+async function rateLimitedRecovery() {
+  const peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  const db = openDb(path);
+  const ticket = proposed(db);
+  chat.approve(cfg, db, ticket, '');
+  await chat.startChat(cfg, db, claimed(db, cfg));
+  const first = db.prepare('SELECT * FROM turn').get()!;
+  const error = { type: 'provider.request', message: 'synthetic limit', status: 429, retryAfterMs: 3600000 };
+  peer.finish(String(first.session_id), String(first.prompt_id), '', 'failed', error);
+  await chat.collect(cfg, db, claimed(db, cfg));
+  const recovery = db.prepare("SELECT * FROM turn WHERE kind='recovery'").get()!;
+  const job = db.prepare("SELECT * FROM job WHERE state='queued' AND kind='forward'").get()!;
+  expect(job).toMatchObject({ turn_id: recovery.id, next_at: '2026-11-06T01:00:00.000000Z' });
+  return { peer, cfg, db, ticket, session: String(first.session_id), recovery, job, [Symbol.asyncDispose]: async () => { db.close(); await peer[Symbol.asyncDispose](); } };
+}
+
+test('Antonio carrying on in the chat during a recovery backoff drops the recovery and lets sync read the chat\'s STATUS', async () => {
+  await using f = await rateLimitedRecovery();
+  vi.setSystemTime(new Date('2026-11-06T00:05:00Z'));
+  await connect(f.cfg).prompt(f.session, 'msg_continue', 'continue');
+  f.peer.finish(f.session, 'msg_continue', 'Sent.\n\nSTATUS: waiting_them | Reply sent', 'succeeded', undefined, PEER_AT + 400_000);
+  applySessionEvent(f.db, { type: 'session.idle', data: { sessionID: f.session } });
+  expect(row(f.db, 'job', Number(f.job.id))).toMatchObject({ next_at: '2026-11-06T00:05:00.000000Z' });
+  await chat.forward(f.cfg, f.db, claimed(f.db, f.cfg));
+  expect(f.peer.calls.filter((call) => call.url.pathname.endsWith('/prompt')).map((call) => call.body.id)).not.toContain(f.recovery.prompt_id);
+  expect(row(f.db, 'turn', Number(f.recovery.id))).toMatchObject({ state: 'cancelled' });
+  expect(row(f.db, 'job', Number(f.job.id))).toMatchObject({ state: 'done' });
+  await chat.sync(f.cfg, f.db, claimed(f.db, f.cfg));
+  expect(row(f.db, 'ticket', f.ticket)).toMatchObject({ lifecycle: 'active', report: 'waiting_them', report_line: 'Reply sent' });
+});
+
+test('activity in the chat without a new input keeps the recovery and its rate limit backoff', async () => {
+  await using f = await rateLimitedRecovery();
+  vi.setSystemTime(new Date('2026-11-06T00:05:00Z'));
+  applySessionEvent(f.db, { type: 'session.idle', data: { sessionID: f.session } });
+  await chat.forward(f.cfg, f.db, claimed(f.db, f.cfg));
+  expect(row(f.db, 'job', Number(f.job.id))).toMatchObject({ state: 'queued', next_at: '2026-11-06T01:00:00.000000Z' });
+  expect(row(f.db, 'turn', Number(f.recovery.id))).toMatchObject({ state: 'prepared' });
+  vi.setSystemTime(new Date('2026-11-06T01:00:00Z'));
+  await chat.forward(f.cfg, f.db, claimed(f.db, f.cfg));
+  expect(f.peer.calls.filter((call) => call.url.pathname.endsWith('/prompt')).map((call) => call.body.id)).toContain(f.recovery.prompt_id);
 });
 
 test('two nondependency recoveries maximum survives intervening dependency failure without budget reset', async () => {

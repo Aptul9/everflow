@@ -14,6 +14,7 @@ import { addRefs, batchMessages, boardColumn, extractRefs, ownContext, route, st
 import type { Message, Ticket } from './tickets.ts';
 import { utc } from './time.ts';
 import type { ErrorClass, Report, TurnKind } from './types.ts';
+import { syncNow } from './retitle.ts';
 import { readBuildReceipt } from '../web/build-artifact.ts';
 
 export interface ChatOptions {
@@ -289,6 +290,26 @@ export async function submit(cfg: Config, db: DatabaseSync, job: Job, turn: Turn
         for (const batch of turn.batch_ids) db.prepare("UPDATE batch SET state='done',outcome='closed',done_at=? WHERE id=?").run(now(), batch);
       }, now);
       return;
+    }
+    if (turn.kind === 'recovery' && turn.input_turn !== null) {
+      // Antonio carried on in the chat while the recovery waited out its backoff: the chat is past the failed input, so it
+      // is not sent again and the ticket's sync reads what the chat said since
+      const failed = turnRow(db, turn.input_turn).prompt_id;
+      const inputs = await peer.inputs(turn.session_id, options.signal);
+      const failedAt = inputs.find((input) => input.id === failed)?.created;
+      const ours = new Set(db.prepare('SELECT prompt_id FROM turn WHERE ticket=?').all(turn.ticket).map((row) => String(row.prompt_id)));
+      if (failedAt !== undefined && inputs.some((input) => input.created > failedAt && !ours.has(input.id))) {
+        complete(db, job, () => {
+          db.prepare("UPDATE turn SET state='cancelled',completed_at=?,reserved_at=NULL WHERE id=?").run(now(), turn.id);
+          for (const batch of turn.batch_ids) db.prepare("UPDATE batch SET state='done',outcome='forwarded',done_at=? WHERE id=?").run(now(), batch);
+          timeline(db, turn.ticket, now(), 'chat', `Recovery ${turn.prompt_id} not sent: the chat went on with a later input`, `superseded:turn:${turn.id}`);
+        }, now);
+        syncNow(db, turn.ticket, now());
+        return;
+      }
+      // Made due early by activity in the chat that was not a new input: the rate limit backoff still holds
+      const until = currentJob(db, job).payload.backoff_until;
+      if (typeof until === 'string' && utc(until) > now()) { defer(db, job, utc(until), undefined, now); return; }
     }
     await unarchive(db, job, turn, peer, options);
     if (!owns(db, job, now()) || options.signal?.aborted) return;

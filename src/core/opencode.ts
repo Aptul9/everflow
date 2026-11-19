@@ -256,6 +256,10 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
     async latestReport(session: string, signal?: AbortSignal): Promise<TurnDetail | null> {
       return interval(await history(session, signal));
     },
+    // Every input the session holds, Everflow's or typed in the chat
+    async inputs(session: string, signal?: AbortSignal): Promise<{ id: string; created: number }[]> {
+      return (await history(session, signal)).flatMap((message) => message.type === 'user' ? [{ id: message.id, created: message.time.created }] : []);
+    },
     async running(session: string, signal?: AbortSignal): Promise<boolean> {
       return (await client.session.active(request(signal)))[session]?.type === 'running';
     },
