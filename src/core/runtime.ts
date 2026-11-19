@@ -438,9 +438,12 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
       stage = 'runtime.schedule';
       schedule(db, cfg); stage = 'runtime.maintenance'; scheduleMaintenance(db, cfg);
       for (const id of reconcile) if (['done', 'cancelled', 'parked'].includes(String(db.prepare('SELECT state FROM job WHERE id=?').get(id)?.state))) reconcile.delete(id);
+      // A recovery waiting out its rate-limit backoff keeps its slot and its ticket's order, but does not hold other tickets' new input until due
+      const holding = () => { const now = utc(); return [...reconcile].some((id) => !db.prepare(`SELECT 1 FROM job j JOIN turn t ON t.id=j.turn_id
+        WHERE j.id=? AND j.state='queued' AND j.next_at>? AND t.kind='recovery' AND t.state='prepared'`).get(id, now)); };
       for (;;) {
         stage = 'runtime.claim';
-        const job = claim(db, cfg, options.runId, undefined, { runtime: true, inputReady: reconcile.size === 0 });
+        const job = claim(db, cfg, options.runId, undefined, { runtime: true, inputReady: !holding() });
         if (!job) break;
         const controller = new AbortController();
         stage = 'runtime.renewal';
