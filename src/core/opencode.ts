@@ -98,6 +98,8 @@ export interface TurnDetail {
   error: SessionStructuredError | null;
   assistant_id: string | null;
   completed_at: number | null;
+  // Running turn whose latest step is a question to Antonio: it waits on him, not on the model
+  asking?: boolean;
 }
 
 function interval(messages: readonly SessionMessageInfo[], target?: string): TurnDetail | null {
@@ -110,6 +112,7 @@ function interval(messages: readonly SessionMessageInfo[], target?: string): Tur
   let completed: number | null = null;
   let idle: number | null = null;
   let supersededAt: number | null = null;
+  let asking = false;
   for (const message of messages) {
     if (message.type === 'user') {
       if (outcome === 'succeeded' && lastAssistant !== assistant) outcome = null;
@@ -122,15 +125,17 @@ function interval(messages: readonly SessionMessageInfo[], target?: string): Tur
       if (target === message.id || target === undefined && outcome === 'succeeded' && assistant !== null) {
         return { state: outcome === null ? 'running' : 'terminal', prompt_id: message.id, prompt_at: message.time.created, text: texts.reverse().join('\n'),
           outcome, error, assistant_id: outcome === 'failed' || outcome === 'interrupted' ? lastAssistant ?? assistant : assistant,
-          completed_at: outcome === null ? null : outcome === 'succeeded' ? completed ?? idle : idle ?? completed };
+          completed_at: outcome === null ? null : outcome === 'succeeded' ? completed ?? idle : idle ?? completed,
+          ...(outcome === null && asking ? { asking: true } : {}) };
       }
       supersededAt = lastAssistant !== null || idle !== null ? message.time.created : null;
-      texts = []; outcome = null; error = null; assistant = null; lastAssistant = null; latestWorkAt = null; completed = null; idle = null;
+      texts = []; outcome = null; error = null; assistant = null; lastAssistant = null; latestWorkAt = null; completed = null; idle = null; asking = false;
     } else if (message.type === 'idle' && outcome === null && (latestWorkAt === null || message.time.created >= latestWorkAt)) {
       outcome = message.outcome;
       error = message.error ?? null;
       idle = message.time.created;
     } else if (message.type === 'assistant') {
+      if (lastAssistant === null) asking = message.content.some((part) => part.type === 'tool' && part.name === 'question' && part.state.status === 'running');
       lastAssistant ??= message.id;
       latestWorkAt = Math.max(latestWorkAt ?? 0, message.time.created, message.time.streamed ?? 0, message.time.completed ?? 0);
       if (idle !== null && latestWorkAt > idle) { outcome = null; idle = null; error = null; }

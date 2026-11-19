@@ -153,12 +153,13 @@ export function claim(db: DatabaseSync, cfg: Config, runId: string, at?: string,
         AND earlier.state IN ('queued','running','parked')
         ${options.runtime ? "AND (earlier.kind NOT IN ('sync','archive','purge') OR earlier.state='running')" : ''})
       AND (j.kind<>'triage' OR ?<?)
-      AND (j.kind NOT IN ('start_chat','forward') OR j.reserved_at IS NOT NULL OR j.turn_id IS NOT NULL OR ?<?)
+      AND (j.kind NOT IN ('start_chat','forward') OR j.reserved_at IS NOT NULL OR j.turn_id IS NOT NULL OR ?<? OR json_extract(j.payload,'$.force')=1)
       ${options.runtime ? `AND (j.kind<>'triage' OR ?=1)
-        AND (j.kind NOT IN ('start_chat','forward') OR j.turn_id IS NOT NULL OR j.reserved_at IS NOT NULL OR ?=1)
+        AND (j.kind NOT IN ('start_chat','forward') OR j.turn_id IS NOT NULL OR j.reserved_at IS NOT NULL OR ?=1 OR json_extract(j.payload,'$.force')=1 AND ?=1)
         AND (j.kind NOT IN ('sync','archive','purge') OR j.ticket IS NULL OR NOT ${pendingInputSql('j.ticket', 'j.id')})` : ''}
       ORDER BY j.fifo,j.id LIMIT 1`).get(now, triage, cfg.jobs.triage_concurrency, slots, cfg.jobs.turn_concurrency,
-        ...(options.runtime ? [Number(cfg.tickets.enabled), Number(cfg.tickets.enabled && cfg.chats.enabled && options.inputReady !== false)] : []));
+        ...(options.runtime ? [Number(cfg.tickets.enabled), Number(cfg.tickets.enabled && cfg.chats.enabled && options.inputReady !== false),
+          Number(cfg.tickets.enabled && cfg.chats.enabled)] : []));
     if (!row) return null;
     const id = Number(row.id);
     db.prepare(`UPDATE job SET state='running',lease_until=?,lease_token=?,run_id=?,lease_seconds=?,updated_at=?,
@@ -219,6 +220,13 @@ export function retry(db: DatabaseSync, id: number, options: { queued?: boolean 
     lease_until=NULL,lease_token=NULL,run_id=NULL,updated_at=? WHERE id=? AND
     (state='parked' OR ?=1 AND state='queued' AND failures>0 AND error_class IS NOT NULL)`).run(now, now, id, Number(options.queued === true)).changes;
   if (!changed) throw new Error(`Job ${id} is not ${options.queued ? 'parked or failed queued work' : 'parked'}`);
+}
+
+// Start now on a card whose chat input is not sent yet: that input skips the chat slots and the restart hold, keeping its ticket's order
+export function startNow(db: DatabaseSync, ticket: number): number {
+  const now = utc();
+  return Number(db.prepare(`UPDATE job SET payload=json_set(payload,'$.force',json('true')),next_at=?,updated_at=?
+    WHERE ticket=? AND kind IN ('start_chat','forward') AND state='queued' AND turn_id IS NULL AND reserved_at IS NULL`).run(now, now, ticket).changes);
 }
 
 export function park(db: DatabaseSync, id: number, reason: string): void {
@@ -394,9 +402,12 @@ export function fail(db: DatabaseSync, cfg: Config, job: Job, error: unknown, op
 }
 
 function reservations(db: DatabaseSync): number {
+  // An admitted turn whose collector saw it asking Antonio a question holds no slot: it can wait on him for hours
   return Number(db.prepare(`SELECT
     (SELECT COUNT(*) FROM job WHERE reserved_at IS NOT NULL AND turn_id IS NULL) +
-    (SELECT COUNT(*) FROM turn WHERE state IN ('admitted','running') OR state='prepared' AND reserved_at IS NOT NULL) AS n`).get()!.n);
+    (SELECT COUNT(*) FROM turn t WHERE t.state IN ('admitted','running') AND NOT EXISTS (SELECT 1 FROM job c WHERE c.kind='collect'
+      AND c.ticket=t.ticket AND json_extract(c.payload,'$.turn')=t.id AND json_extract(c.payload,'$.asking')=1)
+      OR t.state='prepared' AND t.reserved_at IS NOT NULL) AS n`).get()!.n);
 }
 
 export function reserveTurn(db: DatabaseSync, cfg: Config, job: Job, turnId: number, at?: string): boolean {

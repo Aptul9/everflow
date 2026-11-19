@@ -262,6 +262,26 @@ test('a ticket with a chat says where the chat is, from the moment it opens', ()
   expect(within(card).queryByRole('link', { name: /OpenChamber web/ })).toBeNull();
 });
 
+test('an approved chat queued over a minute shows Chat not started with Start now, which posts start-now', async () => {
+  fetcher.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => init?.method === 'POST' && String(input) === '/api/ticket/3/start-now'
+    ? Response.json({ ticket: 3 }) : new Response(null, { status: 304 }));
+  const state = uiState();
+  Object.assign(state.groups.working[0]!, { chat_waiting_since: new Date(Date.now() - 5 * 60_000).toISOString() });
+  board(state);
+  const card = screen.getByRole('article', { name: 'Ticket #3: Active work' });
+  expect(within(card).getByText(/^Chat not started, queued /)).toBeTruthy();
+  await userEvent.click(within(card).getByRole('button', { name: 'Start the chat of ticket #3 now' }));
+  expect(fetcher).toHaveBeenCalledWith('/api/ticket/3/start-now', expect.objectContaining({ method: 'POST' }));
+});
+
+test('an approved chat queued under a minute shows no Start now', () => {
+  const state = uiState();
+  Object.assign(state.groups.working[0]!, { chat_waiting_since: new Date(Date.now() - 10_000).toISOString() });
+  board(state);
+  const card = screen.getByRole('article', { name: 'Ticket #3: Active work' });
+  expect(within(card).queryByRole('button', { name: 'Start the chat of ticket #3 now' })).toBeNull();
+});
+
 test('with a chat origin Open shows the chat on the board: the chat view framed with the folder the server resolved', async () => {
   fetcher.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => init?.method === 'POST' && String(input) === '/api/ticket/3/open-chat'
     ? Response.json({ ticket: 3, session_id: 'ses_synthetic123', directory: '/home/aptul/Vault' }) : new Response(null, { status: 304 }));

@@ -940,3 +940,25 @@ test('concurrent triage claims cannot exceed the global triage cap', async () =>
   expect(results.filter((id) => id !== null)).toHaveLength(2);
   expect(db.prepare("SELECT COUNT(*) AS n FROM job WHERE kind='triage' AND state='running'").get()?.n).toBe(2);
 });
+
+test('a turn asking Antonio a question frees its chat slot; Start now skips the slots and the restart hold', () => {
+  const { path, cfg } = fixture({ turn_concurrency: 1 });
+  cfg.tickets.enabled = cfg.chats.enabled = true;
+  using db = openDb(path);
+  const busy = ticket(db, 'Busy chat');
+  const admitted = turn(db, busy, 'msg_busy', 'admitted');
+  const collector = jobs.enqueue(db, 'collect', 'collect:busy', { turn: admitted }, busy);
+  db.prepare("UPDATE job SET next_at='2026-11-06T01:00:00.000000Z' WHERE id=?").run(collector);
+  const fresh = ticket(db, 'Fresh chat');
+  const start = jobs.enqueue(db, 'start_chat', 'start:fresh', {}, fresh);
+  expect(jobs.claim(db, cfg, 'run-1', AT, { runtime: true })).toBeNull();
+  db.prepare("UPDATE job SET payload=json_set(payload,'$.asking',json('true')) WHERE id=?").run(collector);
+  expect(jobs.claim(db, cfg, 'run-1', AT, { runtime: true })?.id).toBe(start);
+  const later = ticket(db, 'Later chat');
+  const waiting = jobs.enqueue(db, 'start_chat', 'start:later', {}, later);
+  expect(jobs.claim(db, cfg, 'run-1', AT, { runtime: true })).toBeNull();
+  expect(jobs.claim(db, cfg, 'run-1', AT, { runtime: true, inputReady: false })).toBeNull();
+  expect(jobs.startNow(db, later)).toBe(1);
+  expect(jobs.startNow(db, busy)).toBe(0);
+  expect(jobs.claim(db, cfg, 'run-1', AT, { runtime: true, inputReady: false })?.id).toBe(waiting);
+});
