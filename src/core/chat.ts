@@ -594,7 +594,11 @@ export async function collect(cfg: Config, db: DatabaseSync, job: Job, options: 
     const peer = options.peer ?? connect(cfg);
     let result: Completion = await peer.turnDetail(turn.session_id, turn.prompt_id, options.signal);
     if (result.state === 'waiting' || result.state === 'running') {
-      defer(db, job, after(now(), cfg.jobs.collect_seconds), undefined, now);
+      // A chat waiting on Antonio's answer gives its slot back until it runs again
+      const payload = currentJob(db, job).payload;
+      const asking = result.asking === true;
+      defer(db, job, after(now(), cfg.jobs.collect_seconds), (payload.asking === true) === asking ? undefined
+        : asking ? { ...payload, asking: true } : Object.fromEntries(Object.entries(payload).filter(([key]) => key !== 'asking')), now);
       return;
     }
     if (result.state === 'absent') result = { ...result, state: 'terminal', outcome: 'lost', completed_at: Date.parse(now()),

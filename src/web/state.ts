@@ -25,12 +25,14 @@ export function ticketDetail(db: DatabaseSync, id: number): TicketDetail {
   const timeline = view.timeline.map(({ id, at, kind, actor, body, link }) => ({ id, at, kind, actor, body, link }));
   const refs = (view.refs as unknown as (Reference & { ticket: number })[]).map(({ id, kind, key, url, seen_in }) => ({ id, kind, key, url, seen_in }))
     .sort((a, b) => b.id - a.id);
+  const waiting = row.lifecycle === 'active' && row.approved_at ? db.prepare(`SELECT MIN(created_at) AS at FROM job WHERE ticket=?
+    AND kind IN ('start_chat','forward') AND state='queued' AND turn_id IS NULL AND reserved_at IS NULL`).get(id)?.at : null;
   const ticket: TicketCard = { id: row.id, title: row.title, client: row.client, lifecycle: row.lifecycle,
     stage: row.lifecycle === 'dismissed' ? 'Dismissed' : row.lifecycle === 'done' ? 'Done' : view.stage,
     summary: row.summary, ask: row.ask, proposal: row.proposal, confidence: row.confidence, maybe_ticket: row.maybe_ticket,
     kb_notes: (JSON.parse(row.kb_notes) as unknown[]).filter((value): value is string => typeof value === 'string'),
     created_at: row.created_at, last_activity_at: row.last_activity_at, closed_at: row.closed_at, report: row.report,
-    report_line: row.report_line, session_id: row.session_id, chat_running: !!row.chat_running_at, session_title: row.session_title, reason: timeline.find((event) => event.kind === 'triage')?.body ?? null,
+    report_line: row.report_line, session_id: row.session_id, chat_running: !!row.chat_running_at, chat_waiting_since: typeof waiting === 'string' ? waiting : null, session_title: row.session_title, reason: timeline.find((event) => event.kind === 'triage')?.body ?? null,
     timeline_revision: representation(timeline).etag, messages, refs };
   return { ticket, messages, refs, timeline };
 }

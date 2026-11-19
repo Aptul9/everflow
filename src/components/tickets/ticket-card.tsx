@@ -209,9 +209,9 @@ export function TicketCard(props: {
   const timelineId = useId();
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
-  const keys = { start: `ticket:${ticket.id}:start`, discuss: `ticket:${ticket.id}:discuss`, dismiss: `ticket:${ticket.id}:dismiss`, close: `ticket:${ticket.id}:close`, clear: `ticket:${ticket.id}:clear` };
+  const keys = { start: `ticket:${ticket.id}:start`, discuss: `ticket:${ticket.id}:discuss`, dismiss: `ticket:${ticket.id}:dismiss`, close: `ticket:${ticket.id}:close`, clear: `ticket:${ticket.id}:clear`, startNow: `ticket:${ticket.id}:start-now` };
   const terminal = ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed';
-  const error = props.errors[keys.start] || props.errors[keys.discuss] || props.errors[keys.dismiss] || props.errors[keys.close] || props.errors[keys.clear];
+  const error = props.errors[keys.start] || props.errors[keys.discuss] || props.errors[keys.dismiss] || props.errors[keys.close] || props.errors[keys.clear] || props.errors[keys.startNow];
   const style = tones[tone(ticket)];
   const actions = props.enabled && !terminal;
   const starting = props.pending.has(keys.start);
@@ -240,6 +240,16 @@ export function TicketCard(props: {
           className={cn('ml-auto', chatLink)}>
           Open<ExternalLink aria-hidden="true" className="size-3" />
         </a>}
+      </p>}
+      {/* Approved input queued for more than a minute: other chats hold every slot, or old work holds new input after a restart */}
+      {actions && props.chats && ticket.chat_waiting_since && props.now - Date.parse(ticket.chat_waiting_since) > 60_000 && <p
+        className="flex min-w-0 items-center gap-1.5 rounded-md bg-warning-soft px-2 py-1 text-xs font-medium text-warning">
+        <Clock aria-hidden="true" className="size-3.5 shrink-0" />
+        <span className="min-w-0">{`${ticket.session_id ? 'New input not sent' : 'Chat not started'}, queued ${age(props.now, ticket.chat_waiting_since)}`}</span>
+        <button type="button" aria-label={`Start the chat of ticket #${ticket.id} now`} title="Skip the queue for this ticket" className={cn('ml-auto', chatLink)}
+          disabled={props.expired || props.pending.has(keys.startNow)} onClick={() => { void post(keys.startNow, `/api/ticket/${ticket.id}/start-now`).catch(() => {}); }}>
+          Start now<Play aria-hidden="true" className="size-3" />
+        </button>
       </p>}
       <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
         <Badge className={cn('border-transparent px-1.5 text-[11px]', style.badge)}>{ticket.lifecycle === 'proposed' ? 'Proposed' : ticket.stage}</Badge>

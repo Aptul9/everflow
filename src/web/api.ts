@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { approve } from '../core/approval.ts';
 import { transaction } from '../core/db.ts';
 import { markSeen, readInitiatives, requestRefresh } from '../core/initiative-state.ts';
-import { retry } from '../core/jobs.ts';
+import { retry, startNow } from '../core/jobs.ts';
 import { requestModelOptions, saveSetting } from '../core/settings.ts';
 import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, MUTE_MAX_MINUTES, muteBatch, muteTicket, pauseInput, TicketError } from '../core/tickets.ts';
 import { HttpError, instance, withDatabase } from './instance.ts';
@@ -219,7 +219,7 @@ export async function actionPost(request: Request, scope: 'ticket' | 'batch' | '
     if (scope === 'ticket' && action === 'chat-files') return await chatFiles(current, value);
     if (scope === 'ticket' && action === 'chat-file') return await chatFile(current, value, input.path!, input.download === true);
     if (scope === 'ticket' && action === 'chat-file-info') return await chatFileInfo(current, value, input.path!);
-    if (scope === 'ticket' && ['start', 'chat', 'discuss'].includes(action) && !current.config.chats.enabled) throw new HttpError(409, 'chats.disabled', 'Chats off');
+    if (scope === 'ticket' && ['start', 'chat', 'discuss', 'start-now'].includes(action) && !current.config.chats.enabled) throw new HttpError(409, 'chats.disabled', 'Chats off');
     const result = withDatabase(true, (db) => transaction(db, () => {
       if (scope === 'ticket' && action === 'start') return { ticket: approve(current.config, db, value) };
       if (scope === 'ticket' && action === 'chat') return { ticket: approve(current.config, db, value, input.note!) };
@@ -232,6 +232,12 @@ export async function actionPost(request: Request, scope: 'ticket' | 'batch' | '
       }
       if (scope === 'ticket' && action === 'close') return { ticket: close(db, value, input.reason ?? '') };
       if (scope === 'ticket' && action === 'clear') return { ticket: clearTicket(db, value) };
+      if (scope === 'ticket' && action === 'start-now') {
+        const owner = db.prepare('SELECT lifecycle,approved_at FROM ticket WHERE id=?').get(value);
+        if (!owner) throw new HttpError(404, 'ticket.not-found', `Ticket ${value} not found`);
+        if (owner.lifecycle !== 'active' || !owner.approved_at || !startNow(db, value)) throw new HttpError(409, 'ticket.conflict', `Ticket ${value} has no chat input waiting to start`);
+        return { ticket: value };
+      }
       if (scope === 'batch' && action === 'ticket') return { ticket: makeTicket(db, value, undefined, 'you', current.config) };
       if (scope === 'batch' && action === 'mute') return { conversation: muteBatch(db, value, inMinutes(input.minutes, input.hours)!) };
       if (scope === 'batch' && action === 'clear') return { batch: clearBatch(db, value) };

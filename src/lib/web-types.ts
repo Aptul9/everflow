@@ -37,6 +37,8 @@ export interface TicketCard {
   report_line: string | null;
   session_id: string | null;
   chat_running: boolean;
+  // Approved input not yet sent to the chat, queued since then; null when nothing waits
+  chat_waiting_since: string | null;
   session_title: string | null;
   reason: string | null;
   timeline_revision: string;

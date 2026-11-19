@@ -197,6 +197,27 @@ test('collects only completed text inside exact target interval across all pages
   expect(await api.turnDetail('ses_1', 'msg_target')).toMatchObject({ state: 'running', text: '', outcome: null, assistant_id: null });
 });
 
+test('a running turn whose latest step is an open question is asking; an earlier answered question is not', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg } = config(peer.url);
+  peer.sessions.set('ses_1', remoteSession('ses_1', cfg.opencode.directory));
+  const question = (id: string, status: 'running' | 'completed') => {
+    const message = answer(id, 'Draft for Antonio', false);
+    if (message.type !== 'assistant') throw new Error('Expected assistant fixture');
+    message.content.push({ type: 'tool', id: `tool_${id}`, name: 'question', time: { created: PEER_AT },
+      state: status === 'running' ? { status, input: { questions: [] }, metadata: {} }
+        : { status, input: {}, content: [{ type: 'text', text: 'Yes' }] as [{ type: 'text'; text: string }] } } as never);
+    return message;
+  };
+  const api = transport.connect(cfg);
+  peer.messages.set('ses_1', [user('msg_target'), question('asst_ask', 'running')]);
+  expect(await api.turnDetail('ses_1', 'msg_target')).toMatchObject({ state: 'running', asking: true });
+  peer.messages.set('ses_1', [user('msg_target'), question('asst_ask', 'completed'), answer('asst_after', 'Working on it', false)]);
+  expect(await api.turnDetail('ses_1', 'msg_target')).not.toHaveProperty('asking');
+  peer.messages.set('ses_1', [user('msg_target'), question('asst_ask', 'running'), user('msg_later')]);
+  expect(await api.turnDetail('ses_1', 'msg_later')).not.toHaveProperty('asking');
+});
+
 test('P06 paged exact input concatenates two completed assistants in order and excludes tool, earlier and later text', async () => {
   await using peer = await scriptedPeer();
   const { cfg } = config(peer.url);
