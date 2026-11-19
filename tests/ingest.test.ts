@@ -284,15 +284,17 @@ test('a batch whose newest message is own becomes answered; a reply followed by 
   expect(db.prepare('SELECT state,outcome FROM batch ORDER BY id DESC LIMIT 1').get()).toEqual({ state: 'pending', outcome: 'triage' });
 });
 
-test('my reply on a chat whose ticket is still proposed dismisses it, outside triage feedback', () => {
+test('my reply on a chat whose ticket is still proposed shows on it and leaves it proposed; old answered-myself dismissals stay out of feedback', () => {
   const { path, cfg } = enabledFixture();
   using db = openDb(path);
   ingest(db, line({ message_id: 'question', sent_at: '2026-11-05T23:40:00Z' }));
   const proposed = Number(db.prepare("INSERT INTO ticket(title,lifecycle,created_at) VALUES ('Proposed','proposed',?)").run(AT).lastInsertRowid);
   db.prepare('INSERT INTO ticket_conversation VALUES (?,1,\'primary\',\'rule\',?)').run(proposed, AT);
-  ingest(db, line({ message_id: 'answer', sender_is_me: true, sent_at: '2026-11-05T23:54:00Z' }));
+  ingest(db, line({ message_id: 'answer', sender_is_me: true, text: 'ah già', sent_at: '2026-11-05T23:54:00Z' }));
   expect(api.schedule?.(db, cfg, AT)).toEqual([]);
-  expect(db.prepare('SELECT lifecycle,report_line FROM ticket WHERE id=?').get(proposed)).toEqual({ lifecycle: 'dismissed', report_line: tickets.ANSWERED_MYSELF });
+  expect(db.prepare('SELECT lifecycle,report_line FROM ticket WHERE id=?').get(proposed)).toEqual({ lifecycle: 'proposed', report_line: null });
+  expect(db.prepare("SELECT body FROM timeline WHERE ticket=? AND kind='message'").all(proposed)).toContainEqual({ body: 'ah già' });
+  tickets.dismiss(db, proposed, tickets.ANSWERED_MYSELF, AT);
   expect(tickets.feedback(db)).toMatchObject({ dismiss_count: 0, dismiss_reasons: [] });
   tickets.dismiss(db, Number(db.prepare("INSERT INTO ticket(title,lifecycle,created_at) VALUES ('Wrong','proposed',?)").run(AT).lastInsertRowid), 'not mine', AT);
   expect(tickets.feedback(db)).toMatchObject({ dismiss_count: 1, dismiss_reasons: [{ reason: 'not mine' }] });

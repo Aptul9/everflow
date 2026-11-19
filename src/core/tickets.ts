@@ -845,7 +845,7 @@ export function makeTicket(db: DatabaseSync, batch: number, at?: string, actor: 
   });
 }
 
-// Dismissal when Antonio answers a still-proposed ticket's chat himself; triage proposed it rightly, so it is no feedback
+// Reason of the dismissals made when Antonio's own reply settled a proposed ticket (no longer automatic); kept out of triage feedback
 export const ANSWERED_MYSELF = 'Answered myself in the source chat';
 
 export function feedback(db: DatabaseSync) {
