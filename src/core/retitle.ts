@@ -117,11 +117,17 @@ export function applySessionEvent(db: DatabaseSync, event: SessionEvent, at = ut
   if (!owner) return false;
   const ticket = Number(owner.id);
   const status = event.type === 'session.status' ? event.data?.status?.type : undefined;
+  // A recovery waiting out a backoff checks now whether this activity is Antonio carrying on in the chat; it keeps its backoff otherwise
+  const recheck = () => db.prepare(`UPDATE job SET payload=json_set(payload,'$.backoff_until',COALESCE(json_extract(payload,'$.backoff_until'),next_at)),
+    next_at=?,updated_at=? WHERE ticket=? AND kind='forward' AND state='queued' AND next_at>?
+    AND turn_id IN (SELECT id FROM turn WHERE kind='recovery' AND state='prepared')`).run(at, at, ticket, at);
   if (event.type === 'session.execution.started' || status === 'busy' || status === 'retry') {
     db.prepare('UPDATE ticket SET chat_running_at=COALESCE(chat_running_at,?) WHERE id=?').run(at, ticket);
+    recheck();
   } else if (event.type === 'session.idle' || status === 'idle' || event.type === 'session.execution.succeeded'
     || event.type === 'session.execution.failed' || event.type === 'session.execution.interrupted') {
     db.prepare('UPDATE ticket SET chat_running_at=NULL WHERE id=?').run(ticket);
+    recheck();
     // An input Everflow sent is read by its collector, otherwise by the ticket's sync: either is due now
     db.prepare("UPDATE job SET next_at=? WHERE ticket=? AND kind='collect' AND state='queued' AND next_at>?").run(at, ticket, at);
     syncNow(db, ticket, at);
