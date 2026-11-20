@@ -174,3 +174,39 @@ export interface InitiativeView {
 export interface InitiativesState {
   initiatives: InitiativeView[]; today: string; views: Record<string, number>; requested: boolean; refreshing: boolean; providers: boolean;
 }
+// Initiative guide (/overview/<id>): a plain-language explainer of one initiative, written in Italian from its vault note and
+// related notes. Every fact cites source ids (L = log entry, S = note section, N = related note, T = ticket); general
+// explanations (concepts, glossary) may cite none and carry general: true. sources holds only the ids cited.
+export interface ExplainerSource { id: string; kind: 'log' | 'section' | 'note' | 'ticket'; date?: string; text: string }
+export type ExplainerDiagramKind = 'flow' | 'nest' | 'split' | 'hub' | 'row' | 'one';
+export interface ExplainerDiagram { t: ExplainerDiagramKind; i: string[]; hi?: number; b?: string }
+export interface ExplainerTeam { id: string; name: string; plain: string; kind: 'client' | 'us' | 'platform' | 'security' | 'vendor' | 'other'; people: string[] }
+export interface ExplainerPerson { id: string; name: string; short: string; team: string; role: string; plain: string; ask_for: string; how: string; src: string[] }
+export interface ExplainerConcept { id: string; title: string; plain: string; analogy: string; say: string; diagram: ExplainerDiagram | null; src: string[] }
+export interface ExplainerTerm { id: string; term: string; aliases: string[]; short: string; long: string; diagram: ExplainerDiagram | null; general: boolean; src: string[] }
+export type ExplainerItemStatus = 'done' | 'doing' | 'todo' | 'blocked';
+export interface ExplainerPhase { id: string; title: string; plain: string; items: { title: string; status: ExplainerItemStatus; note: string; src: string[] }[] }
+// Graph: owes = a person (or "you") owes a node; unblocks = a node makes the next node (or "goal") possible
+export interface ExplainerNode { id: string; kind: 'task' | 'deliverable' | 'decision' | 'answer'; label: string; plain: string; status: 'open' | 'done' | 'blocked'; owner: string; since: string | null; src: string[] }
+export interface ExplainerEdge { from: string; to: string; kind: 'owes' | 'unblocks'; why: string; src: string[] }
+export interface Explainer {
+  title: string; one_liner: string; why: string[]; role: string;
+  teams: ExplainerTeam[]; people: ExplainerPerson[]; concepts: ExplainerConcept[]; glossary: ExplainerTerm[];
+  warnings: { title: string; text: string; src: string[] }[];
+  ask_who: { need: string; who: string; how: string }[];
+  phases: ExplainerPhase[];
+  timeline: { date: string; title: string; plain: string; src: string[] }[];
+  goal: { label: string; plain: string };
+  graph: { nodes: ExplainerNode[]; edges: ExplainerEdge[] };
+  blocked_by: { title: string; plain: string; who: string; since: string | null; node: string | null; src: string[] }[];
+  next_you: { text: string; why: string; src: string[] }[];
+  sources: Record<string, ExplainerSource>;
+  // notes read besides the main note, items dropped for citing nothing valid, model that wrote it
+  notes: string[]; rejected: number; model: string;
+}
+// What the guide page gets: the initiative (with its summary), the stored guide and its run state
+export interface GuideState {
+  initiative: InitiativeView; today: string;
+  at: string | null; explainer: Explainer | null; error: string | null; error_at: string | null;
+  requested: boolean; running: boolean; providers: boolean;
+}
