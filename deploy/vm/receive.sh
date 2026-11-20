@@ -1,7 +1,9 @@
 #!/bin/sh
 # Forced command of the pipeline deploy key in ~aptul4ever/.ssh/authorized_keys (restrict,command=".../everflow-receive").
-# stdin: `git archive` tar.gz of the commit. SSH_ORIGINAL_COMMAND: "<commit sha> <archive sha256> <user, base64> <scrypt hash, base64>".
-# The page sign-in (user and hash) goes to ~/everflow/instance/login.env for everflow.service; the password never reaches the VM.
+# stdin: `git archive` tar.gz of the commit. SSH_ORIGINAL_COMMAND: "<commit sha> <archive sha256> <user, base64> <scrypt hash, base64>
+# [sign-in settings, base64]". The page sign-in (user and hash) goes to ~/everflow/instance/login.env for everflow.service; the
+# password never reaches the VM. The optional fifth word is KEY=value lines for the same file: the EverID client (OIDC_ISSUER,
+# OIDC_CLIENT_ID, OIDC_CLIENT_SECRET) and EVERFLOW_PASSWORD_LOGIN (on/off), each key and value checked before use.
 # Builds the commit on the VM, installs the instance files from deploy/vm, pins the new build and restarts the daemon; when the
 # page does not answer after the restart the previous build is pinned again and the deploy fails.
 set -euf
@@ -16,13 +18,27 @@ exec 9> "$root/deploy.lock"
 flock -n 9 || { echo "another deploy is running" >&2; exit 75; }
 
 set -- ${SSH_ORIGINAL_COMMAND:-}
-[ "$#" -eq 4 ] || { echo "usage: <commit> <sha256> <user-b64> <hash-b64>" >&2; exit 2; }
-commit=$1 sum=$2 user_b64=$3 hash_b64=$4
+[ "$#" -eq 4 ] || [ "$#" -eq 5 ] || { echo "usage: <commit> <sha256> <user-b64> <hash-b64> [settings-b64]" >&2; exit 2; }
+commit=$1 sum=$2 user_b64=$3 hash_b64=$4 settings_b64=${5:-}
 printf '%s' "$commit" | grep -Eq '^[0-9a-f]{40}$' || { echo "invalid commit" >&2; exit 2; }
 printf '%s' "$sum" | grep -Eq '^[0-9a-f]{64}$' || { echo "invalid sha256" >&2; exit 2; }
 user=$(printf '%s' "$user_b64" | base64 -d) hash=$(printf '%s' "$hash_b64" | base64 -d)
 printf '%s' "$user" | grep -Eq '^[A-Za-z0-9._@+-]{1,128}$' || { echo "invalid user" >&2; exit 2; }
 printf '%s' "$hash" | grep -Eq '^scrypt\$[0-9]+\$[0-9]+\$[0-9]+\$[A-Za-z0-9_-]{16,}\$[A-Za-z0-9_-]{43}$' || { echo "invalid scrypt hash" >&2; exit 2; }
+# only known keys, values without quotes or spaces: each line goes single-quoted into login.env
+settings=$(printf '%s' "$settings_b64" | base64 -d) || { echo "invalid sign-in settings" >&2; exit 2; }
+settings=$(printf '%s\n' "$settings" | while IFS= read -r line; do
+  [ -n "$line" ] || continue
+  key=${line%%=*} value=${line#*=}
+  case "$key" in
+    OIDC_ISSUER) pattern='^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/[A-Za-z0-9/._-]*$' ;;
+    OIDC_CLIENT_ID|OIDC_CLIENT_SECRET) pattern='^[A-Za-z0-9._~-]{1,256}$' ;;
+    EVERFLOW_PASSWORD_LOGIN) pattern='^(on|off)$' ;;
+    *) echo "unknown sign-in setting" >&2; exit 2 ;;
+  esac
+  [ "$key" != "$line" ] && printf '%s' "$value" | grep -Eq "$pattern" || { echo "invalid $key" >&2; exit 2; }
+  printf "%s='%s'\n" "$key" "$value"
+done) || exit 2
 # the client-supplied words are parsed; globbing is needed again for the cleanup below
 set +f
 command -v node >/dev/null && [ "$(node -v)" = "v26.4.0" ] || { echo "Node v26.4.0 missing in ~/.local/lib/node26 (deploy/vm/bootstrap.sh)" >&2; exit 1; }
@@ -68,7 +84,8 @@ install -m 644 "$vm/Caddyfile" "$root/caddy/Caddyfile"
 install -m 644 "$vm/compose.yml" "$root/caddy/compose.yml"
 (umask 077; printf "EVERFLOW_DOMAIN='%s'\nEVERFLOW_CHAT_DOMAIN='%s'\n" "$domain" "$chat_domain" > "$root/caddy/.env")
 # single quotes: the '$' of the hash stays literal
-(umask 077; printf "EVERFLOW_LOGIN_USER='%s'\nEVERFLOW_LOGIN_HASH='%s'\n" "$user" "$hash" > "$instance/login.env")
+(umask 077; printf "EVERFLOW_LOGIN_USER='%s'\nEVERFLOW_LOGIN_HASH='%s'\n" "$user" "$hash" > "$instance/login.env"
+  [ -z "$settings" ] || printf '%s\n' "$settings" >> "$instance/login.env")
 docker compose -f "$root/caddy/compose.yml" up -d --remove-orphans
 # The Caddyfile is a single-file bind mount: install replaces the inode, so the running container keeps the old file and Caddy
 # never reloads. Recreate the container whenever what it reads differs from what was just installed.
