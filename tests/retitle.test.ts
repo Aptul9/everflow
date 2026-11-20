@@ -2,9 +2,11 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, expect, test } from 'vitest';
 import { loadConfig } from '../src/core/config.ts';
 import { openDb } from '../src/core/db.ts';
+import { ingest, schedule } from '../src/core/ingest.ts';
 import { applySessionEvent, reconcileTitles, RETITLE_WAKE, retitlePass, startRetitler, startSessionEvents, syncNow } from '../src/core/retitle.ts';
 import { boardColumn, stageTitle } from '../src/core/tickets.ts';
 import type { Stage } from '../src/core/tickets.ts';
+import { utc } from '../src/core/time.ts';
 import { readState } from '../src/web/state.ts';
 import { scratch } from './support.ts';
 
@@ -184,6 +186,24 @@ test('sync now requeues a finished sync with fresh counters and leaves pending i
   f.db.prepare("INSERT INTO job(kind,key,ticket,state,next_at,created_at,updated_at) VALUES ('forward','in',?,'queued',?,?,?)").run(other, AT, AT, AT);
   syncNow(f.db, other, AT);
   expect(f.db.prepare("SELECT COUNT(*) AS n FROM job WHERE kind='sync' AND ticket=?").get(other)!.n).toBe(0);
+});
+
+test('a mail the chat sent holds its sync while unbatched, and makes it due once settled as answered', () => {
+  const f = fixture();
+  f.cfg.tickets.enabled = true;
+  const id = ticket(f.db), proposed = Number(f.db.prepare("INSERT INTO ticket(title,lifecycle,created_at) VALUES ('Proposed','proposed',?)").run(AT).lastInsertRowid);
+  f.db.prepare(`INSERT INTO job(kind,key,ticket,state,next_at,created_at,updated_at) VALUES ('sync',?,?,'done','2026-11-13T10:05:00.000Z',?,?)`)
+    .run(`sync:ticket:${id}:${AT.slice(0, 10)}`, id, AT, AT);
+  const mail = (conversation: string) => ingest(f.db, { source: 'outlook', account: 'me@example.invalid', conversation_id: conversation, conversation_title: 'Outcome',
+    message_id: conversation, sender: 'me@example.invalid', sender_name: 'Me', sender_is_me: true, sent_at: '2026-11-13T09:50:00.000Z', text: 'Sent', attachments: [], ref: {} });
+  mail('C1'); mail('C2');
+  f.db.prepare("INSERT INTO ticket_conversation VALUES (?,1,'primary','rule',?),(?,2,'primary','rule',?)").run(id, AT, proposed, AT);
+  syncNow(f.db, id, AT);
+  expect(f.db.prepare("SELECT state FROM job WHERE kind='sync' AND ticket=?").get(id)!.state).toBe('done');
+  schedule(f.db, f.cfg, AT);
+  expect(f.db.prepare('SELECT ticket,outcome FROM batch ORDER BY id').all().map((row) => ({ ...row }))).toEqual([{ ticket: id, outcome: 'answered' }, { ticket: proposed, outcome: 'answered' }]);
+  expect({ ...f.db.prepare("SELECT state,next_at FROM job WHERE kind='sync' AND ticket=?").get(id) }).toEqual({ state: 'queued', next_at: utc(AT) });
+  expect(f.db.prepare("SELECT COUNT(*) AS n FROM job WHERE ticket=?").get(proposed)!.n).toBe(0);
 });
 
 test('reconcile marks stale stored titles and re-syncs chats last seen running', () => {
