@@ -1,5 +1,4 @@
 import type { Metadata } from 'next';
-import { LoginForm } from '@/components/login-form';
 import { instance } from '@/web/instance';
 import { safeNext } from '@/web/login';
 
@@ -14,6 +13,14 @@ const EVERID_ERRORS = ['everid.denied', 'everid.expired', 'everid.unavailable', 
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string; error?: string }> }) {
   const params = await searchParams, current = instance();
   const error = EVERID_ERRORS.find((code) => code === params.error);
-  return <LoginForm next={safeNext(params.next, current.config.web.chat_origin)} password={current.login?.password ?? true}
-    everid={!!current.login?.oidc} {...(error ? { error } : {})} />;
+  const next = safeNext(params.next, current.config.web.chat_origin);
+  return (
+    <main className="relative grid min-h-dvh place-items-center bg-background px-4 py-10">
+      <div className="grid max-w-sm gap-4 text-center">
+        <h1 className="text-xl font-semibold">{error ? 'Accesso non riuscito' : current.login?.oidc ? 'Disconnessione effettuata' : 'Accesso non disponibile'}</h1>
+        {error && <p role="alert">Non è stato possibile completare l'accesso.</p>}
+        {current.login?.oidc && <a className="underline" href={`/oidc/start?next=${encodeURIComponent(next)}`}>Accedi</a>}
+      </div>
+    </main>
+  );
 }

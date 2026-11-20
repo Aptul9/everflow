@@ -44,6 +44,9 @@ export function signedIn(request: IncomingMessage, login: Login): boolean {
 const flowCookie = (value: string, maxAge: number) => `${OIDC_COOKIE}=${value}; Path=${CALLBACK_PATH}; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
 // The ID token of an EverID session, the hint EverID's end-session wants: host-only, only sent back to the sign-out
 const hintCookie = (value: string, maxAge: number) => `${HINT_COOKIE}=${value}; Path=/api/logout; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+// Prevent the provider's post-logout redirect to / from immediately starting another SSO session.
+const LOGGED_OUT = 'everflow_signed_out';
+const loggedOutCookie = (clear = false) => `${LOGGED_OUT}=${clear ? '' : '1'}; Path=/; HttpOnly; Secure; SameSite=Lax${clear ? '; Max-Age=0' : ''}`;
 const EVERID_CODES = new Set(['everid.denied', 'everid.expired', 'everid.unavailable', 'everid.failed']);
 
 /** GET /oidc/start (to EverID, with where to come back to) and GET /oidc/callback (EverID's answer: a session, or the sign-in page and why). */
@@ -58,7 +61,7 @@ function everid(request: IncomingMessage, response: ServerResponse, current: Web
   if (url.pathname === START_PATH) {
     const next = safeNext(url.searchParams.get('next'), chatOrigin);
     void oidc.start(next).then(({ location, cookie }) => {
-      response.writeHead(303, { location, 'set-cookie': flowCookie(cookie, FLOW_MS / 1000) }).end();
+      response.writeHead(303, { location, 'set-cookie': [flowCookie(cookie, FLOW_MS / 1000), loggedOutCookie(true)] }).end();
     }, (error: unknown) => {
       process.stderr.write(JSON.stringify({ event: 'everid.start', error: (error as Error).message }) + '\n');
       if (!response.headersSent) back((error as { code?: string }).code ?? 'everid.failed', next);
@@ -106,7 +109,7 @@ export function signIn(request: IncomingMessage, response: ServerResponse, curre
   }
   if (path === '/api/logout' && method === 'POST') {
     if (!sameOrigin) { json(403, 'login.origin', 'Origin rejected'); return true; }
-    const cookies = [...sessionCookies(current, null), ...(login.oidc ? [hintCookie('', 0)] : [])];
+    const cookies = [...sessionCookies(current, null), ...(login.oidc ? [hintCookie('', 0), loggedOutCookie()] : [])];
     // after an EverID session the page goes on to EverID's end-session (x-everflow-logout), which comes back to the page
     const everidSession = cookieValues(request.headers.cookie).some((value) => login.sessions.kind(value) === 'o1');
     if (!login.oidc || !everidSession) { response.writeHead(204, { 'set-cookie': cookies }).end(); return true; }
@@ -126,6 +129,16 @@ export function signIn(request: IncomingMessage, response: ServerResponse, curre
     const kind = cookieValues(request.headers.cookie).map((value) => login.sessions.kind(value)).find((found) => found !== undefined)!;
     const renew = cookieDomain(current.config.web.public_origin, current.config.web.chat_origin) ? { 'set-cookie': sessionCookies(current, login.sessions.issue(Date.now(), kind)) } : {};
     response.writeHead(303, { location: safeNext(url.searchParams.get('next'), current.config.web.chat_origin), ...renew }).end();
+    return true;
+  }
+  if (!signed && method === 'GET' && path === '/' && login.oidc && cookieValue(request.headers.cookie, LOGGED_OUT) === '1') {
+    response.writeHead(303, { location: '/login?logged_out=1' }).end();
+    return true;
+  }
+  if (!signed && method === 'GET' && path === '/login' && login.oidc && !url.searchParams.has('error') && !url.searchParams.has('logged_out')
+    && !(cookieValue(request.headers.cookie, LOGGED_OUT) === '1' && !url.searchParams.has('next'))) {
+    const next = safeNext(url.searchParams.get('next'), current.config.web.chat_origin);
+    response.writeHead(303, { location: `${START_PATH}?next=${encodeURIComponent(next)}` }).end();
     return true;
   }
   if (signed || openPath(method, path)) return false;

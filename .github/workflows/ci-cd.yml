@@ -146,17 +146,18 @@ jobs:
           done
           test "$(code "$base/api/state")" = 401
           test "$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$base/")" = "$base/login?next=%2F"
-          curl -fsS --max-time 15 "$base/login" | grep -q '<title>Sign in · Everflow</title>'
           chat=$(sed -n 's|^chat_origin = "\(https://[^"]*\)"$|\1|p' deploy/vm/config.toml)
           if [ -n "$OIDC_ISSUER" ]; then
-            # EverID: the start goes to the issuer's host with this page's callback, and the sign-in page offers it
+            # Login starts OIDC without a local credential form.
+            test "$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$base/login")" = "$base/oidc/start?next=%2F"
             to=$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$base/oidc/start?next=%2F")
             printf '%s\n' "$to" | sed 's/[?].*//'
             case "$to" in "https://$(printf '%s' "$OIDC_ISSUER" | sed 's|^https://||; s|/.*||')/"*) ;; *) echo "::error::/oidc/start did not go to EverID"; exit 1 ;; esac
             printf '%s' "$to" | grep -q "redirect_uri=$(jq -rn --arg u "$base/oidc/callback" '$u|@uri')"
             printf '%s' "$to" | grep -q 'code_challenge_method=S256'
-            curl -fsS --max-time 15 "$base/login" | grep -q 'Sign in with EverID'
             test "$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$base/oidc/callback?state=x&code=y")" = "$base/login?error=everid.expired"
+          else
+            curl -fsS --max-time 15 "$base/login" | grep -q 'Accesso non disponibile'
           fi
           if [ "$PASSWORD_LOGIN" = off ]; then
             # the fallback is off: the password is refused even when right; a session needs EverID in a browser

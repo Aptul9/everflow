@@ -136,7 +136,7 @@ test('served page: public host needs the sign-in, loopback does not, and a sessi
     expect(state.headers['x-everflow-login']).toBe('required');
     const page = await pub('/login');
     expect(page.status).toBe(200);
-    expect(page.text).toContain('Sign in to Everflow');
+    expect(page.text).toContain('Accesso non disponibile');
     expect(page.text).not.toContain('everflow-token');
 
     expect((await login({ email: 'me@example.invalid', password: 'synthetic secret' }, 'https://evil.example.invalid')).status).toBe(403);
