@@ -175,6 +175,13 @@ export function ingest(db: DatabaseSync, record: unknown): boolean {
         JSON.parse(String(previous.attachments ?? '[]')), JSON.parse(String(previous.ref ?? '{}'))];
       const title = message.conversation_title || previous.conversation_title;
       if (stable(before) === stable(after) && title === previous.conversation_title) return false;
+      // Same message, only its attachment list differs (a relay replay naming images it did not report before): the row is
+      // updated in place and keeps its batch, so input already judged is not judged or forwarded again
+      const without = (values: unknown[]) => stable([...values.slice(0, 5), values[6]]);
+      if (without(before) === without(after) && title === previous.conversation_title) {
+        db.prepare('UPDATE message SET attachments=? WHERE id=?').run(JSON.stringify(attachments), previous.id!);
+        return true;
+      }
     }
     let conversation = db.prepare('SELECT id,last_message_at FROM conversation WHERE source=? AND lower(account)=? AND native_id=?')
       .get(message.source, message.account.toLowerCase(), message.conversation_id);

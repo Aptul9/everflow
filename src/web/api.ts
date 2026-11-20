@@ -10,6 +10,9 @@ import { HttpError, instance, withDatabase } from './instance.ts';
 import type { WebInstance } from './instance.ts';
 import { readState, representation, ticketDetail } from './state.ts';
 
+import { messageAttachment } from './message-attachment.ts';
+import type { AttachmentRow } from './message-attachment.ts';
+
 export const MAX_BODY_BYTES = 32_768;
 const empty = z.strictObject({});
 const note = z.strictObject({ note: z.string().max(8_000).refine((value) => value.trim().length > 0, 'Note is required') });
@@ -104,6 +107,18 @@ export function ticketGet(request: Request, id: string): Response {
     const current = instance();
     if (!allowedHost(request.headers.get('host'), current.port, current.config.web.public_origin)) throw new HttpError(403, 'host.forbidden', 'Local Host required');
     return json(request, withDatabase(false, (db) => ticketDetail(db, validId(id))));
+  } catch (error) { return errorResponse(error); }
+}
+
+// An image or file of a source message, fetched from the Teams relay for the Messages list
+export async function attachmentGet(request: Request, id: string, index: string): Promise<Response> {
+  try {
+    const current = instance();
+    if (!allowedHost(request.headers.get('host'), current.port, current.config.web.public_origin)) throw new HttpError(403, 'host.forbidden', 'Local Host required');
+    const message = validId(id), position = validId(index);
+    const row = withDatabase(false, (db) => db.prepare('SELECT source,ref,attachments FROM message WHERE id=?').get(message)) as AttachmentRow | undefined;
+    if (!row) throw new HttpError(404, 'message.not-found', `Message ${message} not found`);
+    return await messageAttachment(current.config, row, position);
   } catch (error) { return errorResponse(error); }
 }
 

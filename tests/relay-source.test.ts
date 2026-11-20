@@ -144,7 +144,7 @@ test('numeric mid epochms, saved text cap, quote/files/ref and deletion markers 
   const fixture = relayFixture();
   {
     using db = new DatabaseSync(fixture.storePath);
-    db.prepare('UPDATE chat_messages SET text=?,mine=?,extra=? WHERE idx=0').run('x'.repeat(2500), 1, JSON.stringify({ files: [{ name: 'fixture.txt' }], quote: { author: 'Alice', text: 'Quoted body' } }));
+    db.prepare('UPDATE chat_messages SET text=?,mine=?,extra=? WHERE idx=0').run('x'.repeat(2500), 1, JSON.stringify({ images: [{ f: 'a1.jpg', w: 10, h: 10 }], files: [{ name: 'fixture.txt' }], quote: { author: 'Alice', text: 'Quoted body' } }));
     db.prepare('UPDATE chat_messages SET extra=? WHERE idx=1').run(JSON.stringify({ deletetime: '2026-11-04T10:05:00Z' }));
     db.prepare('INSERT INTO chat_messages VALUES(?,?,?,?,?,?,?)').run('Invalid numeric suffix', 99, mid + 'x', 'Bob', 'ignored', 0, '{}');
   }
@@ -152,7 +152,7 @@ test('numeric mid epochms, saved text cap, quote/files/ref and deletion markers 
   expect(snapshot.errors).toEqual([]);
   expect(snapshot.accounts[0]!.messages).toHaveLength(9);
   const first = snapshot.accounts[0]!.messages[0]!;
-  expect(first).toMatchObject({ sender_is_me: true, sent_at: new Date(Number(mid)).toISOString(), attachments: [{ name: 'fixture.txt', size: null }], ref: { relay_slot: 1, id: mid, account: 'me@example.invalid' } });
+  expect(first).toMatchObject({ sender_is_me: true, sent_at: new Date(Number(mid)).toISOString(), attachments: [{ name: 'image 1', size: null, kind: 'image' }, { name: 'fixture.txt', size: null, kind: 'file' }], ref: { relay_slot: 1, id: mid, account: 'me@example.invalid' } });
   expect(first.text).toBe('> in reply to Alice: Quoted body\n' + 'x'.repeat(2000));
   expect(snapshot.accounts[0]!.messages[1]).toMatchObject({ text: '', attachments: [], ref: { deleted: true } });
 });

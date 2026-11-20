@@ -1,6 +1,6 @@
 'use client';
 
-import { BookOpen, Check, Clock, ExternalLink, GitCommitVertical, LoaderCircle, Maximize2, MessageSquarePlus, MessagesSquare, Play, RotateCw, X } from 'lucide-react';
+import { BookOpen, Check, Clock, ExternalLink, GitCommitVertical, LoaderCircle, Maximize2, MessageSquarePlus, MessagesSquare, Paperclip, Play, RotateCw, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { SourceMessage, TicketCard as CardData, TicketDetail } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
@@ -58,6 +58,59 @@ export function Toggle({ expanded, controls, onClick, icon, children }: { expand
   </Button>;
 }
 
+// Why an attachment address failed: the relay's reason (light account, download queued...) or the status
+async function reasonOf(response: Response): Promise<string> {
+  const body = await response.json().catch(() => null) as { error?: { message?: unknown } } | null;
+  return typeof body?.error?.message === 'string' ? body.error.message : `Not available (${response.status})`;
+}
+
+async function failure(url: string): Promise<string> {
+  try { return await reasonOf(await fetch(url, { cache: 'no-store' })); } catch { return 'Not available'; }
+}
+
+function Attachment({ item }: { item: SourceMessage['attachments'][number] }) {
+  const [broken, setBroken] = useState('');
+  const [loading, setLoading] = useState(false);
+  const chip = 'inline-flex max-w-full min-w-0 items-center gap-1 rounded border bg-background px-1.5 py-0.5 text-[11px]';
+  if (!item.url) return <span className={cn(chip, 'text-muted-foreground')} title={item.name}><Paperclip aria-hidden="true" className="size-3 shrink-0" /><span className="truncate">{item.name}</span></span>;
+  if (item.kind === 'image' && !broken) {
+    return <Dialog>
+      <DialogTrigger asChild>
+        <button type="button" aria-label={`Show ${item.name}`} title={item.name}
+          className="block overflow-hidden rounded border bg-background focus-visible:outline-2 focus-visible:outline-ring">
+          <img src={item.url} alt={item.name} loading="lazy" className="h-20 max-w-40 object-cover"
+            onError={() => { void failure(item.url!).then(setBroken); }} />
+        </button>
+      </DialogTrigger>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] gap-3 overflow-auto sm:max-w-[min(1400px,calc(100vw-2rem))]">
+        <DialogHeader className="pr-10 text-left"><DialogTitle className="text-sm">{item.name}</DialogTitle><DialogDescription className="sr-only">Message attachment</DialogDescription></DialogHeader>
+        <img src={item.url} alt={item.name} className="mx-auto block h-auto max-w-full" />
+        <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary underline-offset-2 hover:underline">Open in a new tab</a>
+      </DialogContent>
+    </Dialog>;
+  }
+  return <span className="inline-flex max-w-full min-w-0 flex-col gap-0.5">
+    <a href={item.url} download={item.name} title={item.name} aria-busy={loading} className={cn(chip, 'text-primary hover:underline')}
+      onClick={(event) => {
+        // Fetched here, so a file the relay cannot give (download needs a browser, still queued) says why instead of a JSON page
+        event.preventDefault();
+        if (loading) return;
+        setLoading(true); setBroken('');
+        void fetch(item.url!, { cache: 'no-store' }).then(async (response) => {
+          if (!response.ok) { setBroken(await reasonOf(response)); return; }
+          const address = URL.createObjectURL(await response.blob());
+          const link = Object.assign(document.createElement('a'), { href: address, download: item.name });
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(address), 60_000);
+        }).catch(() => setBroken('Not available')).finally(() => setLoading(false));
+      }}>
+      {loading ? <LoaderCircle aria-hidden="true" className="size-3 shrink-0 animate-spin" /> : <Paperclip aria-hidden="true" className="size-3 shrink-0" />}
+      <span className="truncate">{item.name}</span>
+    </a>
+    {broken && <span role="status" className="text-[11px] text-destructive">{broken}</span>}
+  </span>;
+}
+
 export function MessageList({ id, messages }: { id: string; messages: SourceMessage[] }) {
   return <ScrollArea id={id} className="rounded-md border bg-muted/40 [&_[data-slot=scroll-area-viewport]]:max-h-72">
     <ol aria-label="Source messages" className="divide-y">
@@ -68,6 +121,9 @@ export function MessageList({ id, messages }: { id: string; messages: SourceMess
           <Time value={message.sent_at} />
         </p>
         <p className="text-[13px] whitespace-pre-wrap">{message.text ?? '(no text)'}</p>
+        {message.attachments?.length > 0 && <ul aria-label="Attachments" className="flex flex-wrap items-end gap-1.5 pt-1">
+          {message.attachments.map((item, index) => <li key={`${index}:${item.name}`} className="max-w-full min-w-0"><Attachment item={item} /></li>)}
+        </ul>}
       </li>)}
     </ol>
     {messages.length === 0 && <p className="px-2.5 py-2 text-xs text-muted-foreground">No source messages.</p>}

@@ -8,14 +8,26 @@ import type { Column, Message, Stage } from '../core/tickets.ts';
 import { modelChoice, readModelOptions } from '../core/settings.ts';
 import { calendarDay, utc } from '../core/time.ts';
 import type { Health, OverviewState, Reference, SkippedBatch, SourceMessage, TicketCard, TicketDetail, TriageBatch } from '../lib/web-types.ts';
+import { relayAttachment } from './message-attachment.ts';
 
 export { calendarDay };
 
+const IMAGE_NAME = /\.(?:png|jpe?g|gif|webp)$/i;
+
 function message(row: Message): SourceMessage {
-  let deleted = false;
-  try { deleted = JSON.parse(row.ref ?? '{}').deleted === true; } catch { /* Source metadata is not executable. */ }
+  let ref: Record<string, unknown> = {}, list: unknown = [];
+  try { ref = JSON.parse(row.ref ?? '{}'); list = JSON.parse(row.attachments ?? '[]'); } catch { /* Source metadata is not executable. */ }
+  const deleted = ref.deleted === true;
+  const fetchable = relayAttachment(row.source, ref);
+  const attachments = deleted || !Array.isArray(list) ? [] : list.flatMap((item: unknown, index) => {
+    const value = item && typeof item === 'object' ? item as { name?: unknown; kind?: unknown } : {};
+    if (typeof value.name !== 'string') return [];
+    const known = value.kind === 'image' || value.kind === 'file';
+    return [{ name: value.name, kind: value.kind === 'image' || IMAGE_NAME.test(value.name) ? 'image' as const : 'file' as const,
+      url: fetchable && known ? `/api/message/${row.id}/attachment/${index + 1}` : null }];
+  });
   return { id: row.id, source: row.source, sender: row.sender_name || row.sender, sent_at: row.sent_at,
-    text: deleted ? '[Source message deleted]' : row.text };
+    text: deleted ? '[Source message deleted]' : row.text, attachments };
 }
 
 export function ticketDetail(db: DatabaseSync, id: number): TicketDetail {

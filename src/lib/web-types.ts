@@ -14,6 +14,8 @@ export interface SourceMessage {
   sender: string | null;
   sent_at: string;
   text: string | null;
+  // url: this page's address of the bytes (Teams relay images and files), null when the source keeps only the name
+  attachments: { name: string; kind: 'image' | 'file'; url: string | null }[];
 }
 
 export interface Reference extends TicketRef { id: number }
