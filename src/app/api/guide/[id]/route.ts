@@ -1,0 +1,7 @@
+import { guideGet } from '@/web/api';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
+  return guideGet(request, (await context.params).id);
+}

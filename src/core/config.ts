@@ -90,6 +90,8 @@ const configSchema = z.looseObject({
     client: z.string().min(1).max(40),
     // Note relative to [vault] path
     note: z.string().min(1).max(1_024).refine(isNotePath, 'note must be a relative Markdown path in the vault'),
+    // Further notes the guide reads besides the main note and the notes it links
+    related: z.array(z.string().min(1).max(1_024).refine(isNotePath, 'related must be relative Markdown paths in the vault')).max(10).optional(),
   })).default({}),
   overview: z.looseObject({
     // provider/model or a model id on the triage routes; empty takes the triage model
@@ -98,6 +100,7 @@ const configSchema = z.looseObject({
     timezone: z.string().min(1).default('Europe/Rome'),
     window_days: positive.max(90).default(21),
     timeout_seconds: positive.max(600).default(300),
+    explainer_timeout_seconds: positive.max(1_800).default(900),
   }).prefault({}),
 }).refine((cfg) => !cfg.web.chat_origin || !!cfg.opencode.openchamber_port, {
   path: ['web', 'chat_origin'], message: 'chat_origin needs [opencode] openchamber_port',

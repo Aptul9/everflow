@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { approve } from '../core/approval.ts';
 import { transaction } from '../core/db.ts';
-import { markSeen, readInitiatives, requestRefresh } from '../core/initiative-state.ts';
+import { markSeen, readGuide, readInitiatives, requestExplainer, requestRefresh } from '../core/initiative-state.ts';
 import { retry, startNow } from '../core/jobs.ts';
 import { requestModelOptions, saveSetting } from '../core/settings.ts';
 import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, MUTE_MAX_MINUTES, muteBatch, muteTicket, pauseInput, TicketError } from '../core/tickets.ts';
@@ -155,6 +155,29 @@ export async function initiativesPost(request: Request, action: string): Promise
     if (action === 'refresh' && !Object.keys(current.config.initiatives).length) throw new HttpError(409, 'initiatives.none', 'No initiative configured');
     const result = withDatabase(true, (db) => action === 'refresh' ? (requestRefresh(db), { requested: true }) : { views: markSeen(db, current.config) });
     return Response.json(result, { headers: { 'cache-control': 'no-store' } });
+  } catch (error) { return errorResponse(error); }
+}
+
+export function guideGet(request: Request, id: string): Response {
+  try {
+    const current = instance();
+    if (!allowedHost(request.headers.get('host'), current.port, current.config.web.public_origin)) throw new HttpError(403, 'host.forbidden', 'Local Host required');
+    const guide = withDatabase(false, (db) => readGuide(db, current.config, id));
+    if (!guide) throw new HttpError(404, 'initiative.not-found', 'Initiative not found');
+    return json(request, guide);
+  } catch (error) { return errorResponse(error); }
+}
+
+// regenerate: the daemon writes the guide again at its next tick
+export async function guidePost(request: Request, id: string, action: string): Promise<Response> {
+  try {
+    const current = instance();
+    guardPost(request.headers, current);
+    await body(request, empty);
+    if (action !== 'regenerate') throw new HttpError(404, 'action.not-found', 'Action not found');
+    if (!Object.hasOwn(current.config.initiatives, id)) throw new HttpError(404, 'initiative.not-found', 'Initiative not found');
+    withDatabase(true, (db) => requestExplainer(db, id));
+    return Response.json({ requested: true }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) { return errorResponse(error); }
 }
 
