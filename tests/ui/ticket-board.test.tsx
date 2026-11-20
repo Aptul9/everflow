@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { utils as workbook, write as writeWorkbook } from 'xlsx';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
@@ -369,9 +370,9 @@ test('after Discuss the chat dialog opens as soon as the daemon has created the 
   expect(screen.getByRole('dialog', { name: '#1Reset access' })).toBeTruthy();
 });
 
-// The chat dialog's file viewer: a ticket chat that wrote a Markdown note and a Word document
-const MD = '/home/aptul/Vault/99_Inbox/prompt.md', DOCX = '/home/aptul/Vault/reports/audit.docx';
-function chatWithFiles(files: () => unknown[], contents: Record<string, () => string> = {}, named: Record<string, unknown> = {}) {
+// The chat dialog's file viewer: a ticket chat that wrote a Markdown note and an Excel workbook
+const MD = '/home/aptul/Vault/99_Inbox/prompt.md', XLSX = '/home/aptul/Vault/reports/audit.xlsx';
+function chatWithFiles(files: () => unknown[], contents: Record<string, () => string | ArrayBuffer> = {}, named: Record<string, unknown> = {}) {
   const reads: string[] = [], infos: string[] = [];
   fetcher.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (init?.method !== 'POST') return new Response(null, { status: 304 });
@@ -411,11 +412,14 @@ test('the chat dialog keeps its single column while the chat has written no file
   expect(within(dialog).queryByRole('button', { name: /files of this chat/ })).toBeNull();
 });
 
-test('with files the panel starts closed; Files opens it: chat left, newest file right, Markdown rendered, Word shown, tabs on a phone', async () => {
+test('with files the panel starts closed; Files opens it: chat left, newest file right, Markdown rendered, Excel shown, tabs on a phone', async () => {
   localStorage.clear();
-  const { state, reads } = chatWithFiles(() => [file(MD, 'markdown', '2026-11-17T16:45:00Z'), file(DOCX, 'docx', '2026-11-17T15:00:00Z')], {
+  const book = workbook.book_new();
+  workbook.book_append_sheet(book, workbook.aoa_to_sheet([['Audit trail'], ['Ten years']]), 'Audit');
+  workbook.book_append_sheet(book, workbook.aoa_to_sheet([['Other data']]), 'Details');
+  const { state, reads } = chatWithFiles(() => [file(MD, 'markdown', '2026-11-17T16:45:00Z'), file(XLSX, 'workbook', '2026-11-17T15:00:00Z')], {
     [MD]: () => '---\ncreated: 2026-11-17\ntags: [type/prompt]\n---\n\n# Prompt\n\n- one\n- two\n\n| Field | Kept |\n|---|---|\n| IP | yes |\n\n```\ncode block\n```\n\n<script>alert(1)</script>',
-    [DOCX]: () => '<h1>Audit trail</h1><p>Ten years</p>',
+    [XLSX]: () => writeWorkbook(book, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer,
   });
   board(state);
   await userEvent.click(screen.getByRole('button', { name: 'Open the chat of ticket #3' }));
@@ -452,13 +456,15 @@ test('with files the panel starts closed; Files opens it: chat left, newest file
 
   await userEvent.click(within(viewer).getByRole('button', { name: 'Toggle file tree' }));
   const list = within(viewer).getByRole('navigation', { name: 'File list' });
-  expect(within(list).getAllByRole('button').map((entry) => [entry.title, entry.getAttribute('aria-current')])).toEqual([[MD, 'true'], [DOCX, null]]);
+  expect(within(list).getAllByRole('button').map((entry) => [entry.title, entry.getAttribute('aria-current')])).toEqual([[MD, 'true'], [XLSX, null]]);
   expect(within(list).getAllByRole('button')[0]!.textContent).toMatch(/^prompt\.md\d+[mhd]$/);
-  await userEvent.click(within(list).getByTitle(DOCX));
-  expect(within(open).getAllByRole('tab').map((tab) => [tab.textContent, tab.getAttribute('aria-selected')])).toEqual([['prompt.md', 'false'], ['audit.docx', 'true']]);
-  expect((await within(viewer).findByRole('heading', { name: 'Audit trail' })).tagName).toBe('H1');
+  await userEvent.click(within(list).getByTitle(XLSX));
+  expect(within(open).getAllByRole('tab').map((tab) => [tab.textContent, tab.getAttribute('aria-selected')])).toEqual([['prompt.md', 'false'], ['audit.xlsx', 'true']]);
+  expect((await within(viewer).findByRole('table', { name: 'Audit' })).textContent).toContain('Audit trail');
   expect(within(viewer).getByText('Ten years')).toBeTruthy();
-  expect(within(viewer).getByRole('button', { name: 'Download audit.docx' })).toBeTruthy();
+  await userEvent.selectOptions(within(viewer).getByLabelText('Worksheet'), '1');
+  expect(within(viewer).getByRole('table', { name: 'Details' }).textContent).toBe('Other data');
+  expect(within(viewer).getByRole('button', { name: 'Download audit.xlsx' })).toBeTruthy();
   expect(within(viewer).getByRole('button', { name: 'Reload the file' })).toBeTruthy();
 
   // phone: two tabs, the chat first, the file one tap away; the chat frame stays loaded

@@ -17,6 +17,7 @@ function appEntries(root: string): string[] {
 }
 
 test('new Next entries are discovered rather than depending on a hand-maintained seed list', () => {
+  mkdirSync(SCRATCH, { recursive: true });
   const root = mkdtempSync(join(SCRATCH, 'phase7-next-entry-'));
   mkdirSync(join(root, 'nested'), { recursive: true });
   writeFileSync(join(root, 'layout.tsx'), 'export default function Layout() {}');
@@ -33,11 +34,15 @@ function webGraph() {
     'src/app/page.tsx', 'src/app/layout.tsx', 'src/app/globals.css', 'src/app/api/state/route.ts', 'src/app/api/ticket/[id]/route.ts', 'src/app/api/ticket/[id]/[action]/route.ts',
     'src/app/overview/page.tsx', 'src/app/api/initiatives/route.ts', 'src/app/api/initiatives/[action]/route.ts', 'src/components/initiatives/initiatives-page.tsx',
     'src/app/api/batch/[id]/ticket/route.ts', 'src/app/api/batch/[id]/mute/route.ts', 'src/app/api/batch/[id]/clear/route.ts', 'src/app/api/conversation/[id]/unmute/route.ts', 'src/app/api/input/route.ts', 'src/app/api/setting/route.ts', 'src/app/api/job/[id]/retry/route.ts',
-    ...['action-dialog', 'chat-dialog', 'file-viewer', 'markdown', 'pipeline', 'ticket-board', 'ticket-card', 'use-overview'].map((name) => `src/components/tickets/${name}.${name === 'use-overview' ? 'ts' : 'tsx'}`),
+    ...['action-dialog', 'chat-dialog', 'file-viewer', 'document-preview', 'markdown', 'pipeline', 'ticket-board', 'ticket-card', 'use-overview'].map((name) => `src/components/tickets/${name}.${name === 'use-overview' ? 'ts' : 'tsx'}`),
     ...['alert', 'badge', 'button', 'card', 'checkbox', 'dialog', 'input', 'popover', 'scroll-area', 'separator', 'tabs', 'textarea'].map((name) => `src/components/ui/${name}.tsx`),
   ];
   const allowed = new Set(paths.map((path) => resolve(path)));
-  const external = new Set(['node:crypto', 'node:fs', 'node:path', 'node:sqlite', 'next/headers', 'zod', 'react', 'radix-ui', 'lucide-react', 'clsx', 'tailwind-merge', 'class-variance-authority', 'react-markdown', 'remark-gfm']);
+  const external = new Set(['node:crypto', 'node:fs', 'node:path', 'node:sqlite', 'next/headers', 'zod', 'react', 'radix-ui', 'lucide-react', 'clsx', 'tailwind-merge', 'class-variance-authority', 'react-markdown', 'remark-gfm', 'docx-preview', '@jvmr/pptx-to-html', 'fflate', 'xlsx', 'pdfjs-dist']);
+  const lazy = new Map([
+    [resolve('src/components/tickets/file-viewer.tsx'), new Set(['./document-preview.tsx'])],
+    [resolve('src/components/tickets/document-preview.tsx'), new Set(['docx-preview', '@jvmr/pptx-to-html', 'fflate', 'xlsx', 'pdfjs-dist'])],
+  ]);
   const queue = appEntries(resolve('src/app'));
   for (const name of ['instrumentation', 'instrumentation-client', 'proxy', 'middleware']) {
     for (const ext of ['ts', 'tsx']) if (existsSync(resolve(`src/${name}.${ext}`))) queue.push(resolve(`src/${name}.${ext}`));
@@ -50,22 +55,27 @@ function webGraph() {
     visited.add(path);
     if (path.endsWith('.css')) continue;
     const source = parseAst(readFileSync(path, 'utf8'), { lang: path.endsWith('.tsx') ? 'tsx' : 'ts' }, path);
+    const follow = (name: string) => {
+      if (name.startsWith('.') || name.startsWith('@/')) {
+        const stem = name.startsWith('@/') ? resolve('src', name.slice(2)) : resolve(dirname(path), name);
+        const target = [stem, `${stem}.ts`, `${stem}.tsx`].find((candidate) => allowed.has(candidate));
+        expect(target, `Unapproved transitive web import ${name} in ${path}`).toBeDefined();
+        queue.push(target!);
+      } else expect(external.has(name), `Unapproved web dependency ${name}`).toBe(true);
+    };
     const walk = (node: Node) => {
       if (node.type === 'ImportDeclaration' || node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration') {
         if (node.type === 'ImportDeclaration' ? node.importKind === 'type'
           || node.specifiers.length > 0 && node.specifiers.every((item) => item.type === 'ImportSpecifier' && item.importKind === 'type')
           : node.exportKind === 'type') return;
-        if (node.source) {
-          const name = node.source.value;
-          if (name.startsWith('.') || name.startsWith('@/')) {
-            const stem = name.startsWith('@/') ? resolve('src', name.slice(2)) : resolve(dirname(path), name);
-            const target = [stem, `${stem}.ts`, `${stem}.tsx`].find((candidate) => allowed.has(candidate));
-            expect(target, `Unapproved transitive web import ${name} in ${path}`).toBeDefined();
-            queue.push(target!);
-          } else expect(external.has(name), `Unapproved web dependency ${name}`).toBe(true);
-        }
+        if (node.source) follow(node.source.value);
       }
-      if (node.type === 'ImportExpression' || node.type === 'CallExpression' && node.callee.type === 'Identifier' && node.callee.name === 'require') {
+      if (node.type === 'ImportExpression') {
+        const name = node.source.type === 'Literal' ? node.source.value : null;
+        if (typeof name !== 'string' || !lazy.get(path)?.has(name)) throw new Error(`Unapproved dynamic module edge in web source: ${path}`);
+        follow(name);
+      }
+      if (node.type === 'CallExpression' && node.callee.type === 'Identifier' && node.callee.name === 'require') {
         throw new Error(`Dynamic module edge in web source: ${path}`);
       }
       for (const value of Object.values(node)) {

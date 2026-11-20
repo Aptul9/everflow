@@ -153,7 +153,7 @@ export interface OverviewState {
 
 // A file a ticket chat wrote or edited on the daemon's machine, shown beside the chat. touched: when the chat last wrote,
 // edited or named it; mtime: the file's own last change.
-export type ChatFileKind = 'markdown' | 'text' | 'docx' | 'pdf' | 'image' | 'other';
+export type ChatFileKind = 'markdown' | 'text' | 'docx' | 'pptx' | 'odt' | 'odp' | 'workbook' | 'pdf' | 'image' | 'other';
 export interface ChatFile { path: string; name: string; size: number; mtime: string; kind: ChatFileKind; touched: string }
 
 // Overview page: an initiative summed up from its vault note. Every line keeps the log entries or tickets it rests on.

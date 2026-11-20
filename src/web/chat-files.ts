@@ -1,8 +1,6 @@
 import fs from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
-import mammoth from 'mammoth';
-import sanitizeHtml from 'sanitize-html';
 import type { ChatFile, ChatFileKind } from '../lib/web-types.ts';
 
 // The files a ticket chat produced, read from disk for the page's viewer beside the chat: the daemon runs on the same
@@ -20,7 +18,8 @@ const failure = (status: number, code: string, message: string) => Object.assign
 const WRITERS = new Set(['write', 'edit', 'multiedit']);
 const SHELLS = new Set(['shell', 'bash']);
 // an absolute or home path ending in an Office or PDF extension, not the path part of a URL
-const DOCUMENT = /(?<![\w./~:\\-])((?:~\/|\/)[^\s'"`<>|;*?()[\]{}]*?\.(?:docx|pdf|xlsx|pptx))(?!\w)/gi;
+const DOCUMENT = /(?<![\w./~:\\-])((?:~\/|\/)[^\s'"`<>|;*?()[\]{}]*?\.(?:docx|pdf|xlsx|xls|pptx|ods|odt|odp))(?!\w)/gi;
+const QUOTED_DOCUMENT = /(?:`((?:~\/|\/)[^\r\n`]+)`|"((?:~\/|\/)[^\r\n"]+)"|'((?:~\/|\/)[^\r\n']+)')/g;
 const MARKDOWN = new Set(['.md', '.markdown', '.mdx']);
 const TEXT = new Set(['.txt', '.log', '.csv', '.tsv', '.json', '.jsonc', '.jsonl', '.yaml', '.yml', '.toml', '.ini', '.conf', '.cfg', '.xml', '.html', '.htm', '.svg',
   '.sh', '.bash', '.zsh', '.ps1', '.psm1', '.bat', '.cmd', '.py', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.go', '.rs', '.java', '.kt', '.c', '.h', '.cpp',
@@ -29,7 +28,17 @@ const IMAGE: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg
 const DOWNLOAD: Record<string, string> = { ...IMAGE, '.pdf': 'application/pdf',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation' };
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.xls': 'application/vnd.ms-excel', '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
+  '.odt': 'application/vnd.oasis.opendocument.text', '.odp': 'application/vnd.oasis.opendocument.presentation' };
+
+function quotedDocuments(text: string): string[] {
+  return [...text.matchAll(QUOTED_DOCUMENT)].flatMap(([, code, double, single]) => {
+    const path = code ?? double ?? single;
+    const extension = path && extname(path).toLowerCase();
+    return path && extension && Object.hasOwn(DOWNLOAD, extension) && !Object.hasOwn(IMAGE, extension) ? [path] : [];
+  });
+}
 
 export function housekeeping(path: string): boolean {
   const posix = path.replaceAll('\\', '/');
@@ -55,7 +64,11 @@ export function mentions(item: unknown, directory: string, home: string): [strin
   if (message?.type !== 'assistant' || !Array.isArray(message.content)) return [];
   const created = millis(record(message.time)?.completed, record(message.time)?.created);
   const found: [string, number][] = [];
-  const documents = (text: string, at: number) => { for (const match of text.matchAll(DOCUMENT)) found.push([place(match[1]!, directory, home), at]); };
+  const documents = (text: string, at: number) => {
+    const paths = new Set([...text.matchAll(DOCUMENT)].map((match) => match[1]!));
+    for (const path of quotedDocuments(text)) paths.add(path);
+    for (const path of paths) found.push([place(path, directory, home), at]);
+  };
   for (const value of message.content) {
     const part = record(value);
     if (part?.type === 'text' && typeof part.text === 'string') { documents(part.text, created); continue; }
@@ -78,13 +91,13 @@ const PATH_KEYS = new Set(['path', 'filePath', 'file_path']);
 const WORD = /[^\s'"`<>|;*?()[\]{},]+/g;
 
 function pathWords(text: string): string[] {
-  const found: string[] = [];
+  const found = new Set(quotedDocuments(text));
   for (const [raw] of text.matchAll(WORD)) {
     const word = raw.replace(/[.:!]+$/, '').replace(/(?::\d+){1,2}$/, '');
     if (!word || word.startsWith('//') || /^[a-z][\w+.-]*:/i.test(word)) continue;
-    if (word.startsWith('/') || word.startsWith('~/') || word.includes('/') || /\.\w{1,10}$/.test(word)) found.push(word);
+    if (word.startsWith('/') || word.startsWith('~/') || word.includes('/') || /\.\w{1,10}$/.test(word)) found.add(word);
   }
-  return found;
+  return [...found];
 }
 
 function strings(value: unknown, depth = 0): string[] {
@@ -130,6 +143,10 @@ function kindOf(path: string): ChatFileKind {
   if (MARKDOWN.has(ext)) return 'markdown';
   if (TEXT.has(ext)) return 'text';
   if (ext === '.docx') return 'docx';
+  if (ext === '.pptx') return 'pptx';
+  if (ext === '.odt') return 'odt';
+  if (ext === '.odp') return 'odp';
+  if (ext === '.xlsx' || ext === '.xls' || ext === '.ods') return 'workbook';
   if (ext === '.pdf') return 'pdf';
   if (IMAGE[ext]) return 'image';
   if (DOWNLOAD[ext]) return 'other';
@@ -144,28 +161,6 @@ function kindOf(path: string): ChatFileKind {
       return 'text';
     } finally { fs.closeSync(fd); }
   } catch { return 'other'; }
-}
-
-/** Word document as HTML safe to put in the page: structure, tables, links to http(s)/mailto, images only as data: URIs. */
-export function sanitize(html: string): string {
-  return sanitizeHtml(html, {
-    allowedTags: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'br', 'hr', 'blockquote', 'pre', 'code', 'ul', 'ol', 'li', 'dl', 'dt', 'dd',
-      'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'colgroup', 'col', 'strong', 'b', 'em', 'i', 'u', 's', 'sub', 'sup', 'span', 'a', 'img'],
-    allowedAttributes: { a: ['href', 'target', 'rel'], img: ['src', 'alt'], td: ['colspan', 'rowspan'], th: ['colspan', 'rowspan'], ol: ['start'] },
-    allowedSchemes: ['http', 'https', 'mailto'],
-    allowedSchemesByTag: { img: ['data'] },
-    allowedSchemesAppliedToAttributes: ['href', 'src'],
-    allowProtocolRelative: false,
-    disallowedTagsMode: 'discard',
-    // every link opens a new tab without the page as opener, whatever the document said
-    transformTags: { a: (tagName, attribs) => ({ tagName, attribs: { ...(attribs.href ? { href: attribs.href } : {}), target: '_blank', rel: 'noopener noreferrer' } }) },
-    exclusiveFilter: (frame) => frame.tag === 'img' && !/^data:image\/(?:png|jpe?g|gif|webp|bmp);base64,/i.test(frame.attribs.src ?? ''),
-  });
-}
-
-export async function docxHtml(buffer: Buffer): Promise<string> {
-  const result = await mammoth.convertToHtml({ buffer }, { externalFileAccess: false });
-  return sanitize(result.value);
 }
 
 export interface FileContent { body: Buffer | string; type: string; name: string; download: boolean }
@@ -274,7 +269,7 @@ export class ChatFiles {
     return file;
   }
 
-  /** One file the chat can open: text as is, a Word document as sanitized HTML, PDFs and images as bytes; download gives the bytes of any. */
+  /** One file the chat can open: text as is, documents and images as bytes; download gives the bytes of any. */
   async read(session: string, path: string, download = false): Promise<FileContent> {
     const listed = await this.describe(session, path);
     const real = this.inside(listed.path);
@@ -293,9 +288,8 @@ export class ChatFiles {
     switch (listed.kind) {
       case 'markdown': return { body: buffer.toString('utf8'), type: 'text/markdown; charset=utf-8', name, download: false };
       case 'text': return { body: buffer.toString('utf8'), type: 'text/plain; charset=utf-8', name, download: false };
-      case 'docx': return { body: await docxHtml(buffer).catch(() => { throw failure(422, 'file.unreadable', `${name} could not be read as a Word document`); }),
-        type: 'text/html; charset=utf-8', name, download: false };
-      case 'pdf': case 'image': return { body: buffer, type: DOWNLOAD[ext]!, name, download: false };
+      case 'pdf': case 'image': case 'docx': case 'pptx': case 'odt': case 'odp': case 'workbook':
+        return { body: buffer, type: DOWNLOAD[ext]!, name, download: false };
       default: throw failure(415, 'file.download-only', `${name} can only be downloaded`);
     }
   }
