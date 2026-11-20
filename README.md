@@ -212,6 +212,21 @@ The daemon sums each initiative up on weekdays from `[overview] hour` (default 8
 
 The page shows per initiative its state, a map of who owes what (red after 5 working days of waiting), the current lines with their sources on click, and the columns AI, You, Them and Done this week. AI items may carry a draft message; the page only shows and copies it, nothing is sent. Summaries, the refresh request and a per-day count of page opens live in the `setting` table; the vault is only read.
 
+## Guide
+
+`/overview/<id>` shows the guide of an initiative: a plain-language explainer in Italian of the whole project (what it is, why, who is involved, concepts, status, what blocks, what unblocks what, timeline, glossary). `[initiatives.<id>]` takes an optional `related`, up to 10 further Markdown paths relative to `[vault] path`, read besides the main note.
+
+```toml
+[initiatives.demo]
+related = ["02_Areas/demo/design-notes.md"]
+```
+
+The daemon writes a guide when Refresh on the guide page is pressed, and otherwise on weekdays from `[overview] hour`, after the day's summary run and never while it is running, when the initiative has no guide yet or its main note changed since the last one and the last one is older than 20 hours. One initiative runs at a time; a failed run is retried after 2 hours. Each run makes two streamed calls on the triage routes with `[overview] model` or, when empty, the triage model: the explanation part (teams, people, concepts, glossary, warnings, who to ask), then the status part (phases, timeline, graph, blockers, next steps), which receives the people of the first. No tools are offered. `[overview] explainer_timeout_seconds` (default 900, maximum 1800) bounds the entire run, including failover and repair. An answer that is not valid JSON gets one repair turn per call, then the run fails.
+
+The input is the main note split in sections, every dated `## Log` entry in its first 2 MiB (ids L1, L2, ...; sections S1, ...), the related notes and the notes linked from the main note with `[[slug]]` that exist under `01_Projects/` or `02_Areas/` (ids N1, ...; at most 10 notes, 60,000 bytes each, 250,000 bytes together, configured ones first, `_secrets` never read), and up to 40 Everflow tickets of the client (ids T and the number). Sections are capped at 30,000 UTF-8 bytes and log entries at 900 characters. The status call receives log entries, tickets and selected sections, not related notes; its citations are checked against those inputs only. People, warnings, phase items, timeline entries, graph nodes and edges, blockers and next steps citing no offered id are dropped and counted on the page. Concepts and glossary entries may cite none. Edges with invalid endpoints or direction, duplicates and cycles are dropped; a node owner that is not a known person or `you` is cleared. The page lists only sources that were cited.
+
+The guide, the model that wrote it, the mtime of the main note at that time and the last error live in the setting `explainer:<id>`; `explainer.requested:<id>` and `explainer.running:<id>` mark a request and a run in progress. A failed run keeps the previous guide and shows the error. `GET /api/guide/<id>` returns the guide state and `POST /api/guide/<id>/regenerate` asks for a new one; the vault is only read.
+
 ## Backlog and migration
 
 The first explicit v2 start persists `triage_after`, defaulting to that start's UTC time. A quoted aware `[start] triage_after` can set the initial cutoff. The persisted value wins on later starts. Unbatched messages with `stored_at` strictly before the cutoff become `backlog`, regardless of their source `sent_at`. They appear under Skipped rather than generating old proposals. Make ticket converts a skipped batch into a ticket or reuses its current routed ticket. A fresh proposal is not approved for chat by that action. Dismiss reasons and Make ticket counts remain visible as feedback.

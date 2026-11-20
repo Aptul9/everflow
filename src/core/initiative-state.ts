@@ -92,5 +92,7 @@ export function readGuide(db: DatabaseSync, cfg: Config, id: string, at = Date.n
   const record = storedExplainer(db, id);
   const running = readSetting(db, `explainer.running:${id}`);
   return { initiative, today: state.today, at: record.at, explainer: record.explainer, error: record.error, error_at: record.error_at,
-    requested: !!readSetting(db, `explainer.requested:${id}`), running: !!running && at - Date.parse(running) < STALE_RUN_MS, providers: state.providers };
+    requested: !!readSetting(db, `explainer.requested:${id}`),
+    running: !!running && at - Date.parse(running) < (cfg.overview.explainer_timeout_seconds + 60) * 1_000,
+    providers: state.providers };
 }
