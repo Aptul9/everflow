@@ -237,7 +237,7 @@ export function InitiativesPage(props: { initialState: InitiativesState; token: 
           onClick={() => { void post('refresh').then(load, (failure: unknown) => setError(failure instanceof Error ? failure.message : String(failure))); }}>
           <RefreshCw aria-hidden="true" className={cn(busy && 'animate-spin')} />Refresh</Button>
         {props.signOut && <Button variant="ghost" size="sm" className="text-muted-foreground"
-          onClick={() => { void fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).finally(() => window.location.assign('/login')); }}>
+          onClick={() => { void fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).then((r) => r.headers.get('x-everflow-logout') ?? '/login', () => '/login').then((to) => window.location.assign(to)); }}>
           <LogOut aria-hidden="true" />Sign out</Button>}
       </div>
     </header>

@@ -15,7 +15,8 @@ import type { DaemonReceipt } from './core/daemon.ts';
 import { migrate, openDb, prepareStart } from './core/db.ts';
 import { startRuntime, validateRuntimeConfig } from './core/runtime.ts';
 import { createKernel } from './windows/kernel.ts';
-import { Limiter, loginAccount, loginKey, Sessions, verifyPassword } from './web/login.ts';
+import { Limiter, loginAccount, loginKey, passwordLogin, Sessions, verifyPassword } from './web/login.ts';
+import { Oidc, oidcSettings } from './web/oidc.ts';
 import { signIn } from './web/login-http.ts';
 import { ChatToken, chatGate, GATE_PATH } from './web/chat-gate.ts';
 import { BRIDGE_PREFIX, chatBridge } from './web/chat-bridge.ts';
@@ -29,10 +30,15 @@ export async function startServer(options: { configPath: string; buildReceipt: s
   process.env.EVERFLOW_BUILD_ROOT = artifact.root;
   const next = createRequire(import.meta.url)('next') as (options: NextServerOptions) => Pick<NextServer, 'prepare' | 'close' | 'getRequestHandler'>;
   const config = loadConfig(options.configPath);
-  // Fails closed: a public origin without an account refuses to start rather than serve the page openly
+  // Fails closed: a public origin without an account refuses to start rather than serve the page openly, and so does one with
+  // neither sign-in on. The account's user is also the email EverID must name.
   const login = config.web.public_origin ? (() => {
-    const account = loginAccount();
-    return { sessions: new Sessions(loginKey(config.db.path), account), limiter: new Limiter(),
+    const account = loginAccount(), key = loginKey(config.db.path);
+    const settings = oidcSettings(config.web.public_origin, account.user, process.env, config.web.everid_subjects), password = passwordLogin();
+    if (!password && !settings) throw Object.assign(new Error('login.none: EVERFLOW_PASSWORD_LOGIN=off needs EverID (OIDC_*)'), { code: 'login.none' });
+    // an EverID session ends when the client, the account email or the listed subjects change
+    return { sessions: new Sessions(key, account, { password, ...(settings ? { everid: [settings.issuer, settings.clientId, settings.email, ...[...settings.subjects].sort()].join('\0') } : {}) }),
+      limiter: new Limiter(), password, ...(settings ? { oidc: new Oidc(settings, key) } : {}),
       // the hash is always checked, so a wrong user costs the same time as a wrong password
       check: (user: string, password: string) => verifyPassword(password, account.hash) && user.toLowerCase() === account.user.toLowerCase() };
   })() : undefined;

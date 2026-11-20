@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { COOKIE, cookieDomain, cookieValues, openPath, safeNext, SESSION_MS } from './login.ts';
+import { COOKIE, cookieDomain, cookieValue, cookieValues, openPath, safeNext, SESSION_MS } from './login.ts';
+import { CALLBACK_PATH, FLOW_MS, HINT_COOKIE, ID_TOKEN, ID_TOKEN_MAX, OIDC_COOKIE, START_PATH } from './oidc.ts';
 import type { WebInstance } from './instance.ts';
 
 type Login = NonNullable<WebInstance['login']>;
@@ -39,6 +40,41 @@ export function signedIn(request: IncomingMessage, login: Login): boolean {
   return cookieValues(request.headers.cookie).some((value) => login.sessions.valid(value));
 }
 
+// The pending EverID sign-in: host-only, only sent back to the callback, gone after it
+const flowCookie = (value: string, maxAge: number) => `${OIDC_COOKIE}=${value}; Path=${CALLBACK_PATH}; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+// The ID token of an EverID session, the hint EverID's end-session wants: host-only, only sent back to the sign-out
+const hintCookie = (value: string, maxAge: number) => `${HINT_COOKIE}=${value}; Path=/api/logout; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
+const EVERID_CODES = new Set(['everid.denied', 'everid.expired', 'everid.unavailable', 'everid.failed']);
+
+/** GET /oidc/start (to EverID, with where to come back to) and GET /oidc/callback (EverID's answer: a session, or the sign-in page and why). */
+function everid(request: IncomingMessage, response: ServerResponse, current: WebInstance, login: Login, url: URL): void {
+  const back = (code: string, next?: string, cookies: string[] = []) => {
+    const query = new URLSearchParams({ error: EVERID_CODES.has(code) ? code : 'everid.failed', ...(next && next !== '/' ? { next } : {}) });
+    response.writeHead(303, { location: `/login?${query}`, ...(cookies.length ? { 'set-cookie': cookies } : {}) }).end();
+  };
+  const oidc = login.oidc;
+  if (!oidc) { response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' }).end('Not found'); return; }
+  const chatOrigin = current.config.web.chat_origin;
+  if (url.pathname === START_PATH) {
+    const next = safeNext(url.searchParams.get('next'), chatOrigin);
+    void oidc.start(next).then(({ location, cookie }) => {
+      response.writeHead(303, { location, 'set-cookie': flowCookie(cookie, FLOW_MS / 1000) }).end();
+    }, (error: unknown) => {
+      process.stderr.write(JSON.stringify({ event: 'everid.start', error: (error as Error).message }) + '\n');
+      if (!response.headersSent) back((error as { code?: string }).code ?? 'everid.failed', next);
+    });
+    return;
+  }
+  const clear = flowCookie('', 0);
+  void oidc.finish(url.searchParams, cookieValue(request.headers.cookie, OIDC_COOKIE)).then(({ next, idToken }) => {
+    const hint = ID_TOKEN.test(idToken) && idToken.length <= ID_TOKEN_MAX ? [hintCookie(idToken, SESSION_MS / 1000)] : [];
+    response.writeHead(303, { location: safeNext(next, chatOrigin), 'set-cookie': [clear, ...hint, ...sessionCookies(current, login.sessions.issue(Date.now(), 'o1'))] }).end();
+  }, (error: unknown) => {
+    process.stderr.write(JSON.stringify({ event: 'everid.callback', error: (error as Error).message }) + '\n');
+    if (!response.headersSent) back((error as { code?: string }).code ?? 'everid.failed', undefined, [clear]);
+  });
+}
+
 /** Sign-in gate for a request under the public host. True when it answered the request itself. */
 export function signIn(request: IncomingMessage, response: ServerResponse, current: WebInstance, login: Login): boolean {
   const url = new URL(request.url ?? '/', 'http://everflow.invalid');
@@ -49,6 +85,7 @@ export function signIn(request: IncomingMessage, response: ServerResponse, curre
 
   if (path === '/api/login' && method === 'POST') {
     if (!sameOrigin) { json(403, 'login.origin', 'Origin rejected'); return true; }
+    if (!login.password) { json(403, 'login.password-off', 'Password sign-in is off, sign in with EverID'); return true; }
     const who = client(request), wait = login.limiter.retryAfter(who);
     if (wait > 0) { json(429, 'login.locked', 'Too many attempts, try again later', { 'retry-after': String(Math.ceil(wait / 1000)) }); return true; }
     void body(request, 4096).then((text) => {
@@ -69,14 +106,25 @@ export function signIn(request: IncomingMessage, response: ServerResponse, curre
   }
   if (path === '/api/logout' && method === 'POST') {
     if (!sameOrigin) { json(403, 'login.origin', 'Origin rejected'); return true; }
-    response.writeHead(204, { 'set-cookie': sessionCookies(current, null) }).end();
+    const cookies = [...sessionCookies(current, null), ...(login.oidc ? [hintCookie('', 0)] : [])];
+    // after an EverID session the page goes on to EverID's end-session (x-everflow-logout), which comes back to the page
+    const everidSession = cookieValues(request.headers.cookie).some((value) => login.sessions.kind(value) === 'o1');
+    if (!login.oidc || !everidSession) { response.writeHead(204, { 'set-cookie': cookies }).end(); return true; }
+    void login.oidc.logout(cookieValue(request.headers.cookie, HINT_COOKIE)).then((to) => {
+      response.writeHead(204, { 'set-cookie': cookies, ...(to ? { 'x-everflow-logout': to } : {}) }).end();
+    }, () => { if (!response.headersSent) response.writeHead(204, { 'set-cookie': cookies }).end(); });
     return true;
   }
   const signed = signedIn(request, login);
+  if (method === 'GET' && (path === START_PATH || path === CALLBACK_PATH)) {
+    everid(request, response, current, login, url);
+    return true;
+  }
   if (signed && method === 'GET' && path === '/login') {
-    // A session from before chat_origin was set is host-only and never reaches the chat host: renewing it here
-    // gives it the domain, so the chat host's redirect to this page cannot loop
-    const renew = cookieDomain(current.config.web.public_origin, current.config.web.chat_origin) ? { 'set-cookie': sessionCookies(current, login.sessions.issue()) } : {};
+    // A session from before chat_origin was set is host-only and never reaches the chat host: renewing it here, with the
+    // kind it was opened with, gives it the domain, so the chat host's redirect to this page cannot loop
+    const kind = cookieValues(request.headers.cookie).map((value) => login.sessions.kind(value)).find((found) => found !== undefined)!;
+    const renew = cookieDomain(current.config.web.public_origin, current.config.web.chat_origin) ? { 'set-cookie': sessionCookies(current, login.sessions.issue(Date.now(), kind)) } : {};
     response.writeHead(303, { location: safeNext(url.searchParams.get('next'), current.config.web.chat_origin), ...renew }).end();
     return true;
   }

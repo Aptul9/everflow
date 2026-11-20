@@ -16,11 +16,19 @@ function failure(status: number, retryAfter: string | null): string {
   return 'Sign-in failed, try again';
 }
 
-export function LoginForm({ next }: { next: string }) {
+const EVERID_MESSAGES: Record<string, string> = {
+  'everid.denied': 'This EverID account has no access to Everflow',
+  'everid.expired': 'The sign-in took too long, try again',
+  'everid.unavailable': 'EverID is not reachable, try again later',
+  'everid.failed': 'EverID sign-in failed, try again',
+};
+
+export function LoginForm({ next, password: withPassword = true, everid = false, error: everidError }:
+  { next: string; password?: boolean; everid?: boolean; error?: string }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [show, setShow] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(everidError ? EVERID_MESSAGES[everidError] ?? EVERID_MESSAGES['everid.failed']! : '');
   const [busy, setBusy] = useState(false);
 
   async function submit(event: React.FormEvent) {
@@ -46,14 +54,25 @@ export function LoginForm({ next }: { next: string }) {
           <img src="/apple-icon.png" alt="" width={64} height={64} className="mb-2 size-16 object-contain" />
           <CardTitle className="text-xl">Sign in to Everflow</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="grid gap-5">
+          {error && (
+            <Alert variant="destructive" role="alert">
+              <TriangleAlertIcon />
+              <AlertTitle>{error}</AlertTitle>
+            </Alert>
+          )}
+          {everid && (
+            <Button asChild className="h-10 w-full">
+              <a href={`/oidc/start?next=${encodeURIComponent(next)}`}>Sign in with EverID</a>
+            </Button>
+          )}
+          {everid && withPassword && (
+            <div className="flex items-center gap-3 text-xs text-muted-foreground" aria-hidden="true">
+              <span className="h-px flex-1 bg-border" />or<span className="h-px flex-1 bg-border" />
+            </div>
+          )}
+          {withPassword && (
           <form onSubmit={submit} className="grid gap-5">
-            {error && (
-              <Alert variant="destructive" role="alert">
-                <TriangleAlertIcon />
-                <AlertTitle>{error}</AlertTitle>
-              </Alert>
-            )}
             <div className="grid gap-2">
               <label htmlFor="email" className="text-sm font-medium">Email</label>
               <Input id="email" name="email" type="email" autoCapitalize="none" autoCorrect="off" autoComplete="username" className="h-10"
@@ -70,11 +89,12 @@ export function LoginForm({ next }: { next: string }) {
                 </Button>
               </div>
             </div>
-            <Button type="submit" className="h-10 w-full" disabled={busy}>
+            <Button type="submit" className="h-10 w-full" variant={everid ? 'outline' : 'default'} disabled={busy}>
               {busy && <LoaderCircle className="animate-spin" aria-hidden="true" />}
-              {busy ? 'Signing in…' : 'Sign in'}
+              {busy ? 'Signing in…' : everid ? 'Sign in with password' : 'Sign in'}
             </Button>
           </form>
+          )}
         </CardContent>
       </Card>
     </div>

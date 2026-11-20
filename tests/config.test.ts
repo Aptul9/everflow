@@ -17,7 +17,7 @@ test('defaults to disabled tickets/chats and every approved policy value', () =>
   expect(cfg.chats).toEqual({ enabled: false });
   expect(cfg.triage).toMatchObject({ tool_limit: 8, timeout_seconds: 120, min_confidence: 0.75, history_messages: 40 });
   expect(cfg.windows).toMatchObject({ outlook: 300, teams: 120, teamsrelay: 120 });
-  expect(cfg.web).toEqual({ port: 8789 });
+  expect(cfg.web).toEqual({ port: 8789, everid_subjects: [] });
   expect(cfg.jobs).toEqual({
     triage_concurrency: 3, turn_concurrency: 4, lease_seconds: 120, renew_seconds: 30,
     backoff_initial_seconds: 10, backoff_max_seconds: 1800, backoff_jitter: 0.2,

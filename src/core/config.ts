@@ -68,6 +68,8 @@ const configSchema = z.looseObject({
     public_origin: origin('public_origin').optional(),
     // The HTTPS address a reverse proxy serves the local OpenChamber web UI under, behind this page's sign-in
     chat_origin: origin('chat_origin').optional(),
+    // EverID subjects (`sub`) that may hold the Everflow account; members of everid-admins are matched by email instead
+    everid_subjects: z.array(z.string().regex(/^[A-Za-z0-9._-]{1,256}$/, 'everid_subjects are EverID sub values')).max(32).default([]),
   }).refine((web) => !web.chat_origin || !!web.public_origin && web.chat_origin !== web.public_origin, {
     path: ['chat_origin'], message: 'chat_origin needs public_origin and must differ from it',
   }).prefault({}),
