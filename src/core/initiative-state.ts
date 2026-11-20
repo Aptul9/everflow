@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from './config.ts';
 import { utc } from './time.ts';
-import type { InitiativesState, InitiativeSummary, InitiativeView } from '../lib/web-types.ts';
+import type { Explainer, GuideState, InitiativesState, InitiativeSummary, InitiativeView } from '../lib/web-types.ts';
 
 // The Overview page's side of the initiatives: stored summaries, the refresh request and page opens, all in the setting
 // table. No provider or vault access here, so the web routes stay off the model runtime.
@@ -71,4 +71,26 @@ export function readInitiatives(db: DatabaseSync, cfg: Config, at = Date.now()):
   });
   return { initiatives, today, views, requested: !!readSetting(db, 'initiatives.requested'),
     refreshing: !!running && at - Date.parse(running) < STALE_RUN_MS, providers: cfg.triage.providers.length > 0 };
+}
+
+// Guide of an initiative: setting explainer:<id> holds the last guide, its source note mtime and the last error;
+// explainer.requested:<id> asks the daemon for a new one; explainer.running:<id> marks a run in progress
+export interface StoredExplainer { at: string | null; explainer: Explainer | null; error: string | null; error_at: string | null; note_mtime: number | null }
+
+export function storedExplainer(db: DatabaseSync, id: string): StoredExplainer {
+  const empty: StoredExplainer = { at: null, explainer: null, error: null, error_at: null, note_mtime: null };
+  try { return { ...empty, ...(JSON.parse(readSetting(db, `explainer:${id}`) ?? 'null') as StoredExplainer | null ?? {}) }; }
+  catch { return empty; }
+}
+
+export function requestExplainer(db: DatabaseSync, id: string): void { writeSetting(db, `explainer.requested:${id}`, utc()); }
+
+export function readGuide(db: DatabaseSync, cfg: Config, id: string, at = Date.now()): GuideState | null {
+  const state = readInitiatives(db, cfg, at);
+  const initiative = state.initiatives.find((item) => item.id === id);
+  if (!initiative) return null;
+  const record = storedExplainer(db, id);
+  const running = readSetting(db, `explainer.running:${id}`);
+  return { initiative, today: state.today, at: record.at, explainer: record.explainer, error: record.error, error_at: record.error_at,
+    requested: !!readSetting(db, `explainer.requested:${id}`), running: !!running && at - Date.parse(running) < STALE_RUN_MS, providers: state.providers };
 }
