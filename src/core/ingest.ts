@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Config } from './config.ts';
 import { transaction } from './db.ts';
 import { enqueue, healthOk } from './jobs.ts';
+import { syncNow } from './retitle.ts';
 import { assessmentPayload, attachBatch, batchPaused, pausedInputs, route } from './tickets.ts';
 import { utc } from './time.ts';
 
@@ -264,11 +265,13 @@ export function schedule(db: DatabaseSync, cfg: Config, at?: string): number[] {
           muted && sourceMuted ? now : null).lastInsertRowid);
       db.prepare('UPDATE message SET batch=? WHERE conversation=? AND batch IS NULL').run(id, conversation.id!);
       if (own) {
-        const linked = db.prepare(`SELECT l.ticket,t.lifecycle FROM ticket_conversation l JOIN ticket t ON t.id=l.ticket
+        const linked = db.prepare(`SELECT l.ticket,t.lifecycle,t.session_id,t.approved_at FROM ticket_conversation l JOIN ticket t ON t.id=l.ticket
           WHERE l.conversation=? AND l.kind IN ('primary','linked')`).get(conversation.id!);
         // A reply in the chat of a ticket still waiting for approval shows on that ticket, which stays proposed: "ok" or "ah già"
         // acknowledges the ask without settling it, so Start or Dismiss stays Antonio's
         if (linked) attachBatch(db, id, Number(linked.ticket), now);
+        // The reply held back the sync of the turn that sent it: read that turn's STATUS now, not at the next interval
+        if (linked?.session_id && linked.approved_at) syncNow(db, Number(linked.ticket), now);
       }
     }
     const paused = pausedInputs(db);
