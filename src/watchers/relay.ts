@@ -48,10 +48,13 @@ function normalize(email: string, slot: number, raw: Record<string, any>, myName
   let text = sourceText(raw.text, 2000);
   if (quote?.text) text = `> in reply to ${String(quote.author || '?')}: ${String(quote.text)}\n${text}`;
   const files = Array.isArray(extra.files) ? extra.files : [];
+  const images = Array.isArray(extra.images) ? extra.images : [];
+  // Images first, then files: the order the relay counts them in when it serves one (/everflow/teams/attachment index)
   return { source: 'teamsrelay', account: email, conversation_id: raw.chat, conversation_title: raw.chat,
     message_id: `${email}/${raw.chat};messageid=${raw.mid}`, sender: String(raw.author || ''), sender_name: String(raw.author || ''), sender_is_me: raw.mine === true || raw.mine === 1,
     sent_at: new Date(Number(raw.mid)).toISOString(), text: deleted ? '' : text,
-    attachments: deleted ? [] : files.map((file: any) => ({ name: file && typeof file === 'object' ? String(file.name || file.title || '?') : String(file ?? '?'), size: null })),
+    attachments: deleted ? [] : [...images.map((_image: unknown, index: number) => ({ name: `image ${index + 1}`, size: null, kind: 'image' })),
+      ...files.map((file: any) => ({ name: file && typeof file === 'object' ? String(file.name || file.title || '?') : String(file ?? '?'), size: null, kind: 'file' }))],
     ref: { chat: raw.chat, id: raw.mid, account: email, relay_slot: slot, ...(quote ? { quote } : {}), ...(deleted ? { deleted: true } : {}),
       ...(extra.mentionsMe === true ? { mentions_me: true } : {}),
       ...(!deleted && raw.mine !== true && raw.mine !== 1 && quote && quoteName(myName) && quoteName(quote.author) === quoteName(myName) ? { replies_to_me: true } : {}) } };

@@ -777,7 +777,7 @@ test('triage and chat pick model and effort the same way, triage only among its 
 test('a batch in triage shows at the top of Needs you before its ticket exists', async () => {
   const state = uiState();
   state.triaging = [{ id: 20, title: 'Fresh request', source: 'teamsrelay', account: 'me@example.invalid', created_at: '2026-11-06T05:58:00.000000Z', job: 'running',
-    clients: ['bip'], held: false, messages: [{ id: 30, source: 'teamsrelay', sender: 'Colleague', sent_at: '2026-11-06T05:58:00.000000Z', text: 'Can you check the VPN?' }] }];
+    clients: ['bip'], held: false, messages: [{ id: 30, source: 'teamsrelay', sender: 'Colleague', sent_at: '2026-11-06T05:58:00.000000Z', text: 'Can you check the VPN?', attachments: [] }] }];
   board(state);
   const column = screen.getByRole('region', { name: 'Needs you (3)' });
   const card = within(column).getByRole('heading', { name: 'Batch #20: Fresh request' }).closest<HTMLElement>('[data-triage-batch]')!;
@@ -1177,6 +1177,27 @@ test('refresh preserves selection, expanded messages/timeline and focused card',
   expect(within(original).getByText('Newest source message')).toBeTruthy();
   expect(within(original).getByText('Newest timeline event')).toBeTruthy();
   expect(document.activeElement).toBe(original);
+});
+
+test('message images show as thumbnails that open large; a file the relay cannot give says why', async () => {
+  const state = uiState();
+  state.groups.needs_you[0]!.messages = [{ id: 7, source: 'teamsrelay', sender: 'Colleague', sent_at: AT, text: 'VPN error', attachments: [
+    { name: 'image 1', kind: 'image', url: '/api/message/7/attachment/1' },
+    { name: 'shot.png', kind: 'image', url: null },
+    { name: 'report.xlsx', kind: 'file', url: '/api/message/7/attachment/3' }] }];
+  board(state);
+  await userEvent.click(within(ticket()).getByRole('button', { name: 'Messages (1)' }));
+  const list = within(ticket()).getByRole('list', { name: 'Attachments' });
+  expect(within(list).getByRole('img', { name: 'image 1' }).getAttribute('src')).toBe('/api/message/7/attachment/1');
+  expect(within(list).getByText('shot.png').closest('a')).toBeNull();
+  await userEvent.click(within(list).getByRole('button', { name: 'Show image 1' }));
+  const dialog = await screen.findByRole('dialog', { name: 'image 1' });
+  expect(within(dialog).getByRole('img', { name: 'image 1' })).toBeTruthy();
+  await userEvent.keyboard('{Escape}');
+  fetcher.mockResolvedValue(Response.json({ error: { code: 'attachment.unavailable', message: 'This Teams account runs without a browser' } }, { status: 409 }));
+  await userEvent.click(within(list).getByText('report.xlsx'));
+  expect((await within(list).findByRole('status')).textContent).toBe('This Teams account runs without a browser');
+  expect(fetcher).toHaveBeenCalledWith('/api/message/7/attachment/3', { cache: 'no-store' });
 });
 
 test('expanded timeline refreshes its content without collapsing or moving card focus', async () => {

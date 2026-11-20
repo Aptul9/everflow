@@ -27,7 +27,7 @@ test('new Next entries are discovered rather than depending on a hand-maintained
 
 function webGraph() {
   const paths = [
-    'src/web/api.ts', 'src/web/state.ts', 'src/web/instance.ts', 'src/web/login.ts', 'src/lib/web-types.ts', 'src/lib/utils.ts',
+    'src/web/api.ts', 'src/web/state.ts', 'src/web/message-attachment.ts', 'src/app/api/message/[id]/attachment/[index]/route.ts', 'src/web/instance.ts', 'src/web/login.ts', 'src/lib/web-types.ts', 'src/lib/utils.ts',
     'src/app/login/page.tsx', 'src/components/login-form.tsx',
     'src/core/approval.ts', 'src/core/db.ts', 'src/core/jobs.ts', 'src/core/tickets.ts', 'src/core/time.ts', 'src/core/policy.ts', 'src/core/settings.ts', 'src/core/initiative-state.ts',
     'src/app/page.tsx', 'src/app/layout.tsx', 'src/app/globals.css', 'src/app/api/state/route.ts', 'src/app/api/ticket/[id]/route.ts', 'src/app/api/ticket/[id]/[action]/route.ts',

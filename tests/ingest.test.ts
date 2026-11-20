@@ -75,6 +75,18 @@ test('edited and deleted source content retains row identity and requeues each c
   expect(db.prepare('SELECT COUNT(*) AS n FROM batch').get()?.n).toBe(1);
 });
 
+test('a replay that only adds attachments updates the row in place and keeps its batch and ingestion time', () => {
+  using db = openDb(scratch('phase3-ingest-').path);
+  expect(ingest(db, line({ source: 'teamsrelay', attachments: [] }))).toBe(true);
+  const batch = db.prepare("INSERT INTO batch(conversation,state,created_at,outcome) VALUES (1,'done',?,'backlog')").run(AT).lastInsertRowid;
+  db.prepare('UPDATE message SET batch=?').run(batch);
+  vi.setSystemTime(new Date('2026-11-06T00:01:00Z'));
+  const images = [{ name: 'image 1', size: null, kind: 'image' }, { name: 'shot.png', size: null, kind: 'file' }];
+  expect(ingest(db, line({ source: 'teamsrelay', attachments: images }))).toBe(true);
+  expect(db.prepare('SELECT attachments,batch,stored_at FROM message').get()).toEqual({ attachments: JSON.stringify(images), batch: Number(batch), stored_at: AT });
+  expect(ingest(db, line({ source: 'teamsrelay', attachments: images }))).toBe(false);
+});
+
 test('chronological cursor and conversation comparisons preserve mixed legacy UTC formats', () => {
   using db = openDb(scratch('phase3-ingest-').path);
   expect(ingest(db, line())).toBe(true);
