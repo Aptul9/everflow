@@ -146,29 +146,30 @@ jobs:
           done
           test "$(code "$base/api/state")" = 401
           test "$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$base/")" = "$base/login?next=%2F"
+          curl -fsS --max-time 15 "$base/login" | grep -q '<title>Sign in · Everflow</title>'
           chat=$(sed -n 's|^chat_origin = "\(https://[^"]*\)"$|\1|p' deploy/vm/config.toml)
           if [ -n "$OIDC_ISSUER" ]; then
-            # Login starts OIDC without a local credential form.
-            test "$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$base/login")" = "$base/oidc/start?next=%2F"
+            # EverID behind the form: the callback route still answers, the page shows only the app's own form
             to=$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$base/oidc/start?next=%2F")
             printf '%s\n' "$to" | sed 's/[?].*//'
             case "$to" in "https://$(printf '%s' "$OIDC_ISSUER" | sed 's|^https://||; s|/.*||')/"*) ;; *) echo "::error::/oidc/start did not go to EverID"; exit 1 ;; esac
             printf '%s' "$to" | grep -q "redirect_uri=$(jq -rn --arg u "$base/oidc/callback" '$u|@uri')"
             printf '%s' "$to" | grep -q 'code_challenge_method=S256'
+            page=$(curl -fsS --max-time 15 "$base/login")
+            grep -q 'type="password"' <<< "$page"
+            if grep -qi 'everid' <<< "$page"; then echo "::error::sign-in page mentions EverID"; exit 1; fi
             test "$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$base/oidc/callback?state=x&code=y")" = "$base/login?error=everid.expired"
-          else
-            curl -fsS --max-time 15 "$base/login" | grep -q 'Accesso non disponibile'
           fi
-          if [ "$PASSWORD_LOGIN" = off ]; then
-            # the fallback is off: the password is refused even when right; a session needs EverID in a browser
-            test "$(login -d "$(jq -cn --arg e "$PAGE_USER" --arg p "$PAGE_PASSWORD" '{email:$e,password:$p}')")" = 403
+          if [ -n "$OIDC_ISSUER" ]; then
+            # the form's credentials go to EverID behind the page: a wrong password is 401, no session
+            test "$(login -d "$(jq -cn '{email:"ci-nobody",password:"wrong-password-ci"}')")" = 401
             for _ in $(seq 1 30); do
               if [ "$(code "$chat/")" = 302 ]; then break; fi
               sleep 5
             done
             test "$(curl -s -o /dev/null -w '%{redirect_url}' --max-time 15 "$chat/")" = "$base/login?next=$(jq -rn --arg u "$chat/" '$u|@uri')"
-            echo "$chat/ ok (EverID only)"
-            echo "$base/ ok (EverID only)"
+            echo "$chat/ ok"
+            echo "$base/ ok (form checked by EverID)"
             exit 0
           fi
           test "$(login -d "$(jq -cn --arg e "$PAGE_USER" --arg p "x$PAGE_PASSWORD" '{email:$e,password:$p}')")" = 401

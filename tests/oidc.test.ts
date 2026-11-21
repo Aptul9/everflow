@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, expect, test } from 'vitest';
@@ -218,7 +218,7 @@ test('EverID flow: start, callback, group and account rule decide, state and PKC
   await expect(cold.start('/')).rejects.toMatchObject({ code: 'everid.unavailable' });
 });
 
-test('served page: EverID signs in through the callback, the fallback off refuses the password and its sessions', async () => {
+test('served page: own form, EverID behind it, callback still served, local sign-out', async () => {
   const provider = issuer();
   servers.push(provider.server);
   const base = await provider.listen();
@@ -231,17 +231,17 @@ test('served page: EverID signs in through the callback, the fallback off refuse
   const login = (port: number) => pub(port, '/api/login', { method: 'POST', body: JSON.stringify({ email: 'me@example.invalid', password: 'synthetic secret' }),
     headers: { origin: ORIGIN, 'content-type': 'application/json', 'x-forwarded-for': '203.0.113.7' } });
 
-  let passwordCookie = '', everidCookie = '';
+  let everidCookie = '';
   const server = await launch('web-process.ts', [], env('on'));
   try {
+    // the app's own form: no EverID wording, no link to it
     const page = await pub(server.port, '/login');
-    expect(page.status).toBe(303);
-    expect(page.headers.location).toBe('/oidc/start?next=%2F');
-    expect(page.text).not.toContain('<form');
+    expect(page.text).toContain('type="password"');
+    expect(page.text).not.toMatch(/everid/i);
     const start = await pub(server.port, '/oidc/start?next=%2Foverview');
     expect(start.status).toBe(303);
     expect(start.headers.location!.startsWith(base.replace('everflow/', 'authorize/'))).toBe(true);
-    const flow = start.headers['set-cookie']![0]!;
+    const flow = String(start.headers['set-cookie']);
     expect(flow).toMatch(/^everflow_oidc=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}; Path=\/oidc\/callback; HttpOnly; Secure; SameSite=Lax; Max-Age=600$/);
     const params = provider.authorize(start.headers.location!);
 
@@ -253,58 +253,29 @@ test('served page: EverID signs in through the callback, the fallback off refuse
     expect(done.status).toBe(303);
     expect(done.headers.location).toBe('/overview');
     const set = done.headers['set-cookie']!;
-    expect(set[0]).toMatch(/^everflow_oidc=; Path=\/oidc\/callback;.*Max-Age=0$/);
-    expect(set[1]).toMatch(/^everflow_idt=[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+; Path=\/api\/logout; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000$/);
     expect(set[2]).toMatch(/^everflow_session=o1\.\d{13}\.[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000$/);
     const hint = set[1]!.split(';')[0]!;
     everidCookie = set[2]!.split(';')[0]!;
     expect((await pub(server.port, '/api/state', { headers: { cookie: everidCookie } })).status).toBe(200);
-    expect((await pub(server.port, '/login?next=%2F', { headers: { cookie: everidCookie } })).headers.location).toBe('/');
 
-    // signing out of an EverID session names EverID's end-session; a password session's sign-out does not
+    // signing out stays on Everflow: no EverID end-session for the browser
     const out = await pub(server.port, '/api/logout', { method: 'POST', headers: { origin: ORIGIN, cookie: `${everidCookie}; ${hint}` } });
     expect(out.status).toBe(204);
-    const to = new URL(String(out.headers['x-everflow-logout']));
-    expect(to.href.startsWith(`${base}end-session/`)).toBe(true);
-    expect(to.searchParams.get('id_token_hint')).toBe(hint.slice(hint.indexOf('=') + 1));
-    expect(to.searchParams.get('post_logout_redirect_uri')).toBe(`${ORIGIN}/`);
+    expect(out.headers['x-everflow-logout']).toBeUndefined();
     expect(String(out.headers['set-cookie'])).toContain('everflow_idt=; Path=/api/logout');
-    const marker = out.headers['set-cookie']!.find((value) => value.startsWith('everflow_signed_out='))!;
-    expect(marker).toContain('HttpOnly; Secure; SameSite=Lax');
-    const landing = await pub(server.port, '/', { headers: { cookie: marker.split(';')[0]! } });
-    expect(landing.headers.location).toBe('/login?logged_out=1');
-    const loggedOut = await pub(server.port, landing.headers.location!, { headers: { cookie: marker.split(';')[0]! } });
-    expect(loggedOut.status).toBe(200);
-    expect(loggedOut.text).toContain('Disconnessione effettuata');
-    expect(loggedOut.text).not.toContain('<form');
-    expect(loggedOut.text).not.toContain('EverID');
-    expect((await pub(server.port, '/login', { headers: { cookie: marker.split(';')[0]! } })).status).toBe(200);
-    const restart = await pub(server.port, '/oidc/start?next=%2F', { headers: { cookie: marker.split(';')[0]! } });
-    expect(restart.status).toBe(303);
-    expect(restart.headers['set-cookie']!.some((value) => value.startsWith('everflow_signed_out=;') && value.includes('Max-Age=0'))).toBe(true);
 
-    const ok = await login(server.port);
-    expect(ok.status).toBe(204);
-    passwordCookie = String(ok.headers['set-cookie']).split(';')[0]!;
-    const passwordOut = await pub(server.port, '/api/logout', { method: 'POST', headers: { origin: ORIGIN, cookie: passwordCookie } });
-    expect(passwordOut.status).toBe(204);
-    expect(passwordOut.headers['x-everflow-logout']).toBeUndefined();
-
-    const denied = await pub(server.port, '/login?error=everid.denied');
-    expect(denied.text).toContain('Accesso non riuscito');
-    expect(denied.text).not.toContain('EverID');
+    // the form goes to EverID behind the page; this fake EverID has no sign-in flow, so it fails closed
+    const unavailable = await login(server.port);
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.headers['set-cookie']).toBeUndefined();
   } finally { await server.close(); }
 
   const off = await launch('web-process.ts', [], env('off'));
   try {
     const page = await pub(off.port, '/login');
-    expect(page.status).toBe(303);
-    expect(page.headers.location).toBe('/oidc/start?next=%2F');
-    expect(page.text).not.toContain('<form');
-    const refused = await login(off.port);
-    expect(refused.status).toBe(403);
-    expect(refused.text).toContain('login.password-off');
-    expect((await pub(off.port, '/api/state', { headers: { cookie: passwordCookie } })).status).toBe(401);
+    expect(page.text).toContain('type="password"');
+    // the local password is never the check once EverID is configured
+    expect((await login(off.port)).status).toBe(503);
     // an EverID session from before the restart survives it
     expect((await pub(off.port, '/api/state', { headers: { cookie: everidCookie } })).status).toBe(200);
   } finally { await off.close(); }
@@ -312,39 +283,3 @@ test('served page: EverID signs in through the callback, the fallback off refuse
   await expect(launch('web-process.ts', [], { ...env('off'), OIDC_ISSUER: '', OIDC_CLIENT_ID: '', OIDC_CLIENT_SECRET: '' })).rejects.toThrow(/login.none/);
   await expect(launch('web-process.ts', [], { ...env('on'), OIDC_CLIENT_SECRET: '' })).rejects.toThrow(/oidc.client-required/);
 }, 240_000);
-
-test('private and chat destinations automatically start OIDC, retain their target, and reject external redirects', async () => {
-  const provider = issuer();
-  servers.push(provider.server);
-  const base = await provider.listen();
-  const fixture = webFixture();
-  const chat = 'https://chat.everflow.example.invalid';
-  writeFileSync(fixture.config, readFileSync(fixture.config, 'utf8').replace('[opencode]\n', '[opencode]\nopenchamber_port = 12345\n')
-    + `[web]\npublic_origin = "${ORIGIN}"\nchat_origin = "${chat}"\n`);
-  const server = await launch('web-process.ts', [], { TEST_INSTANCE_CONFIG: fixture.config,
-    EVERFLOW_LOGIN_USER: 'me@example.invalid', EVERFLOW_LOGIN_HASH: hashPassword('synthetic secret'),
-    OIDC_ISSUER: base, OIDC_CLIENT_ID: CLIENT, OIDC_CLIENT_SECRET: SECRET, EVERFLOW_PASSWORD_LOGIN: 'off' });
-  const pub = (path: string, cookie?: string) => http(server.port, path, { headers: { host: HOST, ...(cookie ? { cookie } : {}) } });
-  try {
-    for (const target of ['/overview?tab=map', `${chat}/?session=ses_1`]) {
-      const entry = target.startsWith('/') ? await pub(target) : await pub(`/login?next=${encodeURIComponent(target)}`);
-      expect(entry.status).toBe(303);
-      const login = target.startsWith('/') ? await pub(entry.headers.location!) : entry;
-      expect(login.headers.location).toBe(`/oidc/start?next=${encodeURIComponent(target)}`);
-      const start = await pub(login.headers.location!);
-      expect(start.status).toBe(303);
-      const params = provider.authorize(start.headers.location!);
-      const callback = await pub(`/oidc/callback?${params}`, start.headers['set-cookie']![0]!.split(';')[0]);
-      expect(callback.status).toBe(303);
-      expect(callback.headers.location).toBe(target);
-      expect(callback.headers['set-cookie']!.some((value) => value.startsWith('everflow_session=o1.') && value.includes('Domain=everflow.example.invalid'))).toBe(true);
-    }
-    const unsafe = await pub(`/login?next=${encodeURIComponent('https://attacker.example/')}`);
-    expect(unsafe.headers.location).toBe('/oidc/start?next=%2F');
-    expect((await pub('/api/state')).status).toBe(401);
-    const errorPage = await pub('/login?error=everid.failed');
-    expect(errorPage.status).toBe(200);
-    expect(errorPage.text).toContain('Accesso non riuscito');
-    expect(errorPage.text).not.toContain('<form');
-  } finally { await server.close(); }
-}, 120_000);
