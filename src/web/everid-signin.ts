@@ -20,7 +20,7 @@ export async function everidSignIn(username: string, password: string, authorize
       if (jar.size) headers.cookie = [...jar].map(([name, value]) => `${name}=${value}`).join('; ');
       const csrf = jar.get('authentik_csrf');
       if (csrf) headers['x-authentik-csrf'] = csrf;
-      const response = await fetcher(url, { method, headers, body: payload, redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS) });
+      const response = await fetcher(url, { method, headers, ...(payload === undefined ? {} : { body: payload }), redirect: 'manual', signal: AbortSignal.timeout(TIMEOUT_MS) });
       for (const line of response.headers.getSetCookie()) {
         const pair = line.split(';', 1)[0] ?? '', at = pair.indexOf('=');
         if (at > 0) jar.set(pair.slice(0, at).trim(), pair.slice(at + 1).trim());
