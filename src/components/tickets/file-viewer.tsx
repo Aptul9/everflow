@@ -1,13 +1,15 @@
 'use client';
 
 import { Check, ChevronDown, ChevronUp, Copy, Download, Eye, FileText, FolderTree, ListTree, LoaderCircle, Maximize2, Minimize2, PanelRightClose, RefreshCw, Search, XIcon } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode, RefObject } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatFile } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { age, formatTime } from './ticket-card.tsx';
+
+const DocumentPreview = lazy(() => import('./document-preview.tsx').then((module) => ({ default: module.DocumentPreview })));
 
 export type ListFiles = (ticket: number, signal?: AbortSignal) => Promise<ChatFile[]>;
 export type ReadFile = (ticket: number, path: string, download: boolean, signal?: AbortSignal) => Promise<Response>;
@@ -35,7 +37,8 @@ export function useChatFiles(ticket: number | undefined, session: string | undef
 const size = (bytes: number) => bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 
 type View = { state: 'loading' } | { state: 'error'; message: string } | { state: 'download' }
-  | { state: 'markdown' | 'text'; text: string } | { state: 'html'; html: string } | { state: 'pdf' | 'image'; url: string };
+  | { state: 'markdown' | 'text'; text: string } | { state: 'image'; url: string }
+  | { state: 'document'; kind: 'pdf' | 'docx' | 'pptx' | 'odt' | 'odp' | 'workbook'; bytes: ArrayBuffer };
 
 // Bytes become a blob: URL of a type chosen here, never a page address: the page host refuses to be framed
 function useView(ticket: number, file: ChatFile | undefined, read: ReadFile, reload: number): View {
@@ -52,15 +55,20 @@ function useView(ticket: number, file: ChatFile | undefined, read: ReadFile, rel
     let url: string | undefined;
     void (async () => {
       const response = await read(ticket, path, false, controller.signal);
-      if (kind === 'pdf' || kind === 'image') {
+      if (kind === 'image') {
         const bytes = await response.arrayBuffer();
         if (controller.signal.aborted) return;
-        url = URL.createObjectURL(new Blob([bytes], { type: kind === 'pdf' ? 'application/pdf' : response.headers.get('content-type') ?? 'image/png' }));
+        url = URL.createObjectURL(new Blob([bytes], { type: response.headers.get('content-type') ?? 'image/png' }));
         setView({ state: kind, url });
         return;
       }
-      const text = await response.text();
-      if (!controller.signal.aborted) setView(kind === 'docx' ? { state: 'html', html: text } : { state: kind, text });
+      if (kind === 'markdown' || kind === 'text') {
+        const text = await response.text();
+        if (!controller.signal.aborted) setView({ state: kind, text });
+      } else {
+        const bytes = await response.arrayBuffer();
+        if (!controller.signal.aborted) setView({ state: 'document', kind, bytes });
+      }
     })().catch((failure: unknown) => { if (!controller.signal.aborted) setView({ state: 'error', message: failure instanceof Error ? failure.message : 'File unavailable' }); });
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
   }, [ticket, path, kind, mtime, read, reload]);
@@ -122,9 +130,16 @@ function useFind(root: RefObject<HTMLElement | null>, query: string, view: View,
   const [found, setFound] = useState({ count: 0, generation: 0 });
   const [index, setIndex] = useState(0);
   useEffect(() => {
-    ranges.current = root.current && query ? textRanges(root.current, query) : [];
-    setFound((last) => ({ count: ranges.current.length, generation: last.generation + 1 }));
-    setIndex(0);
+    const refresh = () => {
+      ranges.current = root.current && query ? textRanges(root.current, query) : [];
+      setFound((last) => ({ count: ranges.current.length, generation: last.generation + 1 }));
+      setIndex(0);
+    };
+    refresh();
+    if (!root.current || !query || view.state !== 'document' || view.kind !== 'workbook') return;
+    const watcher = new MutationObserver(refresh);
+    watcher.observe(root.current, { subtree: true, childList: true, characterData: true });
+    return () => watcher.disconnect();
   }, [root, query, view, source, path]);
   useEffect(() => {
     const api = painter(), all = ranges.current, current = all[Math.min(index, all.length - 1)];
@@ -166,6 +181,7 @@ export function FileViewer(props: {
   const findInput = useRef<HTMLInputElement>(null);
   const view = useView(props.ticket, file, props.read, reload);
   const textual = view.state === 'markdown' || view.state === 'text';
+  const canFind = textual || view.state === 'document' && view.kind === 'workbook';
   const showSource = source && textual;
   const find = useFind(body, finding ? query : '', view, showSource, file?.path);
   useEffect(() => {
@@ -194,7 +210,7 @@ export function FileViewer(props: {
     catch { setFailure('The path could not be copied'); }
   };
   const keys = (event: KeyboardEvent) => {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f' && file) { event.preventDefault(); setFinding(true); findInput.current?.select(); }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f' && canFind) { event.preventDefault(); setFinding(true); findInput.current?.select(); }
   };
   const findKeys = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'Enter') { event.preventDefault(); find.step(event.shiftKey ? -1 : 1); }
@@ -261,7 +277,7 @@ export function FileViewer(props: {
           {textual && <button type="button" aria-label="Preview" title={source ? 'Show preview' : 'Show source'} aria-pressed={!source} onClick={() => setSource((value) => !value)} className={iconButton}>
             <Eye aria-hidden="true" className="size-4" />
           </button>}
-          <button type="button" aria-label="Find in file" title="Find in file" aria-pressed={finding} disabled={view.state === 'pdf' || view.state === 'image' || view.state === 'download'}
+          <button type="button" aria-label="Find in file" title="Find in file" aria-pressed={finding} disabled={!canFind}
             onClick={() => setFinding((value) => !value)} className={iconButton}>
             <Search aria-hidden="true" className="size-4" />
           </button>
@@ -283,7 +299,7 @@ export function FileViewer(props: {
             <RefreshCw aria-hidden="true" className="size-4" />
           </button>
         </div>
-        {finding && <div className="flex shrink-0 items-center gap-1 border-b px-2 py-1">
+        {finding && canFind && <div className="flex shrink-0 items-center gap-1 border-b px-2 py-1">
           <input ref={findInput} type="search" aria-label="Find in file" placeholder="Find in file" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={findKeys}
             className="h-7 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-sm" />
           <span role="status" aria-label="Matches" className="w-14 shrink-0 text-center text-xs text-muted-foreground tabular-nums">{find.count ? `${find.index + 1}/${find.count}` : query ? '0/0' : ''}</span>
@@ -299,9 +315,9 @@ export function FileViewer(props: {
                 : showSource ? <SourceFile text={view.text} />
                   : view.state === 'markdown' ? <MarkdownFile text={view.text} />
                     : view.state === 'text' ? <pre className="m-0 p-4 font-mono text-[13px] leading-relaxed whitespace-pre-wrap">{view.text}</pre>
-                      // sanitized by the server: no scripts, no event handlers, images only as data: URIs
-                      : view.state === 'html' ? <article className="file-doc px-5 py-4" dangerouslySetInnerHTML={{ __html: view.html }} />
-                        : view.state === 'pdf' ? <iframe src={view.url} title={file.name} className="size-full border-0" />
+                      : view.state === 'document' ? <Suspense fallback={<p role="status" className="p-4">Preparing preview…</p>}>
+                        <DocumentPreview key={`${file.path}:${file.mtime}:${reload}`} kind={view.kind} bytes={view.bytes} name={file.name} />
+                      </Suspense>
                           : view.state === 'image' ? <img src={view.url} alt={file.name} className="mx-auto block max-w-full p-4" /> : null}
         </div>
       </div>}

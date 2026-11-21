@@ -1,8 +1,7 @@
 import { mkdirSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import JSZip from 'jszip';
 import { expect, test } from 'vitest';
-import { ChatFiles, docxHtml, housekeeping, MAX_FILE_BYTES, mentions, references, sanitize } from '../src/web/chat-files.ts';
+import { ChatFiles, housekeeping, MAX_FILE_BYTES, mentions, references } from '../src/web/chat-files.ts';
 import { scratch } from './support.ts';
 
 const AT = Date.parse('2026-11-17T16:00:00Z');
@@ -30,7 +29,7 @@ test('history items: write and edit targets count, read does not, documents only
     tool('write', { path: '/home/u/failed.md', content: '' }, AT + 4, {}, 'error'),
     tool('shell', { command: 'pandoc in.md -o ~/out/report.docx' }, AT + 5, { content: [{ type: 'text', text: 'written /home/u/out/annex.pdf' }] }),
     tool('grep', { pattern: 'x', path: '/home/u/Vault/03.pdf' }, AT + 6),
-    { type: 'text', text: 'Saved `/home/u/out/final.xlsx` and https://example.invalid/files/a.pdf, see also /home/u/slides.pptx.' },
+    { type: 'text', text: 'Saved `/home/u/out/final.xlsx` and https://example.invalid/files/a.pdf, see also /home/u/slides.pptx and `~/out/Quarterly Report.ods`.' },
   ]);
   expect(mentions(item, dir, user)).toEqual([
     ['/home/u/Vault/99_Inbox/prompt.md', AT + 1],
@@ -39,6 +38,7 @@ test('history items: write and edit targets count, read does not, documents only
     ['/home/u/out/annex.pdf', AT + 5],
     ['/home/u/out/final.xlsx', AT],
     ['/home/u/slides.pptx', AT],
+    ['/home/u/out/Quarterly Report.ods', AT],
   ]);
   expect(mentions({ id: 'msg_2', type: 'user', text: 'look at /home/u/in.docx', time: { created: AT } }, dir, user)).toEqual([]);
   expect(['/v/05_Daily/2026-11-17.md', '/v/01_Projects/Board.md', '/v/99_Inbox/everflow-tool-issues.md'].every(housekeeping)).toBe(true);
@@ -117,7 +117,7 @@ test('reading: only a listed file, after its real path, inside the home folder, 
   expect(await files.read('ses_a', prompt)).toMatchObject({ body: expect.stringContaining('| 1 | 2 |'), type: 'text/markdown; charset=utf-8', download: false });
   expect(await files.read('ses_a', image)).toMatchObject({ type: 'image/png', download: false });
   expect(await files.read('ses_a', sheet, true)).toMatchObject({ type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', name: 'sheet.xlsx', download: true });
-  await expect(files.read('ses_a', sheet)).rejects.toMatchObject({ status: 415, code: 'file.download-only' });
+  await expect(files.read('ses_a', sheet)).resolves.toMatchObject({ body: Buffer.from('PK'), download: false });
   await expect(files.read('ses_a', big)).rejects.toMatchObject({ status: 413, code: 'file.too-large' });
   // named by the chat but outside the home folder: refused for where it is
   await expect(files.read('ses_a', outside)).rejects.toMatchObject({ status: 403, code: 'file.outside' });
@@ -185,28 +185,4 @@ test('references: every tool path input, path words in text and commands, relati
     ['/home/u/a.md', AT],
     ['/home/u/chats/notes/b.md', AT],
   ]);
-});
-
-async function docx(body: string): Promise<Buffer> {
-  const zip = new JSZip();
-  zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>');
-  zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
-  zip.file('word/_rels/document.xml.rels', '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>');
-  zip.file('word/styles.xml', '<?xml version="1.0" encoding="UTF-8"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/></w:style></w:styles>');
-  zip.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`);
-  return zip.generateAsync({ type: 'nodebuffer' });
-}
-
-test('Word documents: converted to HTML and sanitized, no script, no event handler, images only as data: URIs', async () => {
-  const html = await docxHtml(await docx('<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Audit trail</w:t></w:r></w:p><w:p><w:r><w:t>Ten years of logs &lt;script&gt;alert(1)&lt;/script&gt;</w:t></w:r></w:p>'));
-  expect(html).toBe('<h1>Audit trail</h1><p>Ten years of logs &lt;script&gt;alert(1)&lt;/script&gt;</p>');
-  const dirty = '<p onclick="steal()">Hi<script>alert(1)</script></p><img src="x" onerror="alert(2)"><img src="https://evil.invalid/t.png">'
-    + '<img src="data:image/png;base64,iVBORw0KGgo=" alt="chart" onload="x()"><a href="javascript:alert(3)">js</a><a href="https://example.invalid/" target="_self">ok</a>'
-    + '<iframe src="https://evil.invalid"></iframe><style>body{display:none}</style><table><tr><td colspan="2" style="color:red">cell</td></tr></table>';
-  const clean = sanitize(dirty);
-  expect(clean).not.toMatch(/<script|onerror|onclick|onload|javascript:|<iframe|<style|evil\.invalid|style=/i);
-  expect(clean).toContain('<img src="data:image/png;base64,iVBORw0KGgo=" alt="chart" />');
-  expect(clean).toContain('<a href="https://example.invalid/" target="_blank" rel="noopener noreferrer">ok</a>');
-  expect(clean).toContain('<td colspan="2">cell</td>');
-  expect(clean.match(/<img/g)).toHaveLength(1);
 });
