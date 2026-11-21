@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from './config.ts';
 import { utc } from './time.ts';
+import { guideItemKey } from '../lib/web-types.ts';
 import type { Explainer, GuideState, InitiativesState, InitiativeSummary, InitiativeView } from '../lib/web-types.ts';
 
 // The Overview page's side of the initiatives: stored summaries, the refresh request and page opens, all in the setting
@@ -85,6 +86,19 @@ export function storedExplainer(db: DatabaseSync, id: string): StoredExplainer {
 
 export function requestExplainer(db: DatabaseSync, id: string): void { writeSetting(db, `explainer.requested:${id}`, utc()); }
 
+// explainer.dismissed:<id>: keys of the next steps Antonio hid; kept across regenerations and passed to the generator
+export function dismissedItems(db: DatabaseSync, id: string): string[] {
+  try { const value = JSON.parse(readSetting(db, `explainer.dismissed:${id}`) ?? '[]') as unknown; return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; }
+  catch { return []; }
+}
+
+export function setDismissed(db: DatabaseSync, id: string, text: string, hidden: boolean): string[] {
+  const key = guideItemKey(text), current = dismissedItems(db, id).filter((item) => item !== key);
+  const next = hidden ? [...current, key].slice(-200) : current;
+  writeSetting(db, `explainer.dismissed:${id}`, JSON.stringify(next));
+  return next;
+}
+
 export function readGuide(db: DatabaseSync, cfg: Config, id: string, at = Date.now()): GuideState | null {
   const state = readInitiatives(db, cfg, at);
   const initiative = state.initiatives.find((item) => item.id === id);
@@ -94,5 +108,5 @@ export function readGuide(db: DatabaseSync, cfg: Config, id: string, at = Date.n
   return { initiative, today: state.today, at: record.at, explainer: record.explainer, error: record.error, error_at: record.error_at,
     requested: !!readSetting(db, `explainer.requested:${id}`),
     running: !!running && at - Date.parse(running) < (cfg.overview.explainer_timeout_seconds + 60) * 1_000,
-    providers: state.providers };
+    providers: state.providers, dismissed: dismissedItems(db, id) };
 }

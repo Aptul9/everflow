@@ -102,7 +102,7 @@ function guide(): GuideState {
     graph: { nodes: [{ id: 'questions', kind: 'answer', label: 'questions 1-4', plain: '', status: 'open', owner: 'alice', since: null, src: ['G1'] }],
       edges: [{ from: 'alice', to: 'questions', kind: 'owes', why: 'Request', src: ['G1'] }, { from: 'questions', to: 'goal', kind: 'unblocks', why: 'Evidence', src: ['G1'] }] },
   };
-  return { initiative: acme(), today: '2026-11-18', at: null, explainer: ex, error: null, error_at: null, requested: false, running: false, providers: true };
+  return { initiative: acme(), today: '2026-11-18', at: null, explainer: ex, error: null, error_at: null, requested: false, running: false, providers: true, dismissed: [] };
 }
 
 test('a board card focuses only its uniquely matching node with the same source text', async () => {

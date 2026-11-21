@@ -60,7 +60,7 @@ function guide(fields: Partial<GuideState> = {}): GuideState {
   return {
     initiative: { id: 'acme', title: 'Acme access', client: 'acme', note: '01_Projects/acme.md', at: '2026-11-18T07:00:00.000000Z', error: null, error_at: null,
       summary: { state: 'waiting_them', headline: 'Alice silent on 4 questions', now: [], waits: [], next: [], done: [], rejected: 0, entries: 5, model: 'm' } },
-    today: '2026-11-18', at: '2026-11-18T07:00:00.000000Z', explainer: explainer(), error: null, error_at: null, requested: false, running: false, providers: true, ...fields,
+    today: '2026-11-18', at: '2026-11-18T07:00:00.000000Z', explainer: explainer(), error: null, error_at: null, requested: false, running: false, providers: true, dismissed: [], ...fields,
   };
 }
 
