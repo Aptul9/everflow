@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { GuidePage } from '../../src/components/initiatives/guide-page.tsx';
 import { Diagram } from '../../src/components/initiatives/diagram.tsx';
-import type { Explainer, GuideState } from '../../src/lib/web-types.ts';
+import type { Explainer, ExplainerDiagram, GuideState } from '../../src/lib/web-types.ts';
 
 let fetcher: ReturnType<typeof vi.fn>;
 beforeEach(() => {
@@ -50,15 +50,21 @@ test('dates and diagrams render as readable text', () => {
   expect(screen.queryByText('Frase da dire.')).toBeNull();
 });
 
-test('diagrams keep every label and omit single items', () => {
-  for (const t of ['flow', 'nest', 'split', 'hub', 'row'] as const) {
-    const { unmount } = render(<Diagram diagram={{ t, i: ['Long first label', 'Long second label'], hi: 1 }} />);
+test('only drawings that show a relation are drawn, with every label', () => {
+  for (const t of ['flow', 'nest', 'hub'] as const) {
+    const { unmount } = render(<Diagram diagram={{ t, i: ['Long first label', 'Long second label'], hi: 1, b: 'Base' }} />);
     expect(screen.getByRole('img').textContent).toContain('Long first label');
     expect(screen.getByRole('img').textContent).toContain('Long second label');
     unmount();
   }
-  const { container } = render(<Diagram diagram={{ t: 'one', i: ['A', 'B'] }} />);
-  expect(container.firstChild).toBeNull();
+  for (const diagram of [{ t: 'one', i: ['A', 'B'] }, { t: 'split', i: ['A', 'B'] }, { t: 'row', i: ['A', 'B'] }, { t: 'hub', i: ['A', 'B'] }, { t: 'flow', i: ['A'] }] satisfies ExplainerDiagram[]) {
+    const { container, unmount } = render(<Diagram diagram={diagram} />);
+    expect(container.firstChild).toBeNull();
+    unmount();
+  }
+  render(<Diagram diagram={{ t: 'flow', i: ['Job', 'Token', 'Safe'] }} />);
+  expect(screen.getByRole('img').querySelectorAll('li')).toHaveLength(3);
+  expect(screen.getByRole('img').querySelectorAll('.lucide-arrow-right')).toHaveLength(2);
 });
 
 test('initially hidden next steps can be restored', async () => {
@@ -94,19 +100,29 @@ test('a stale poll cannot undo a dismissed step', async () => {
   expect(screen.getByRole('button', { name: 'Mostra nascosti (1)' })).toBeTruthy();
 });
 
-test('source popover formats dates and expands long text without changing its card', async () => {
+test('source popover shows each source once dated, cleaned of chat ids, staff ids and foreign dates, folded after the first', async () => {
   const ex = explainer();
-  ex.sources.L1!.text = `2026-11-10 09:00 - ${'A long source with `command`. '.repeat(20)}`;
+  ex.why = ['Blocked since 11-19, see 2026-11-05.'];
+  ex.sources.L1!.text = '2026-11-10 - Meeting chat 19:meeting_ABC123@thread.v2, Alice AGREED (owners Bob K IN22898516, Carol UK80132253) chase of 11-05 with `command`.';
+  ex.sources.L2 = { id: 'L2', kind: 'section', text: 'acme-access.md · Weekly update (2026-09-08, 15:31)' };
+  ex.concepts[0]!.src = ['L1', 'L2'];
   render(<GuidePage {...props(guide({ explainer: ex }))} />);
+  expect(document.body.textContent).toContain('Blocked since 19/11, see 05/11/2026.');
   const card = screen.getByRole('article', { name: 'Access levels' });
-  await userEvent.click(within(card).getByRole('button', { name: 'Fonti (1)' }));
+  await userEvent.click(within(card).getByRole('button', { name: 'Fonti (2)' }));
   const popover = screen.getByRole('dialog');
-  expect(popover.textContent).toContain('10/11/2026');
-  expect(popover.textContent).not.toContain('2026-11-10 09:00');
+  const text = popover.textContent!;
+  expect(text.match(/10\/11\/2026/g)).toHaveLength(1);
+  for (const bad of ['2026-11-10', '@thread', '19:meeting', 'IN22898516', 'UK80132253', '11-05', '.md', 'Mostra tutto']) expect(text).not.toContain(bad);
+  expect(text).toContain('Alice AGREED (owners Bob K, Carol) chase of 05/11');
   expect(popover.querySelector('code')?.textContent).toBe('command');
-  await userEvent.click(within(popover).getByRole('button', { name: 'Mostra tutto' }));
-  expect(within(popover).getByRole('button', { name: 'Mostra meno' })).toBeTruthy();
-  expect(within(card).queryByText(/A long source/)).toBeNull();
+  const folds = [...popover.querySelectorAll<HTMLElement>('[data-fold]')];
+  expect(folds.map((fold) => fold.dataset.open ?? 'closed')).toEqual(['true', 'closed']);
+  expect(folds[1]!.textContent).toContain('Nota del progetto');
+  expect(folds[1]!.textContent).toContain('Weekly update (08/09/2026, 15:31)');
+  await userEvent.click(within(folds[1]!).getByRole('button'));
+  expect(folds[1]!.dataset.open).toBe('true');
+  expect(within(card).queryByText(/AGREED/)).toBeNull();
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 

@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { italianDates } from '../../lib/web-types.ts';
 import type { ExplainerTerm } from '../../lib/web-types.ts';
 
 type Alias = { alias: string; id: string; exact: boolean };
@@ -131,9 +132,9 @@ function Term({ id, word, gloss }: { id: string; word: string; gloss: Gloss }) {
 // Text with every glossary term turned into a dotted link; code spans and the term's own entry are left alone
 export function Glossed({ text, skip }: { text: string; skip?: string }) {
   const gloss = useGloss();
-  if (!gloss) return <>{text}</>;
+  if (!gloss) return <>{italianDates(text)}</>;
   const out: ReactNode[] = [];
-  text.split(/(`[^`\n]+`)/).forEach((part, p) => {
+  italianDates(text).split(/(`[^`\n]+`)/).forEach((part, p) => {
     if (p % 2) { out.push(<code key={p} className="rounded bg-muted px-1 py-px font-mono text-[0.88em]">{part.slice(1, -1)}</code>); return; }
     let last = 0;
     if (gloss.index) {

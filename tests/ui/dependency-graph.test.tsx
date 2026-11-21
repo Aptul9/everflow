@@ -79,61 +79,69 @@ test('measured labels determine node and person sizes without truncation', () =>
   expect(container.querySelector<HTMLElement>('[data-node="uno"]')!.style.height).toBe('64px');
 });
 
-test('person chains disclose individually, panel closes and focus resets', async () => {
+test('person chains start folded except the first, open on click; panel hides, reopens and focus resets', async () => {
   render(<DependencyGraph explainer={fixture()} today="2026-11-18" />);
   await userEvent.click(screen.getByRole('button', { name: /Alice: cosa aspetti/ }));
   const panel = screen.getByRole('complementary', { name: 'Spiegazione della catena' });
-  const details = panel.querySelectorAll('details');
-  expect(details).toHaveLength(2);
-  expect(details[0]!.open).toBe(true);
-  expect(details[1]!.open).toBe(false);
-  expect(details[0]!.querySelector('summary')!.textContent).toMatch(/ · da \d+ gg/);
-  await userEvent.click(details[1]!.querySelector('summary')!);
-  expect(details[1]!.open).toBe(true);
-  await userEvent.click(within(panel).getByRole('button', { name: 'Chiudi spiegazione' }));
+  const folds = [...panel.querySelectorAll<HTMLElement>('[data-fold]')];
+  expect(folds).toHaveLength(2);
+  expect(folds.map((fold) => fold.dataset.open ?? 'closed')).toEqual(['true', 'closed']);
+  expect(folds[0]!.querySelector('.lucide-play')).not.toBeNull();
+  expect(folds[0]!.textContent).toMatch(/ · da \d+ gg/);
+  expect(folds[1]!.querySelector('ol')).toBeNull();
+  await userEvent.click(within(folds[1]!).getAllByRole('button')[0]!);
+  expect(folds[1]!.dataset.open).toBe('true');
+  expect(folds[1]!.querySelector('ol')).not.toBeNull();
+  expect(panel.textContent).not.toContain('Mostra tutto');
+  await userEvent.click(within(panel).getByRole('button', { name: 'Nascondi spiegazione' }));
   expect(screen.queryByRole('complementary')).toBeNull();
-  await userEvent.click(screen.getByRole('button', { name: 'Spiegazione' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Mostra spiegazione' }));
+  expect(screen.getByRole('complementary', { name: 'Spiegazione della catena' })).toBeTruthy();
   await userEvent.keyboard('{Escape}');
   expect(document.querySelector('[data-graph]')!.hasAttribute('data-focus')).toBe(false);
 });
 
-test('node lists all direct dependencies and unblocks, with Italian dates', async () => {
+test('node shows each dependency and unblock as its own fold, only the first open, with Italian dates', async () => {
   render(<DependencyGraph explainer={fixture()} today="2026-11-18" />);
   await userEvent.click(document.querySelector('[data-node="due"]')!);
   const panel = screen.getByRole('complementary', { name: 'Spiegazione della catena' });
   expect(panel.textContent).toContain('dal 27/10');
   expect(panel.textContent).toContain('Da cosa dipende');
-  expect(panel.textContent).toContain('Alice deve fare');
   expect(panel.textContent).toContain('Cosa sblocca');
   expect(panel.textContent).not.toContain('Fonte acme');
-  const outgoing = within(panel).getByText('Cosa sblocca').closest('details')!;
-  expect(outgoing.open).toBe(false);
-  await userEvent.click(within(outgoing).getByText('Cosa sblocca'));
-  expect(outgoing.textContent).toContain('tre');
-  expect(outgoing.textContent).toContain('Traguardo');
+  const folds = [...panel.querySelectorAll<HTMLElement>('[data-fold]')];
+  expect(folds.map((fold) => fold.textContent!.slice(0, 20))).toEqual(['Alice deve fareMotiv', '«tre»', 'Il traguardo: Tragua']);
+  expect(folds.map((fold) => fold.dataset.open ?? 'closed')).toEqual(['true', 'closed', 'closed']);
+  await userEvent.click(within(folds[1]!).getByRole('button'));
+  expect(folds[1]!.textContent).toContain('Motivo');
 });
 
-test('panel avoids live items and falls below the graph when no corner fits', () => {
+test('panel floats in the freest corner, can be dragged anywhere in the graph and never drops below it', () => {
   let blocked = false;
   const rect = (x: number, y: number, width: number, height: number) => ({ x, y, left: x, top: y, right: x + width, bottom: y + height, width, height, toJSON: () => ({}) });
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
-    if (this.hasAttribute('data-graph-scroll')) return rect(100, 100, 800, 500);
+    if (this.hasAttribute('data-graph-scroll') || this.querySelector?.(':scope > [data-graph-scroll]')) return rect(100, 100, 800, 500);
     if (this.getAttribute('aria-label') === 'Spiegazione della catena') return rect(0, 0, 300, 200);
     if (this.getAttribute('data-person') === 'alice') return blocked ? rect(100, 100, 800, 500) : rect(120, 120, 100, 40);
     return rect(2000, 2000, 40, 40);
   });
   render(<DependencyGraph explainer={fixture()} today="2026-11-18" focus="alice" />);
-  const panel = screen.getByRole('complementary', { name: 'Spiegazione della catena' });
-  expect(panel.style.left).toBe('488px');
-  fireEvent.click(within(panel).getByRole('button', { name: 'Chiudi spiegazione' }));
-  const pill = screen.getByRole('button', { name: 'Spiegazione' });
-  expect(pill.style.left).toBe('748px');
-  fireEvent.click(pill);
+  const panel = () => screen.getByRole('complementary', { name: 'Spiegazione della catena' });
+  expect(panel().style.left).toBe('488px');
+  fireEvent.click(within(panel()).getByRole('button', { name: 'Nascondi spiegazione' }));
+  expect(screen.getByRole('button', { name: 'Mostra spiegazione' }).style.left).toBe('488px');
+  fireEvent.click(screen.getByRole('button', { name: 'Mostra spiegazione' }));
   blocked = true;
   fireEvent(window, new Event('resize'));
-  expect(screen.getByRole('complementary', { name: 'Spiegazione della catena' }).style.left).toBe('');
+  expect(panel().style.left).toBe('488px');
+  const handle = within(panel()).getByTitle('Trascina per spostare');
+  fireEvent.pointerDown(handle, { clientX: 500, clientY: 100, pointerId: 1 });
+  fireEvent.pointerMove(handle, { clientX: 400, clientY: 150, pointerId: 1 });
+  fireEvent.pointerUp(handle, { pointerId: 1 });
+  expect([panel().style.left, panel().style.top]).toEqual(['388px', '62px']);
+  fireEvent(window, new Event('resize'));
+  expect(panel().style.left).toBe('388px');
 });
-
 test('background click clears focus', async () => {
   render(<DependencyGraph explainer={fixture()} today="2026-11-18" />);
   const graph = document.querySelector<HTMLElement>('[data-graph]')!;

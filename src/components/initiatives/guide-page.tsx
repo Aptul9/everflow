@@ -1,6 +1,6 @@
 'use client';
 
-import { ArrowLeft, Bell, BookOpen, Bot, Building2, ClipboardCheck, Clock, Cloud, Container, Database, Eye, FileText, Fingerprint, GitBranch, GitPullRequest, Hourglass, KeyRound, ListChecks, Lock, LogOut, Monitor, Network, RefreshCw, ScrollText, Server, Shield, ShieldAlert, Siren, Terminal, Ticket, TriangleAlert, User, Users, Vault, Workflow, X } from 'lucide-react';
+import { ArrowLeft, Bell, BookOpen, Bot, Building2, ClipboardCheck, Clock, Cloud, Container, Database, Eye, FileText, Fingerprint, GitBranch, GitPullRequest, Hourglass, KeyRound, ListChecks, Lock, LogOut, Monitor, Network, PanelLeftClose, PanelLeftOpen, RefreshCw, ScrollText, Server, Shield, ShieldAlert, Siren, Terminal, Ticket, TriangleAlert, User, Users, Vault, Workflow, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { guideItemKey } from '../../lib/web-types.ts';
 import type { Explainer, ExplainerIcon, ExplainerItemStatus, ExplainerPerson, GuideState } from '../../lib/web-types.ts';
@@ -310,7 +310,6 @@ export function GuidePage(props: { id: string; initialState: GuideState; token: 
           <a href="/overview" aria-current="page" className="rounded-md bg-card px-3 py-1 font-medium shadow-xs">Overview</a>
         </nav>
         <a href="/overview" className="inline-flex items-center gap-1 text-sm text-primary hover:underline sm:ml-auto"><ArrowLeft aria-hidden="true" className="size-4" />Torna alla panoramica</a>
-        {ex && <button type="button" aria-pressed={indexVisible} onClick={toggleIndex} className="hidden rounded-md border px-3 py-1 text-sm hover:bg-accent lg:block">{indexVisible ? 'Nascondi indice' : 'Mostra indice'}</button>}
         {props.signOut && <Button variant="ghost" size="sm" className="text-muted-foreground"
           onClick={() => { void fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).then((r) => r.headers.get('x-everflow-logout') ?? '/login', () => '/login').then((to) => window.location.assign(to)); }}>
           <LogOut aria-hidden="true" />Esci</Button>}
@@ -322,13 +321,18 @@ export function GuidePage(props: { id: string; initialState: GuideState; token: 
           {sections.map(([id, title]) => <a key={id} href={`#${id}`} onClick={() => toc(id)} aria-current={active === id ? 'location' : undefined}
             className="shrink-0 rounded-full border bg-card px-3 py-1 text-sm aria-[current=location]:border-primary aria-[current=location]:bg-primary aria-[current=location]:text-primary-foreground">{title}</a>)}
         </nav>
-        {indexVisible && <nav aria-label="Indice della guida" className="sticky top-6 z-20 hidden h-fit self-start py-8 lg:block">
-          <p className="mb-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{view.client} · {view.title}</p>
+        {indexVisible ? <nav aria-label="Indice della guida" className="sticky top-6 z-20 hidden h-fit self-start py-8 lg:block">
+          <div className="mb-2 flex items-start gap-2">
+            <p className="min-w-0 flex-1 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{view.client} · {view.title}</p>
+            <button type="button" onClick={toggleIndex} aria-label="Nascondi indice" title="Nascondi indice" className="-mt-1 shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"><PanelLeftClose aria-hidden="true" className="size-4" /></button>
+          </div>
           <ol className="space-y-0.5 border-l">{sections.map(([id, title], index) => <li key={id}><a href={`#${id}`} onClick={() => toc(id)} aria-current={active === id ? 'location' : undefined}
             className="-ml-px block border-l-2 border-transparent py-1 pl-3 text-sm text-muted-foreground hover:text-foreground aria-[current=location]:border-primary aria-[current=location]:font-medium aria-[current=location]:text-foreground">{index + 1}. {title}</a></li>)}</ol>
-        </nav>}
+        </nav> : <button type="button" onClick={toggleIndex} aria-label="Mostra indice"
+          className="fixed top-24 left-0 z-40 hidden flex-col items-center gap-1.5 rounded-r-lg border border-l-0 bg-card px-1.5 py-2.5 text-sm font-medium text-muted-foreground shadow-md hover:text-foreground lg:flex">
+          <PanelLeftOpen aria-hidden="true" className="size-4" /><span className="[writing-mode:vertical-rl]">Indice</span></button>}
       </>}
-      <main className={cn('min-w-0 pb-16', !ex && 'lg:col-span-2')}>
+      <main className={cn('min-w-0 pb-16', !ex && 'lg:col-span-2', ex && !indexVisible && 'lg:pl-8')}>
         {(error || state.error) && <Alert variant="destructive" className="mt-4 border-warning/40 bg-warning-soft text-warning">
           <TriangleAlert aria-hidden="true" />
           <AlertTitle>{state.error ? `Ultima preparazione fallita${state.error_at ? ` alle ${formatTime(state.error_at)}` : ''}` : 'Problema di collegamento'}</AlertTitle>

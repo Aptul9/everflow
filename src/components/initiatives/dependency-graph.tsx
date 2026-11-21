@@ -1,11 +1,11 @@
 'use client';
 
-import { Flag, X } from 'lucide-react';
+import { Flag, GripHorizontal, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Explainer, ExplainerEdge, ExplainerNode } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Glossed } from './glossed.tsx';
-import { GuideSources } from './sources.tsx';
+import { Fold, GuideSources } from './sources.tsx';
 
 const NODE_W = 228, PERSON_MIN = 168, PERSON_MAX = 220, GOAL_W = 176, GOAL_H = 88, GUTTER = 96, GAP = 14, PAD = 14;
 
@@ -170,20 +170,13 @@ function Step(props: { n: number; children: React.ReactNode; why?: string; src?:
   </li>;
 }
 
-function Disclosure(props: { title: string; open?: boolean; children: React.ReactNode }) {
-  return <details open={props.open} className="group rounded-lg border bg-background/70">
-    <summary className="flex cursor-pointer list-none items-start gap-2 px-3 py-2 text-sm font-medium [&::-webkit-details-marker]:hidden">
-      <span aria-hidden="true" className="mt-0.5 shrink-0 transition-transform group-open:rotate-90">▸</span><span>{props.title}</span>
-    </summary>
-    <div className="px-3 pb-3">{props.children}</div>
-  </details>;
-}
 
 export function DependencyGraph(props: { explainer: Explainer; today: string; focus?: string | null; onFocusChange?: (id: string | null) => void; className?: string }) {
   const { explainer, today, onFocusChange } = props;
   const [selected, setSelected] = useState<string | null>(props.focus ?? null);
   const [panelOpen, setPanelOpen] = useState(true);
   const [panelPosition, setPanelPosition] = useState<{ left: number; top: number } | null>(null);
+  const [placed, setPlaced] = useState<{ left: number; top: number } | null>(null);
   const [available, setAvailable] = useState(0), [personWidth, setPersonWidth] = useState(PERSON_MIN);
   const [heights, setHeights] = useState<Record<string, number>>({});
   const frameRef = useRef<HTMLDivElement>(null), scrollRef = useRef<HTMLDivElement>(null), panelRef = useRef<HTMLElement>(null), pillRef = useRef<HTMLButtonElement>(null), measureRef = useRef<HTMLDivElement>(null);
@@ -225,37 +218,59 @@ export function DependencyGraph(props: { explainer: Explainer; today: string; fo
   const edgeDim = (edge: ExplainerEdge) => !!trace && !trace.used.has(edge);
   const waited = (node: ExplainerNode) => { const days = workDays(node.since, today); return node.since && node.status !== 'done' ? `da ${days} gg` : ''; };
 
+  // Placed once per selection where it covers the fewest highlighted boxes and lines, inside the visible part of the graph;
+  // after a drag it stays where it was put. Opening a fold never moves it.
   useEffect(() => {
-    const frame = frameRef.current, scroll = scrollRef.current, panel = sel ? panelOpen ? panelRef.current : pillRef.current : null;
-    if (!frame || !scroll || !panel) { setPanelPosition(null); return; }
+    const scroll = scrollRef.current, panel = panelRef.current;
+    if (!sel || !scroll) { setPanelPosition(null); return; }
+    if (!panelOpen || !panel) return;
     const update = () => {
       if (window.innerWidth < 640) { setPanelPosition(null); return; }
+      if (placed) { setPanelPosition((old) => old?.left === placed.left && old?.top === placed.top ? old : placed); return; }
       const box = scroll.getBoundingClientRect(), p = panel.getBoundingClientRect(), margin = 12;
-      const w = p.width, h = p.height;
-      if (w + margin * 2 > box.width || h + margin * 2 > box.height) { setPanelPosition(null); return; }
-      const candidates = [[margin, margin], [box.width - w - margin, margin], [margin, box.height - h - margin], [box.width - w - margin, box.height - h - margin]];
-      const live = [...scroll.querySelectorAll<HTMLElement>('[data-node]:not([data-dim]), [data-person]:not([data-dim]), [data-goal]:not([data-dim])')];
+      const w = p.width, h = Math.min(p.height, window.innerHeight * 0.75);
+      const top = Math.max(margin, -box.top + margin), bottom = Math.min(box.height, window.innerHeight - box.top) - margin;
+      const span = (from: number, to: number) => { const out: number[] = []; for (let v = from; v < to; v += 24) out.push(v); out.push(Math.max(from, to)); return out; };
+      const xs = span(margin, box.width - w - margin), ys = span(top, bottom - h);
+      const live = [...scroll.querySelectorAll<HTMLElement>('[data-node]:not([data-dim]), [data-person]:not([data-dim]), [data-goal]:not([data-dim])')].map((item) => {
+        const r = item.getBoundingClientRect(), chosen = item.getAttribute('aria-pressed') === 'true';
+        return { left: r.left - box.left, right: r.right - box.left, top: r.top - box.top, bottom: r.bottom - box.top, weight: chosen ? 10_000 : 100 };
+      });
       const paths = [...scroll.querySelectorAll<SVGPathElement>('[data-edge][data-live]')].flatMap((path) => [path, path.nextElementSibling as SVGPathElement]);
       const points = paths.flatMap((path) => {
-        if (typeof path.getTotalLength !== 'function') return [];
+        if (typeof path?.getTotalLength !== 'function') return [];
         const rect = path.ownerSVGElement!.getBoundingClientRect(), length = path.getTotalLength(), out: { x: number; y: number }[] = [];
-        for (let i = 0; i <= Math.ceil(length / 8); i++) { const pt = path.getPointAtLength(Math.min(length, i * 8)); out.push({ x: rect.left + pt.x - box.left, y: rect.top + pt.y - box.top }); }
+        for (let i = 0; i <= Math.ceil(length / 12); i++) { const pt = path.getPointAtLength(Math.min(length, i * 12)); out.push({ x: rect.left + pt.x - box.left, y: rect.top + pt.y - box.top }); }
         return out;
       });
-      const overlap = (left: number, top: number) => {
-        const right = left + w, bottom = top + h;
-        return live.reduce((count, item) => { const r = item.getBoundingClientRect(); return count + (r.right - box.left > left - 4 && r.left - box.left < right + 4 && r.bottom - box.top > top - 4 && r.top - box.top < bottom + 4 ? 1 : 0); }, 0)
-          + points.filter((pt) => pt.x >= left - 4 && pt.x <= right + 4 && pt.y >= top - 4 && pt.y <= bottom + 4).length;
-      };
-      const fit = candidates.map(([left, top]) => ({ left: left!, top: top!, score: overlap(left!, top!) })).sort((a, b) => a.score - b.score)[0]!;
-      const next = fit.score === 0 ? { left: fit.left, top: fit.top } : null;
-      setPanelPosition((old) => old?.left === next?.left && old?.top === next?.top ? old : next);
+      let best = { left: xs.at(-1)!, top: ys[0]!, score: Infinity };
+      for (const x of [...xs].reverse()) for (const y of ys) {
+        const right = x + w, low = y + h;
+        let score = 0;
+        for (const r of live) if (r.right > x - 6 && r.left < right + 6 && r.bottom > y - 6 && r.top < low + 6) score += r.weight;
+        if (score >= best.score) continue;
+        for (const pt of points) if (pt.x >= x - 4 && pt.x <= right + 4 && pt.y >= y - 4 && pt.y <= low + 4) score++;
+        if (score < best.score) best = { left: x, top: y, score };
+      }
+      const next = { left: Math.max(0, best.left), top: Math.max(0, best.top) };
+      setPanelPosition((old) => old?.left === next.left && old?.top === next.top ? old : next);
     };
     update();
-    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update); observer?.observe(scroll); observer?.observe(panel);
-    scroll.addEventListener('scroll', update); window.addEventListener('resize', update);
-    return () => { observer?.disconnect(); scroll.removeEventListener('scroll', update); window.removeEventListener('resize', update); };
-  }, [lay, sel, panelOpen]);
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, [lay, sel, panelOpen, placed]);  const startDrag = (event: React.PointerEvent<HTMLElement>) => {
+    const frame = frameRef.current, panel = panelRef.current ?? pillRef.current;
+    if (!panelPosition || !frame || !panel || (event.target as Element).closest('button')) return;
+    event.preventDefault();
+    const handle = event.currentTarget, box = frame.getBoundingClientRect(), start = { x: event.clientX, y: event.clientY, ...panelPosition };
+    handle.setPointerCapture?.(event.pointerId);
+    const move = (e: PointerEvent) => setPlaced({
+      left: Math.max(0, Math.min(start.left + e.clientX - start.x, box.width - panel.offsetWidth)),
+      top: Math.max(0, Math.min(start.top + e.clientY - start.y, box.height - 48)),
+    });
+    const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); handle.removeEventListener('pointercancel', up); };
+    handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up); handle.addEventListener('pointercancel', up);
+  };
 
   const chain = (edge: ExplainerEdge, first: number) => {
     const steps: React.ReactNode[] = [];
@@ -284,8 +299,9 @@ export function DependencyGraph(props: { explainer: Explainer; today: string; fo
       {people.get(sel) && <p className="mt-0.5 text-[13px] text-muted-foreground"><Glossed text={people.get(sel)!.role} /></p>}
       <div key={sel} className="mt-3 space-y-2">{owed.map((edge, index) => {
         const node = nodes.get(edge.to)!;
-        return <Disclosure key={`${edge.from}-${edge.to}`} title={`«${node.label}»${waited(node) ? ` · ${waited(node)}` : ''}`} open={index === 0}>
-          <ol className="space-y-2">{chain(edge, 1)}</ol></Disclosure>;
+        return <Fold key={`${edge.from}-${edge.to}`} open={index === 0} className="rounded-lg border bg-background/70 px-3 py-2"
+          title={<span className="text-sm font-medium">«{node.label}»{waited(node) && <span className={cn('font-normal whitespace-nowrap text-muted-foreground', node.status === 'blocked' && 'text-destructive')}> · {waited(node)}</span>}</span>}>
+          <ol className="space-y-2">{chain(edge, 1)}</ol></Fold>;
       })}</div>
       {!owed.length && <p className="mt-2 text-sm text-muted-foreground">Nessuna dipendenza documentata per questa persona.</p>}
     </>;
@@ -297,14 +313,15 @@ export function DependencyGraph(props: { explainer: Explainer; today: string; fo
       <p className="mt-0.5 text-[13px] text-muted-foreground">{statusText[node.status]}{node.since && node.status !== 'done' ? ` · dal ${node.since.slice(8, 10)}/${node.since.slice(5, 7)} · ${waited(node)}` : ''}{node.owner ? ` · ${nameOf(node.owner)}` : ''}</p>
       <p className="mt-2 text-sm leading-snug"><Glossed text={node.plain} /><GuideSources ids={node.src} sources={explainer.sources} /></p>
       {!incoming.length && !onward.length && <p className="mt-2 text-sm text-muted-foreground">Nessuna dipendenza documentata per questo elemento.</p>}
-      {!!incoming.length && <div className="mt-3"><Disclosure title="Da cosa dipende" open={incoming.length === 1}>
-        <ul className="space-y-2">{incoming.map((edge) => <li key={`${edge.from}-${edge.to}`} className="text-sm leading-snug">
-          <span className="font-medium">{edge.kind === 'owes' ? edge.from === 'you' ? verbs[node.kind][1] : `${nameOf(edge.from)} ${verbs[node.kind][0]}` : `Serve prima «${labelOf(edge.from)}»`}</span>
-          <span className="block text-[13px] text-muted-foreground"><Glossed text={edge.why} /></span><GuideSources ids={edge.src} sources={explainer.sources} /></li>)}</ul></Disclosure></div>}
-      {!!onward.length && <div className="mt-2"><Disclosure title="Cosa sblocca" open={onward.length === 1}>
-        <ol className="space-y-2">{onward.map((next, index) =>
-          <Step key={`${next.from}-${next.to}`} n={index + 1} why={next.why} src={next.src} sources={explainer.sources}>
-             {next.to === 'goal' ? <>Il traguardo: {explainer.goal.label}</> : <>«{labelOf(next.to)}»</>}</Step>)}</ol></Disclosure></div>}
+      {[['Da cosa dipende', incoming], ['Cosa sblocca', onward]].map(([title, list], group) => !!(list as ExplainerEdge[]).length && <div key={group} className="mt-3">
+        <h4 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{title as string}</h4>
+        <div className="space-y-1.5">{(list as ExplainerEdge[]).map((edge, index) => <Fold key={`${edge.from}-${edge.to}`} open={index === 0 && (group === 0 || !incoming.length)}
+          className="rounded-lg border bg-background/70 px-3 py-2" title={<span className="text-sm leading-snug font-medium">{group === 0
+            ? edge.kind === 'owes' ? edge.from === 'you' ? verbs[node.kind][1] : `${nameOf(edge.from)} ${verbs[node.kind][0]}` : `Serve prima «${labelOf(edge.from)}»`
+            : edge.to === 'goal' ? `Il traguardo: ${explainer.goal.label}` : `«${labelOf(edge.to)}»`}</span>}>
+          <p className="text-[13px] leading-snug text-muted-foreground"><Glossed text={edge.why} /><GuideSources ids={edge.src} sources={explainer.sources} /></p>
+        </Fold>)}</div>
+      </div>)}
     </>;
   }
 
@@ -377,11 +394,15 @@ export function DependencyGraph(props: { explainer: Explainer; today: string; fo
       </div>
     </div>
     {sel && (panelOpen ? <aside ref={panelRef} aria-live="polite" aria-label="Spiegazione della catena" style={panelPosition ? { left: panelPosition.left, top: panelPosition.top } : undefined}
-      className={cn('z-10 mt-3 min-w-0 rounded-xl border bg-card p-4 shadow-sm sm:max-h-[36rem] sm:w-[min(21rem,100%)] sm:overflow-y-auto', panelPosition && 'absolute mt-0 shadow-lg')}>
-      <button type="button" aria-label="Chiudi spiegazione" onClick={() => setPanelOpen(false)} className="float-right ml-2 rounded p-1 text-muted-foreground hover:bg-accent"><X className="size-4" /></button>
-      {panel}
-      {sel && <button type="button" onClick={() => choose(null)} className="mt-4 text-xs font-medium text-primary hover:underline">Mostra tutto (Esc)</button>}
+      className={cn('z-20 mt-3 min-w-0 rounded-xl border bg-card shadow-sm sm:w-[min(24rem,calc(100%-24px))]', panelPosition && 'absolute mt-0 max-h-[75vh] overflow-y-auto shadow-xl')}>
+      <div onPointerDown={startDrag} title={panelPosition ? 'Trascina per spostare' : undefined}
+        className={cn('sticky top-0 z-10 flex items-center gap-2 rounded-t-xl border-b bg-muted/80 px-3 py-1.5 text-xs text-muted-foreground backdrop-blur', panelPosition && 'cursor-move touch-none select-none')}>
+        {panelPosition && <GripHorizontal aria-hidden="true" className="size-4" />}<span className="font-medium">Spiegazione</span>
+        <button type="button" onClick={() => choose(null)} className="ml-auto rounded px-1.5 py-0.5 font-medium text-primary hover:bg-accent">Togli la selezione (Esc)</button>
+        <button type="button" aria-label="Nascondi spiegazione" onClick={() => setPanelOpen(false)} className="rounded p-1 hover:bg-accent"><X aria-hidden="true" className="size-4" /></button>
+      </div>
+      <div className="p-4">{panel}</div>
     </aside> : <button ref={pillRef} type="button" onClick={() => setPanelOpen(true)} style={panelPosition ? { left: panelPosition.left, top: panelPosition.top } : undefined}
-      className={cn('z-10 mt-3 rounded-full border bg-card px-3 py-1.5 text-xs font-medium text-primary hover:bg-accent', panelPosition && 'absolute mt-0 shadow-sm')}>Spiegazione</button>)}
+      className={cn('z-20 mt-3 rounded-full border bg-card px-3 py-1.5 text-xs font-medium text-primary shadow-sm hover:bg-accent', panelPosition && 'absolute mt-0 shadow-lg')}>Mostra spiegazione</button>)}
   </div>;
 }

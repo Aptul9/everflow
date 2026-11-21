@@ -2,6 +2,7 @@
 
 import { ArrowRight, BookOpen, Bot, Check, ChevronDown, ChevronUp, Copy, LayoutGrid, LogOut, Network, RefreshCw, TriangleAlert, User, Users } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { cleanSourceText, italianDates } from '../../lib/web-types.ts';
 import type { Explainer, GuideState, InitiativeLine, InitiativeNext, InitiativesState, InitiativeStateName, InitiativeView, InitiativeWait } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert.tsx';
@@ -34,7 +35,7 @@ export function StatePill({ view }: { view: InitiativeView }) {
 
 // Text with `code` shown as a quiet monospace span instead of a boxed chip
 function Text({ text }: { text: string }) {
-  return <>{text.split(/(`[^`\n]+`)/).map((part, index) => index % 2
+  return <>{italianDates(text).split(/(`[^`\n]+`)/).map((part, index) => index % 2
     ? <span key={index} className="font-mono text-[0.88em] text-foreground/75">{part.slice(1, -1)}</span> : <Inline key={index} text={part} />)}</>;
 }
 
@@ -107,7 +108,7 @@ export function PeopleMap({ waits, focus, onFocus }: { waits: InitiativeWait[]; 
       const on = !!focus && !dim;
       return <g key={person.who} data-person={person.who} data-tone={person.tone} data-dim={dim ? 'true' : undefined} aria-pressed={on} aria-label={`${person.who}: ${label}`}
         className={cn('cursor-pointer outline-none transition-opacity focus-visible:[&_circle:nth-of-type(2)]:stroke-[4]', dim && 'opacity-15')} {...press(person.who)}>
-        <title>{person.waits.map((wait) => `${wait.owes === 'you' ? 'You owe' : 'Owes you'}: ${wait.text} (${wait.days} working days)\n${wait.sources.map((source) => source.text).join('\n')}`).join('\n\n')}</title>
+        <title>{person.waits.map((wait) => `${wait.owes === 'you' ? 'You owe' : 'Owes you'}: ${wait.text} (${wait.days} working days)\n${wait.sources.map((source) => cleanSourceText(source.text)).join('\n')}`).join('\n\n')}</title>
         <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={strokes[person.tone]} strokeWidth={on ? 3 : 2} strokeDasharray="6 4" markerEnd={`url(#arrow-${person.tone})`}
           className={cn(!dim && 'animate-[dash-flow_1.2s_linear_infinite]')} />
         {person.tone === 'overdue' && !dim && <circle cx={person.x} cy={person.y} r={node} fill="var(--destructive)" className="origin-center animate-[node-pulse_1.8s_ease-out_infinite] [transform-box:fill-box]" />}
@@ -132,7 +133,7 @@ function FocusWaits({ waits, focus, onReset }: { waits: InitiativeWait[]; focus:
   return <div data-focus-waits="" className="mt-2 rounded-lg border bg-background p-3 text-sm">
     <div className="flex items-center gap-2">
       <h4 className="font-semibold">{mine ? 'What you owe' : `What you wait for from ${focus}`}</h4>
-      <Button type="button" variant="ghost" size="xs" className="ml-auto" onClick={onReset}>Mostra tutto</Button>
+      <Button type="button" variant="ghost" size="xs" className="ml-auto" onClick={onReset}>Torna alla mappa</Button>
     </div>
     {!open.length && <p className="mt-1 text-xs text-muted-foreground">Nothing open.</p>}
     <div className="mt-1.5 space-y-2">{open.map((wait, index) => <p key={index} className="leading-snug">
@@ -148,7 +149,7 @@ function FocusWaits({ waits, focus, onReset }: { waits: InitiativeWait[]; focus:
 function FocusLine({ line, onReset }: { line: InitiativeLine; onReset: () => void }) {
   return <div data-focus-line="" className="rounded-lg border bg-background p-3 text-sm">
     <div className="flex items-start gap-2"><p><Text text={line.text} /><Sources sources={line.sources} /></p>
-      <Button type="button" variant="ghost" size="xs" className="ml-auto shrink-0" onClick={onReset}>Mostra tutto</Button></div>
+      <Button type="button" variant="ghost" size="xs" className="ml-auto shrink-0" onClick={onReset}>Torna alla mappa</Button></div>
     <p className="mt-2 text-muted-foreground">Nessuna dipendenza documentata per questa scheda.</p>
   </div>;
 }
