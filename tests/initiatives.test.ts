@@ -105,6 +105,22 @@ test('refresh asks the provider without tools, repairs once, and stores a summar
   expect(refreshDue(db, cfg)).toBe(false);
 });
 
+test('tickets naming the initiative note are offered first, ahead of the client\'s newer tickets', async () => {
+  const { cfg } = fixture();
+  using db = openDb(cfg.db.path);
+  db.prepare("INSERT INTO ticket(title,client,kb_notes,created_at,last_activity_at) VALUES ('Plan item','acme','[\"01_Projects/demo.md\"]','2026-11-02T09:00:00Z','2026-11-02T09:00:00Z')").run();
+  for (let index = 0; index < 31; index++) {
+    db.prepare("INSERT INTO ticket(title,client,lifecycle,created_at,last_activity_at) VALUES (?,'acme','active',?,?)").run(`Other ${index}`, AT, AT);
+  }
+  const good = { state: 'moving', headline: 'x', now: [{ text: 'a', src: ['L1'] }], waits: [], next: [], done: [] };
+  await using peer = await scriptedPeer(() => ({ body: { content: [{ type: 'text', text: JSON.stringify(good) }] } }));
+  requestRefresh(db);
+  await refreshInitiatives(cfg, db, { providers: { first: provider(peer.baseURL) } });
+  const tickets = JSON.parse(peer.requests[0]!.messages[0]!.content as string).tickets as { id: string; title: string }[];
+  expect(tickets).toHaveLength(30);
+  expect(tickets[0]).toMatchObject({ id: 'T1', title: 'Plan item' });
+});
+
 test('a failed refresh keeps the last summary, shows the error and tries again after half an hour', async () => {
   const { cfg } = fixture();
   using db = openDb(cfg.db.path);

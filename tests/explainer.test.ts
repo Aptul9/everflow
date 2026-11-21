@@ -105,6 +105,16 @@ test('inputs: sections, all log entries, linked and related notes with caps; _se
   expect(JSON.stringify(input)).not.toContain('hunter2');
 });
 
+test('inputs: tickets naming the initiative note come before the client\'s newer tickets', () => {
+  const { cfg } = fixture();
+  using db = openDb(cfg.db.path);
+  db.prepare("INSERT INTO ticket(title,client,kb_notes,created_at) VALUES ('Plan item','acme','[\"01_Projects/demo.md\"]','2026-10-01T09:00:00Z')").run();
+  for (let index = 0; index < 45; index++) db.prepare("INSERT INTO ticket(title,client,created_at) VALUES (?,'acme','2026-11-17T09:00:00Z')").run(`Other ${index}`);
+  const input = explainerInputs(cfg, db, 'demo');
+  expect(input.tickets).toHaveLength(40);
+  expect(input.tickets[0]).toMatchObject({ id: 'T1', title: 'Plan item' });
+});
+
 test('explanation: uncited items are dropped and counted, general ones keep their text, references are filtered', () => {
   const { value, rejected } = parseA(JSON.stringify(A), offered('L1', 'L2'));
   expect(rejected).toBe(2);

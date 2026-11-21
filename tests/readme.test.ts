@@ -46,7 +46,7 @@ function fixture() {
   const cli = join(artifact.root, 'dist/cli.js'), receipt = process.env.TEST_BUILD_RECEIPT!;
   const env = isolatedEnvironment(artifact.root, process.env), commands: unknown[] = [];
   const variables: Record<string, string> = { $cli: cli, $receipt: receipt, $config: f.config, $job: '1', $ticket: '1',
-    $sourceTicket: '1', $targetTicket: '2', $conversation: '1', $quarantine: '1' };
+    $sourceTicket: '1', $targetTicket: '2', $conversation: '1', $quarantine: '1', $client: 'acme' };
   const command = (line: string) => {
     const tokens = (line.match(/'[^']*'|\S+/g) ?? []).map((token) => token.startsWith("'") ? token.slice(1, -1) : variables[token] ?? token);
     expect(tokens.slice(0, 3)).toEqual(['&', 'node', cli]);
@@ -236,6 +236,21 @@ test('documented correction and replay commands perform their real local transac
   expect(db.prepare('SELECT COUNT(*) AS n FROM quarantine WHERE replayed_at IS NOT NULL').get()?.n).toBe(2);
   expect(db.prepare('SELECT COUNT(*) AS n FROM message').get()?.n).toBe(2);
   fs.writeFileSync(join(f.root, 'documented-remedies.json'), JSON.stringify({ artifact: f.receipt, config: f.config, commands: f.commands }, null, 2));
+});
+
+test('documented ticket create makes one proposed ticket and repeats nothing on the same key', () => {
+  const f = fixture();
+  fs.appendFileSync(f.config, '\n[clients.acme]\ndomains = ["acme.invalid"]\n');
+  { using db = openDb(f.path); }
+  const lines = f.lines('Tickets by hand');
+  expect(lines.length).toBe(1);
+  const made = f.command(lines[0]!);
+  expect(made).toEqual({ ticket: expect.any(Number) });
+  expect(f.command(lines[0]!)).toEqual(made);
+  using db = new DatabaseSync(f.path, { readOnly: true });
+  expect(db.prepare('SELECT title,client,summary,kb_notes,lifecycle,session_id FROM ticket').all()).toEqual([{ title: 'Cut one AKS node', client: 'acme',
+    summary: 'Saves 350 USD a month', kb_notes: '["01_Projects/acme/plan.md"]', lifecycle: 'proposed', session_id: null }]);
+  expect(db.prepare('SELECT body,event_key FROM timeline').all()).toEqual([{ body: 'Created by hand', event_key: 'create:acme-cost-1.4' }]);
 });
 
 test('documented stored-at cutoff persists once and Make ticket promotes a backlog batch without approving a chat', () => {

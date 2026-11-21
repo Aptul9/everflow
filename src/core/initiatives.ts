@@ -138,10 +138,11 @@ async function complete(cfg: Config, db: DatabaseSync, messages: Message[], opti
   throw failure;
 }
 
-function ticketsOf(db: DatabaseSync, client: string, from: string) {
+// Open or recent tickets of the client; those naming the initiative's note among their KB notes come first
+function ticketsOf(db: DatabaseSync, client: string, from: string, note: string) {
   return db.prepare(`SELECT id,title,lifecycle,report,report_line,COALESCE(last_activity_at,created_at) AS at FROM ticket
     WHERE client=? AND merged_into IS NULL AND (lifecycle IN ('proposed','active') OR COALESCE(last_activity_at,created_at)>=?)
-    ORDER BY COALESCE(last_activity_at,created_at) DESC LIMIT 30`).all(client, from).map((row) => ({
+    ORDER BY EXISTS(SELECT 1 FROM json_each(ticket.kb_notes) WHERE value=?) DESC, COALESCE(last_activity_at,created_at) DESC LIMIT 30`).all(client, from, note).map((row) => ({
     id: `T${row.id}`, date: String(row.at).slice(0, 10), title: String(row.title), lifecycle: String(row.lifecycle),
     report: row.report === null ? null : String(row.report), report_line: row.report_line === null ? null : String(row.report_line).slice(0, 400),
   }));
@@ -152,7 +153,7 @@ export async function summarize(cfg: Config, db: DatabaseSync, id: string, optio
   if (!initiative) throw new Error(`Unknown initiative ${id}`);
   const today = localTime((options.now ?? Date.now)(), cfg.overview.timezone).day;
   const context = noteContext(vaultNote(cfg.vault.path, initiative.note).text, today, cfg.overview.window_days);
-  const tickets = ticketsOf(db, initiative.client, shiftDay(today, -cfg.overview.window_days));
+  const tickets = ticketsOf(db, initiative.client, shiftDay(today, -cfg.overview.window_days), initiative.note);
   const offered = new Map<string, InitiativeSource>([
     ...context.entries.map((entry) => [entry.id, { id: entry.id, date: entry.date, text: `${entry.date}${entry.time ? ` ${entry.time}` : ''} - ${entry.text}` }] as const),
     ...tickets.map((ticket) => [ticket.id, { id: ticket.id, date: ticket.date, text: `Ticket #${ticket.id.slice(1)} (${ticket.lifecycle}): ${ticket.title}${ticket.report_line ? `. ${ticket.report_line}` : ''}` }] as const),
