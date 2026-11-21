@@ -82,9 +82,11 @@ function noteIndex(root: string): Map<string, string> {
   return found;
 }
 
-function ticketsOf(db: DatabaseSync, client: string) {
+// Tickets naming the initiative's note among their KB notes come first, then the client's latest
+function ticketsOf(db: DatabaseSync, client: string, note: string) {
   return db.prepare(`SELECT id,title,lifecycle,report_line,COALESCE(last_activity_at,created_at) AS at FROM ticket
-    WHERE client=? AND merged_into IS NULL ORDER BY COALESCE(last_activity_at,created_at) DESC LIMIT ${MAX_TICKETS}`).all(client).map((row) => ({
+    WHERE client=? AND merged_into IS NULL ORDER BY EXISTS(SELECT 1 FROM json_each(ticket.kb_notes) WHERE value=?) DESC,
+    COALESCE(last_activity_at,created_at) DESC LIMIT ${MAX_TICKETS}`).all(client, note).map((row) => ({
     id: `T${row.id}`, date: String(row.at).slice(0, 10), title: String(row.title), lifecycle: String(row.lifecycle),
     report_line: row.report_line === null ? null : String(row.report_line).slice(0, 400),
   }));
@@ -112,7 +114,7 @@ export function explainerInputs(cfg: Config, db: DatabaseSync, id: string): Expl
     notes.push({ id: `N${notes.length + 1}`, path, text });
   }
 
-  const tickets = ticketsOf(db, initiative.client);
+  const tickets = ticketsOf(db, initiative.client, initiative.note);
   const sources: ExplainerSource[] = [
     ...entries.map((entry): ExplainerSource => ({ id: entry.id, kind: 'log', date: entry.date, text: `${entry.date}${entry.time ? ` ${entry.time}` : ''} - ${entry.text}` })),
     ...sections.map((section): ExplainerSource => ({ id: section.id, kind: 'section', text: `${basename(initiative.note)} · ${section.title}` })),
