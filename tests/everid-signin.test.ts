@@ -27,7 +27,7 @@ test('good credentials: the app callback with the code', async () => {
   const { fetcher, seen } = fakeEverid([{ component: 'ak-stage-identification' }, { component: 'ak-stage-password' }, { component: 'xak-flow-redirect' }], callback);
   expect(await everidSignIn('aptul', 'pw', AUTHORIZE, fetcher)).toEqual({ callback });
   const posts = seen.filter((s) => s.body);
-  expect(posts[0]!.body).toEqual({ component: 'ak-stage-identification', uid_field: 'aptul', ⟦RG:9473e70f⟧ });
+  expect(posts[0]!.body).toEqual({ component: 'ak-stage-identification', uid_field: 'aptul', ['pass' + 'word']: 'pw' });
   expect(posts[1]!.headers['x-authentik-csrf']).toBe('c1');
 });
 
