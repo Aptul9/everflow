@@ -37,13 +37,11 @@ export function daemonFixture(settings = '', receipt = process.env.TEST_BUILD_RE
   }
   function until<T>(operation: () => T | undefined | null | false, label: string): Promise<T> {
     return new Promise((resolve, reject) => {
-      let watcher: fs.FSWatcher | undefined, settled = false, queued: NodeJS.Timeout | undefined;
-      const finish = (error?: unknown, value?: T) => { if (settled) return; settled = true; clearTimeout(timer); clearTimeout(queued); watcher?.close(); error ? reject(error) : resolve(value!); };
-      const check = () => { queued = undefined; if (settled) return; try { const value = operation(); if (value) finish(undefined, value); } catch (error) { finish(error); } };
+      let watcher: fs.FSWatcher | undefined, settled = false;
+      const finish = (error?: unknown, value?: T) => { if (settled) return; settled = true; clearTimeout(timer); watcher?.close(); error ? reject(error) : resolve(value!); };
+      const check = () => { try { const value = operation(); if (value) finish(undefined, value); } catch (error) { finish(error); } };
       const timer = setTimeout(() => finish(new Error(`Fixture deadline: ${label}`)), 20000);
-      // libuv reads inotify events until none are left: a check run inside the event callback opens the database, which
-      // raises new events in the same folder, and the read loop never returns (100% CPU, timers starved). Queue it instead.
-      watcher = fs.watch(f.root, () => { queued ??= setTimeout(check, 10); }); watcher.once('error', (error) => finish(error)); check();
+      watcher = fs.watch(f.root, check); watcher.once('error', (error) => finish(error)); check();
     });
   }
   return { ...f, artifact, input, starts, exited, base, commands, run, read, until,
