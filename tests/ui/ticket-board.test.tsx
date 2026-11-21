@@ -753,7 +753,7 @@ test('triage and chat pick model and effort the same way, triage only among its 
   await waitFor(() => expect(screen.queryByRole('listbox', { name: 'Triage effort' })).toBeNull());
   const chat = health.querySelector<HTMLElement>('[data-node="openchamber"]')!;
   expect(within(chat).getByRole('button', { name: 'Chat model' }).textContent).toBe('Opus auto');
-  expect(within(chat).getByText(/^Account:/).textContent).toBe('Account: Claude auto (pool)');
+  expect(within(chat).getByText(/^Account:/).textContent).toBe('Account: Claude auto (pool) · next account by priority when one runs out');
   fireEvent.click(within(chat).getByRole('button', { name: 'Chat effort' }));
   const efforts = await screen.findByRole('listbox', { name: 'Chat effort' });
   expect(within(efforts).getAllByRole('option').map((option) => [option.textContent, option.getAttribute('aria-selected')]))

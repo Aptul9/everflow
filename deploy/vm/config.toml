@@ -20,12 +20,13 @@ guide = "PARA layout. 01_Projects/<slug>.md is one page per project or client en
 url = ""
 openchamber_port = 3000
 directory = "/home/aptul4ever/everflow-chats"
+# Default for new chats: the pool provider, which carries no x-meridian-profile, so Meridian routes it by its priority order
+# (MERIDIAN_PROFILE_ORDER in the instructions repo setup/oracle-vm/meridian.service). A chat picked onto one account moves here on a limit.
 model = "meridian-auto/claude-opus-5-5"
 
 [triage]
-# Routes from ~/.config/opencode/opencode.jsonc, the laptop's file mirrored by instructions setup/oracle-vm/push-opencode.ps1;
-# same order as the laptop instance
-providers = ["meridian-everbright", "meridian-notarify", "meridian-roar"]
+# Routes from ~/.config/opencode/opencode.jsonc, tried in this order: the same priority as Meridian's pool
+providers = ["meridian-notarify", "meridian-roar", "meridian-everbright"]
 model = "claude-haiku-5-5"
 
 # Overview page summaries: same routes as triage, a stronger model, 3 calls a weekday

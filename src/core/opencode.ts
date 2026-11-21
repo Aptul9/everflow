@@ -245,6 +245,9 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
     },
     get: (session: string, signal?: AbortSignal) => client.session.get({ sessionID: session }, request(signal)),
     rename: (session: string, title: string, signal?: AbortSignal) => client.session.update({ sessionID: session, title }, request(signal)),
+    // The model the session's next provider turn runs on
+    switchModel: (session: string, model: { providerID: string; id: string; variant?: string }, signal?: AbortSignal) =>
+      client.session.switchModel({ sessionID: session, model }, request(signal)),
     async prompt(session: string, id: string, text: string, signal?: AbortSignal): Promise<string> {
       const admitted = await client.session.prompt({ sessionID: session, id, text, delivery: 'queue' }, request(signal));
       if (admitted.id !== id || admitted.sessionID !== session) throw Object.assign(new Error('OpenCode returned a different prompt identity'), { status: 400 });

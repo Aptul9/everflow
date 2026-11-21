@@ -52,6 +52,7 @@ export async function scriptedPeer() {
         const session = remoteSession(`ses_${sessions.size + 1}`, String((call.body.location as { directory: string }).directory),
           call.body.metadata as SessionInfo['metadata']);
         session.title = String(call.body.title);
+        if (call.body.model) session.model = call.body.model as NonNullable<SessionInfo['model']>;
         sessions.set(session.id, session);
         if (state.loseCreate) { state.loseCreate = false; request.socket.destroy(); return; }
         json(response, { data: session });
@@ -76,6 +77,10 @@ export async function scriptedPeer() {
         session.time.updated = Date.now();
         if (state.loseRename && call.body.title !== undefined) { state.loseRename = false; request.socket.destroy(); return; }
         if (state.loseArchive && call.body.archived !== undefined) { state.loseArchive = false; request.socket.destroy(); return; }
+        response.writeHead(204); response.end(); return;
+      }
+      if (suffix === '/model' && call.method === 'POST') {
+        session.model = call.body.model as NonNullable<SessionInfo['model']>;
         response.writeHead(204); response.end(); return;
       }
       if (suffix === '/prompt' && call.method === 'POST') {
