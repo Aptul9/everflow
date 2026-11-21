@@ -3,12 +3,110 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { GuidePage } from '../../src/components/initiatives/guide-page.tsx';
+import { Diagram } from '../../src/components/initiatives/diagram.tsx';
 import type { Explainer, GuideState } from '../../src/lib/web-types.ts';
 
 let fetcher: ReturnType<typeof vi.fn>;
 beforeEach(() => {
+  window.localStorage.clear();
   fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => init?.method === 'POST' ? Response.json({ requested: true }) : Response.json(guide()));
   vi.stubGlobal('fetch', fetcher);
+});
+
+test('index visibility is remembered', async () => {
+  render(<GuidePage {...props()} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Nascondi indice' }));
+  expect(screen.queryByRole('navigation', { name: 'Indice della guida' })).toBeNull();
+  cleanup();
+  render(<GuidePage {...props()} />);
+  expect(screen.getByRole('button', { name: 'Mostra indice' })).toBeTruthy();
+});
+
+test('next steps dismiss optimistically and restore with text and token', async () => {
+  render(<GuidePage {...props()} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Nascondi questo passo' }));
+  expect(screen.queryByText('Chase Alice')).toBeNull();
+  expect(fetcher).toHaveBeenCalledWith('/api/guide/acme/dismiss', expect.objectContaining({ method: 'POST', body: JSON.stringify({ text: 'Chase Alice' }), headers: expect.objectContaining({ 'x-everflow-token': ACTION }) }));
+  await userEvent.click(screen.getByRole('button', { name: 'Mostra nascosti (1)' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Ripristina' }));
+  expect(fetcher).toHaveBeenCalledWith('/api/guide/acme/restore', expect.objectContaining({ body: JSON.stringify({ text: 'Chase Alice' }) }));
+  expect(screen.getByRole('button', { name: 'Nascondi questo passo' })).toBeTruthy();
+});
+
+test('failed dismiss rolls back', async () => {
+  fetcher.mockResolvedValue(new Response('', { status: 500 }));
+  render(<GuidePage {...props()} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Nascondi questo passo' }));
+  await waitFor(() => expect(screen.getByText('Chase Alice')).toBeTruthy());
+  expect(screen.getByRole('alert').textContent).toContain('HTTP 500');
+});
+
+test('dates and diagrams render as readable text', () => {
+  render(<GuidePage {...props()} />);
+  expect(screen.getByText('Guida · 18/11/2026')).toBeTruthy();
+  expect(screen.getByText('1 novembre 2026')).toBeTruthy();
+  expect(screen.getByRole('img', { name: 'Schema: A, B, C' })).toBeTruthy();
+  expect(screen.queryByRole('img', { name: 'Schema: OpenShift' })).toBeNull();
+  expect(screen.queryByText('Frase da dire.')).toBeNull();
+});
+
+test('diagrams keep every label and omit single items', () => {
+  for (const t of ['flow', 'nest', 'split', 'hub', 'row'] as const) {
+    const { unmount } = render(<Diagram diagram={{ t, i: ['Long first label', 'Long second label'], hi: 1 }} />);
+    expect(screen.getByRole('img').textContent).toContain('Long first label');
+    expect(screen.getByRole('img').textContent).toContain('Long second label');
+    unmount();
+  }
+  const { container } = render(<Diagram diagram={{ t: 'one', i: ['A', 'B'] }} />);
+  expect(container.firstChild).toBeNull();
+});
+
+test('initially hidden next steps can be restored', async () => {
+  render(<GuidePage {...props(guide({ dismissed: ['chase alice'] }))} />);
+  expect(screen.queryByText('Chase Alice')).toBeNull();
+  await userEvent.click(screen.getByRole('button', { name: 'Mostra nascosti (1)' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Ripristina' }));
+  expect(screen.getByText('Chase Alice')).toBeTruthy();
+});
+
+test('failed restore returns the step to the hidden list', async () => {
+  fetcher.mockResolvedValue(new Response('', { status: 500 }));
+  render(<GuidePage {...props(guide({ dismissed: ['chase alice'] }))} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Mostra nascosti (1)' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Ripristina' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Ripristina' })).toBeTruthy());
+  expect(screen.getByRole('alert').textContent).toContain('HTTP 500');
+});
+
+test('a stale poll cannot undo a dismissed step', async () => {
+  vi.useFakeTimers();
+  let resolvePoll!: (response: Response) => void;
+  let resolvePost!: (response: Response) => void;
+  fetcher.mockImplementation((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((resolve) => {
+    if (init?.method === 'POST') resolvePost = resolve; else resolvePoll = resolve;
+  }));
+  render(<GuidePage {...props(guide({ requested: true }))} />);
+  await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+  await act(async () => { screen.getByRole('button', { name: 'Nascondi questo passo' }).click(); });
+  await act(async () => { resolvePost(Response.json({ dismissed: ['chase alice'] })); });
+  await act(async () => { resolvePoll(Response.json(guide({ requested: true }))); });
+  expect(screen.queryByText('Chase Alice')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Mostra nascosti (1)' })).toBeTruthy();
+});
+
+test('source popover formats dates and expands long text without changing its card', async () => {
+  const ex = explainer();
+  ex.sources.L1!.text = `2026-11-10 09:00 - ${'A long source with `command`. '.repeat(20)}`;
+  render(<GuidePage {...props(guide({ explainer: ex }))} />);
+  const card = screen.getByRole('article', { name: 'Access levels' });
+  await userEvent.click(within(card).getByRole('button', { name: 'Fonti (1)' }));
+  const popover = screen.getByRole('dialog');
+  expect(popover.textContent).toContain('10/11/2026');
+  expect(popover.textContent).not.toContain('2026-11-10 09:00');
+  expect(popover.querySelector('code')?.textContent).toBe('command');
+  await userEvent.click(within(popover).getByRole('button', { name: 'Mostra tutto' }));
+  expect(within(popover).getByRole('button', { name: 'Mostra meno' })).toBeTruthy();
+  expect(within(card).queryByText(/A long source/)).toBeNull();
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 

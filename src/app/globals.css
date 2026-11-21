@@ -83,6 +83,7 @@
 }
 
 @keyframes dash-flow { to { stroke-dashoffset: -20; } }
+.gloss-term { border-bottom: 1.5px dotted var(--primary); cursor: help; }
 @keyframes node-pulse { 0% { opacity: 0.5; transform: scale(1); } 100% { opacity: 0; transform: scale(1.9); } }
 
 /* Dialog open and close; Radix keeps a closing dialog mounted until its animation ends */
