@@ -227,6 +227,10 @@ The input is the main note split in sections, every dated `## Log` entry in its 
 
 The guide, the model that wrote it, the mtime of the main note at that time and the last error live in the setting `explainer:<id>`; `explainer.requested:<id>` and `explainer.running:<id>` mark a request and a run in progress. A failed run keeps the previous guide and shows the error. `GET /api/guide/<id>` returns the guide state and `POST /api/guide/<id>/regenerate` asks for a new one; the vault is only read.
 
+Next steps can be hidden from the page: `POST /api/guide/<id>/dismiss` and `/restore` with JSON `{"text": "<step>"}` keep a normalized key of the text (lower case, collapsed spaces) in `explainer.dismissed:<id>`, at most 200, across regenerations. The page hides steps whose key is listed, and the status call receives the list as `hidden_next_steps` so the model does not propose them again. The status call also receives `watched`, true when the initiative's client has a `[clients.<name>]` entry: then the client's messages reach Everflow on their own and no next step asks to check for replies. Next steps never cover administrative work towards Antonio's own company.
+
+Glossary entries carry an optional `icon`, one of the lucide names in `EXPLAINER_ICONS` (`src/lib/web-types.ts`); any other value is dropped. A concept or glossary drawing is kept only with at least two parts and a type other than `one`. The concept's key sentence (`say`) is optional and usually empty.
+
 ## Backlog and migration
 
 The first explicit v2 start persists `triage_after`, defaulting to that start's UTC time. A quoted aware `[start] triage_after` can set the initial cutoff. The persisted value wins on later starts. Unbatched messages with `stored_at` strictly before the cutoff become `backlog`, regardless of their source `sent_at`. They appear under Skipped rather than generating old proposals. Make ticket converts a skipped batch into a ticket or reuses its current routed ticket. A fresh proposal is not approved for chat by that action. Dismiss reasons and Make ticket counts remain visible as feedback.

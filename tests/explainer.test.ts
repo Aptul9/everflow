@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { openDb } from '../src/core/db.ts';
 import { explainerDue, explainerInputs, generateExplainer, parseA, parseB, refreshExplainer } from '../src/core/explainer.ts';
-import { readGuide, requestExplainer, writeSetting } from '../src/core/initiative-state.ts';
+import { readGuide, requestExplainer, setDismissed, writeSetting } from '../src/core/initiative-state.ts';
 import type { ExplainerSource } from '../src/lib/web-types.ts';
 import { kbFixture, provider, scriptedPeer } from './kb-support.ts';
 
@@ -114,6 +114,33 @@ test('explanation: uncited items are dropped and counted, general ones keep thei
   expect(value.ask_who.map((item) => item.who)).toEqual(['alice']);
   expect(value.concepts.map((concept) => [concept.id, concept.src, concept.diagram])).toEqual([['rbac', ['L1'], { t: 'flow', i: ['a', 'b'] }], ['odd', [], null]]);
   expect(value.glossary[0]).toMatchObject({ id: 'rbac', general: true, src: [] });
+});
+
+test('glossary icons come from the known list; a drawing needs at least two parts and never repeats the term alone', () => {
+  const term = (id: string, extra: object) => ({ id, term: id.toUpperCase(), short: 'S', long: '', general: true, src: [], ...extra });
+  const glossary = [term('vault', { icon: 'vault', diagram: { t: 'flow', i: ['Vault', 'VSO', 'cluster'] } }), term('ad', { icon: 'rocket', diagram: { t: 'one', i: ['AD', 'directory'] } }),
+    term('tpc', { diagram: { t: 'flow', i: ['TPC'] } })];
+  const concepts = [{ id: 'c', title: 'C', plain: 'P', analogy: '', say: '', diagram: { t: 'split', i: ['only'] }, src: [] }];
+  const { value } = parseA(JSON.stringify({ ...A, glossary, concepts }), offered('L1', 'L2'));
+  expect(value.glossary.map((item) => [item.id, item.icon, item.diagram?.t ?? null])).toEqual([['vault', 'vault', 'flow'], ['ad', null, null], ['tpc', null, null]]);
+  expect(value.concepts[0]!.diagram).toBeNull();
+});
+
+test('the status call says whether the client is watched and which next steps Antonio hid', async () => {
+  const { cfg } = fixture();
+  using db = openDb(cfg.db.path);
+  setDismissed(db, 'demo', 'Send the weekly  Report', true);
+  await using peer = await scriptedPeer((body) => sse(JSON.stringify(isA(body.system) ? A : B)));
+  const options = { providers: { first: provider(peer.baseURL) } };
+  await generateExplainer(cfg, db, 'demo', options);
+  expect(JSON.parse(peer.requests[1]!.messages[0]!.content as string)).toMatchObject({ watched: true, hidden_next_steps: ['send the weekly report'] });
+  expect(peer.requests[1]!.system).toContain('hidden_next_steps');
+  cfg.clients = {};
+  await generateExplainer(cfg, db, 'demo', options);
+  expect(JSON.parse(peer.requests[3]!.messages[0]!.content as string)).toMatchObject({ watched: false });
+  expect(readGuide(db, cfg, 'demo')!.dismissed).toEqual(['send the weekly report']);
+  setDismissed(db, 'demo', 'send the weekly report', false);
+  expect(readGuide(db, cfg, 'demo')!.dismissed).toEqual([]);
 });
 
 test('status: uncited items, bad endpoints and unknown references are cleaned up', () => {
