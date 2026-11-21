@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { approve } from '../core/approval.ts';
 import { transaction } from '../core/db.ts';
-import { markSeen, readGuide, readInitiatives, requestExplainer, requestRefresh } from '../core/initiative-state.ts';
+import { markSeen, readGuide, readInitiatives, requestExplainer, requestRefresh, setDismissed } from '../core/initiative-state.ts';
 import { retry, startNow } from '../core/jobs.ts';
 import { requestModelOptions, saveSetting } from '../core/settings.ts';
 import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, MUTE_MAX_MINUTES, muteBatch, muteTicket, pauseInput, TicketError } from '../core/tickets.ts';
@@ -168,16 +168,19 @@ export function guideGet(request: Request, id: string): Response {
   } catch (error) { return errorResponse(error); }
 }
 
-// regenerate: the daemon writes the guide again at its next tick
+const guideItem = z.strictObject({ text: z.string().min(1).max(600) });
+
+// regenerate: the daemon writes the guide again at its next tick; dismiss / restore: hide or show again a next step
 export async function guidePost(request: Request, id: string, action: string): Promise<Response> {
   try {
     const current = instance();
     guardPost(request.headers, current);
-    await body(request, empty);
-    if (action !== 'regenerate') throw new HttpError(404, 'action.not-found', 'Action not found');
+    if (action !== 'regenerate' && action !== 'dismiss' && action !== 'restore') throw new HttpError(404, 'action.not-found', 'Action not found');
+    const input = await body(request, action === 'regenerate' ? empty : guideItem) as { text?: string };
     if (!Object.hasOwn(current.config.initiatives, id)) throw new HttpError(404, 'initiative.not-found', 'Initiative not found');
-    withDatabase(true, (db) => requestExplainer(db, id));
-    return Response.json({ requested: true }, { headers: { 'cache-control': 'no-store' } });
+    const result = withDatabase(true, (db) => action === 'regenerate' ? (requestExplainer(db, id), { requested: true })
+      : { dismissed: setDismissed(db, id, input.text!, action === 'dismiss') });
+    return Response.json(result, { headers: { 'cache-control': 'no-store' } });
   } catch (error) { return errorResponse(error); }
 }
 

@@ -1,8 +1,9 @@
 'use client';
 
-import { ArrowLeft, Clock, Hourglass, LogOut, RefreshCw, TriangleAlert, User, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Explainer, ExplainerItemStatus, ExplainerPerson, GuideState } from '../../lib/web-types.ts';
+import { ArrowLeft, Bell, BookOpen, Bot, Building2, ClipboardCheck, Clock, Cloud, Container, Database, Eye, FileText, Fingerprint, GitBranch, GitPullRequest, Hourglass, KeyRound, ListChecks, Lock, LogOut, Monitor, Network, RefreshCw, ScrollText, Server, Shield, ShieldAlert, Siren, Terminal, Ticket, TriangleAlert, User, Users, Vault, Workflow, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { guideItemKey } from '../../lib/web-types.ts';
+import type { Explainer, ExplainerIcon, ExplainerItemStatus, ExplainerPerson, GuideState } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert.tsx';
 import { Button } from '../ui/button.tsx';
@@ -11,7 +12,7 @@ import { DependencyGraph, initials, workDays } from './dependency-graph.tsx';
 import { Diagram } from './diagram.tsx';
 import { GlossBack, GlossProvider, Glossed, useGloss } from './glossed.tsx';
 import { StatePill } from './initiatives-page.tsx';
-import { formatInitiativeTime as formatTime, GuideSources } from './sources.tsx';
+import { formatDate, formatInitiativeTime as formatTime, GuideSources } from './sources.tsx';
 
 const POLL_MS = 10_000;
 
@@ -34,12 +35,12 @@ function signedOut(response: Response): boolean {
   return true;
 }
 
-function Section(props: { id: string; n: number; title: string; wide?: boolean; children: React.ReactNode }) {
-  return <section id={props.id} aria-labelledby={`${props.id}-h`} className="scroll-mt-6 py-8 first:pt-2">
+function Section(props: { id: string; n: number; title: string; wide?: boolean; full?: boolean; children: React.ReactNode }) {
+  return <section id={props.id} aria-labelledby={`${props.id}-h`} className={cn('scroll-mt-6 py-8 first:pt-2', props.full && 'relative z-30 bg-background lg:-ml-[15.5rem]')}>
     <h2 id={`${props.id}-h`} className="mb-4 flex items-baseline gap-3 text-2xl font-semibold tracking-tight">
       <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center self-center rounded-full bg-primary text-sm font-semibold text-primary-foreground">{props.n}</span>{props.title}
     </h2>
-    <div className={cn('space-y-4 text-[17px] leading-relaxed', !props.wide && 'max-w-[760px]')}>{props.children}</div>
+    <div className={cn('space-y-4 text-[17px] leading-relaxed', !props.wide && 'max-w-[920px]')}>{props.children}</div>
   </section>;
 }
 
@@ -77,25 +78,34 @@ function PersonPanel(props: { person: ExplainerPerson; explainer: Explainer; tod
   </aside>;
 }
 
+const icons: Record<ExplainerIcon, typeof Vault> = {
+  vault: Vault, 'key-round': KeyRound, lock: Lock, shield: Shield, 'shield-alert': ShieldAlert, fingerprint: Fingerprint, users: Users, user: User, bot: Bot,
+  server: Server, database: Database, cloud: Cloud, container: Container, network: Network, 'git-branch': GitBranch, 'git-pull-request': GitPullRequest,
+  ticket: Ticket, 'file-text': FileText, 'book-open': BookOpen, bell: Bell, siren: Siren, 'scroll-text': ScrollText, 'clipboard-check': ClipboardCheck,
+  'list-checks': ListChecks, terminal: Terminal, monitor: Monitor, workflow: Workflow, 'refresh-cw': RefreshCw, eye: Eye, 'building-2': Building2,
+};
+
 function GlossaryEntry({ term }: { term: Explainer['glossary'][number] }) {
   const gloss = useGloss();
   const on = gloss?.highlight === term.id;
+  const Icon = term.icon ? icons[term.icon] : null;
   return <div id={`g-${term.id}`} data-highlight={on ? 'true' : undefined}
-    className={cn('grid scroll-mt-24 gap-4 rounded-xl border bg-card p-4 transition-shadow duration-500 sm:grid-cols-[13rem_1fr]', on && 'ring-2 ring-primary')}>
-    {term.diagram ? <Diagram diagram={term.diagram} className="max-w-[13rem]" /> : <div />}
+    className={cn('scroll-mt-24 rounded-xl border bg-card p-4 transition-shadow duration-500', on && 'ring-2 ring-primary')}>
     <div className="min-w-0 text-[15px] leading-snug">
-      <h3 className="text-base font-semibold">{term.term}{term.aliases.length > 0 && <span className="ml-2 text-xs font-normal text-muted-foreground">{term.aliases.join(', ')}</span>}</h3>
+      <h3 className="text-base font-semibold">{Icon && <Icon aria-hidden="true" className="mr-2 inline size-4 text-primary" />}{term.term}{term.aliases.length > 0 && <span className="ml-2 text-xs font-normal text-muted-foreground">{term.aliases.join(', ')}</span>}</h3>
       <p className="mt-1 font-medium">{term.short}</p>
       {term.long && <p className="mt-1.5 text-muted-foreground"><Glossed text={term.long} skip={term.id} /></p>}
+      {term.diagram && <Diagram diagram={term.diagram} className="mt-3" />}
       {on && <GlossBack />}
     </div>
   </div>;
 }
 
-function Body(props: { explainer: Explainer; state: GuideState }) {
+function Body(props: { explainer: Explainer; state: GuideState; indexVisible: boolean; pending: string[]; onStep: (text: string, hide: boolean) => void }) {
   const { explainer: ex, state } = props;
   const [person, setPerson] = useState<string | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
   const people = useMemo(() => new Map(ex.people.map((item) => [item.id, item])), [ex]);
   const nameOf = (id: string | null | undefined) => !id ? '' : id === 'you' ? 'Tu' : people.get(id)?.name ?? id;
   const waiting = ex.graph.nodes.filter((node) => !!node.owner && node.owner !== 'you' && node.status !== 'done').length;
@@ -107,14 +117,16 @@ function Body(props: { explainer: Explainer; state: GuideState }) {
   const selected = person ? people.get(person) : undefined;
   const showGraph = (id: string) => { setFocus(id); document.getElementById('blocchi')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }); };
   const { sources } = ex;
+  const hidden = ex.next_you.filter((item) => (state.dismissed ?? []).includes(guideItemKey(item.text)));
+  const visible = ex.next_you.filter((item) => !(state.dismissed ?? []).includes(guideItemKey(item.text)));
   return <>
     <Section id="breve" n={1} title="In breve" wide>
-      <div className="max-w-[760px] space-y-4">
+      <div className="max-w-[920px] space-y-4">
         <h1 className="text-3xl leading-tight font-semibold tracking-tight">{ex.title}</h1>
-        <p className="rounded-xl bg-primary px-5 py-4 text-lg leading-snug font-medium text-primary-foreground"><Glossed text={ex.one_liner} /></p>
+        <p className="rounded-xl bg-primary px-5 py-4 text-lg leading-snug font-medium text-primary-foreground [&_.gloss-term]:border-primary-foreground"><Glossed text={ex.one_liner} /></p>
         {summary && <div className="flex flex-wrap items-center gap-2.5"><StatePill view={state.initiative} /><span className="text-[15px]"><Inline text={summary.headline} /></span></div>}
       </div>
-      <div className="grid max-w-[760px] gap-3 sm:grid-cols-3">
+      <div className="grid items-start gap-3 sm:grid-cols-3">
         <Stat icon={<Hourglass aria-hidden="true" className="size-5" />} value={waiting} label="Cose che aspetti dagli altri" />
         <Stat icon={<User aria-hidden="true" className="size-5" />} value={mine} label="Cose tue" />
         <Stat icon={<Clock aria-hidden="true" className="size-5" />} value={quiet} label="Giorni dall'ultima novità" />
@@ -123,7 +135,7 @@ function Body(props: { explainer: Explainer; state: GuideState }) {
     <Section id="perche" n={2} title="Perché esiste">{ex.why.map((text, index) => <Prose key={index} text={text} sources={sources} />)}</Section>
     <Section id="ruolo" n={3} title="Il tuo ruolo"><Prose text={ex.role} sources={sources} /></Section>
     <Section id="chi" n={4} title="Chi c'è" wide>
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="grid items-start gap-3 md:grid-cols-2">
         {ex.teams.map((team) => <div key={team.id} data-team={team.kind} className={cn('rounded-xl border p-3.5', teamTone[team.kind])}>
           <h3 className="text-base font-semibold">{team.name}</h3>
           <p className="mt-0.5 text-sm text-muted-foreground"><Glossed text={team.plain} /></p>
@@ -132,21 +144,21 @@ function Body(props: { explainer: Explainer; state: GuideState }) {
               className="rounded-full border bg-card px-2.5 py-1 text-sm font-medium shadow-xs hover:bg-accent aria-pressed:border-primary aria-pressed:ring-2 aria-pressed:ring-primary">{item!.name}</button>)}</div>
         </div>)}
       </div>
-      {selected && <div className="max-w-[760px]"><PersonPanel person={selected} explainer={ex} today={state.today} onClose={() => setPerson(null)} onShow={() => showGraph(selected.id)} /></div>}
+      {selected && <div className="max-w-[920px]"><PersonPanel person={selected} explainer={ex} today={state.today} onClose={() => setPerson(null)} onShow={() => showGraph(selected.id)} /></div>}
     </Section>
     <Section id="concetti" n={5} title="I concetti" wide>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid items-start gap-4 lg:grid-cols-2">
         {ex.concepts.map((concept) => <article key={concept.id} aria-label={concept.title} className="flex flex-col gap-3 rounded-xl border bg-card p-5">
           <h3 className="text-xl font-semibold">{concept.title}</h3>
           <Prose text={concept.plain} sources={sources} ids={concept.src} />
-          {concept.analogy && <p className="rounded-lg border border-success/30 bg-success-soft px-3.5 py-2.5 text-[15px]"><b className="text-success">Analogia. </b><Glossed text={concept.analogy} /></p>}
-          {concept.diagram && <Diagram diagram={concept.diagram} className="max-w-sm" />}
-          {concept.say && <p className="rounded-lg bg-accent px-3.5 py-2.5 text-[15px] text-accent-foreground"><b>Frase da dire. </b><q>{concept.say}</q></p>}
+          {concept.analogy && <p className="rounded-lg bg-muted/60 px-3.5 py-2.5 text-[15px]"><b>Analogia. </b><Glossed text={concept.analogy} /></p>}
+          {concept.diagram && <Diagram diagram={concept.diagram} />}
+          {concept.say && <p className="text-[15px] text-muted-foreground">In una frase: <q className="italic">{concept.say}</q></p>}
         </article>)}
       </div>
     </Section>
     <Section id="punto" n={6} title="A che punto siamo" wide>
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid items-start gap-4 lg:grid-cols-2">
         {ex.phases.map((phase) => {
           const done = phase.items.filter((item) => item.status === 'done').length, pct = phase.items.length ? Math.round(done * 100 / phase.items.length) : 0;
           return <article key={phase.id} aria-label={phase.title} className="rounded-xl border bg-card p-5">
@@ -165,10 +177,10 @@ function Body(props: { explainer: Explainer; state: GuideState }) {
         })}
       </div>
     </Section>
-    <Section id="blocchi" n={7} title="Cosa blocca e sblocca" wide>
-      <p className="max-w-[760px]">Tocca una persona o un riquadro per vedere le dipendenze documentate e, se presente, la catena verso il traguardo: <b>{ex.goal.label}</b>. <Glossed text={ex.goal.plain} /></p>
+    <Section id="blocchi" n={7} title="Cosa blocca e sblocca" wide full={props.indexVisible}>
+      <p className="max-w-[920px]">Tocca una persona o un riquadro per vedere le dipendenze documentate e, se presente, la catena verso il traguardo: <b>{ex.goal.label}</b>. <Glossed text={ex.goal.plain} /></p>
       <DependencyGraph explainer={ex} today={state.today} focus={focus} onFocusChange={setFocus} />
-      {!!ex.blocked_by.length && <div className="grid gap-3 md:grid-cols-2">
+      {!!ex.blocked_by.length && <div className="grid items-start gap-3 md:grid-cols-2">
         {ex.blocked_by.map((item, index) => {
           const days = item.since ? workDays(item.since, state.today) : null;
           return <article key={index} aria-label={item.title} className="rounded-xl border border-destructive/30 bg-destructive-soft p-4 text-[15px] leading-snug">
@@ -178,15 +190,17 @@ function Body(props: { explainer: Explainer; state: GuideState }) {
           </article>;
         })}
       </div>}
-      {!!ex.next_you.length && <div className="max-w-[760px] rounded-xl border bg-card p-4">
-        <h3 className="mb-2 text-base font-semibold">Cosa fare tu adesso</h3>
-        <ol className="list-decimal space-y-2 pl-5 text-[15px] leading-snug">{ex.next_you.map((item, index) => <li key={index}><b className="font-medium"><Glossed text={item.text} /></b><span className="block text-muted-foreground"><Glossed text={item.why} /><GuideSources ids={item.src} sources={sources} /></span></li>)}</ol>
+      {!!ex.next_you.length && <div className="max-w-[920px] rounded-xl border bg-card p-4">
+        <h3 className="mb-2 text-base font-semibold">I tuoi prossimi passi</h3>
+        <ol className="list-decimal space-y-2 pl-5 text-[15px] leading-snug">{visible.map((item) => <li key={guideItemKey(item.text)}><div className="flex items-start gap-2"><div className="min-w-0 flex-1"><b className="font-medium"><Glossed text={item.text} /></b><span className="block text-muted-foreground"><Glossed text={item.why} /><GuideSources ids={item.src} sources={sources} /></span></div><button type="button" aria-label="Nascondi questo passo" disabled={props.pending.includes(guideItemKey(item.text))} onClick={() => props.onStep(item.text, true)} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted"><X aria-hidden="true" className="size-4" /></button></div></li>)}</ol>
+        {hidden.length > 0 && <div className="mt-3 text-sm"><button type="button" aria-expanded={showHidden} onClick={() => setShowHidden(!showHidden)} className="font-medium text-primary hover:underline">{showHidden ? 'Nascondi elenco' : `Mostra nascosti (${hidden.length})`}</button>
+          {showHidden && <ul className="mt-2 space-y-2">{hidden.map((item) => <li key={guideItemKey(item.text)} className="flex items-start gap-2"><span className="min-w-0 flex-1">{item.text}</span><button type="button" disabled={props.pending.includes(guideItemKey(item.text))} onClick={() => props.onStep(item.text, false)} className="shrink-0 text-primary hover:underline">Ripristina</button></li>)}</ul>}</div>}
       </div>}
     </Section>
     <Section id="storia" n={8} title="La storia">
       <ol className="relative space-y-5 border-l-2 border-border pl-6">{ex.timeline.map((item, index) => <li key={index} className="relative">
         <span aria-hidden="true" className="absolute top-1.5 -left-[1.9rem] size-3 rounded-full border-2 border-primary bg-background" />
-        <time className="font-mono text-xs text-muted-foreground">{item.date}</time>
+        <time dateTime={item.date} className="text-xs text-muted-foreground">{formatDate(item.date, true)}</time>
         <h3 className="text-base font-semibold">{item.title}</h3>
         <Prose text={item.plain} sources={sources} ids={item.src} />
       </li>)}</ol>
@@ -204,7 +218,7 @@ function Body(props: { explainer: Explainer; state: GuideState }) {
       {!ex.warnings.length && <p className="text-muted-foreground">Niente da segnalare.</p>}
     </Section>
     <Section id="glossario" n={11} title="Glossario" wide>
-      <div className="space-y-3">{glossary.map((term) => <GlossaryEntry key={term.id} term={term} />)}</div>
+      <div className="grid items-start gap-3 lg:grid-cols-2">{glossary.map((term) => <GlossaryEntry key={term.id} term={term} />)}</div>
     </Section>
   </>;
 }
@@ -214,11 +228,36 @@ export function GuidePage(props: { id: string; initialState: GuideState; token: 
   const [error, setError] = useState('');
   const [active, setActive] = useState<string>(sections[0][0]);
   const [asked, setAsked] = useState(false);
+  const [indexVisible, setIndexVisible] = useState(true);
+  const [pending, setPending] = useState<string[]>([]);
+  const stepRevision = useRef(0);
+  const stepsPending = useRef(0);
+  useEffect(() => { try { setIndexVisible(localStorage.getItem('everflow.guide.index') !== 'hidden'); } catch {} }, []);
+  const toggleIndex = () => setIndexVisible((current) => {
+    try { localStorage.setItem('everflow.guide.index', current ? 'hidden' : 'shown'); } catch {}
+    return !current;
+  });
+  const step = async (text: string, hide: boolean) => {
+    const key = guideItemKey(text);
+    stepRevision.current++;
+    stepsPending.current++;
+    setPending((current) => [...current, key]);
+    setError('');
+    setState((current) => ({ ...current, dismissed: hide ? [...new Set([...(current.dismissed ?? []), key])] : (current.dismissed ?? []).filter((item) => item !== key) }));
+    try {
+      const response = await fetch(`/api/guide/${encodeURIComponent(props.id)}/${hide ? 'dismiss' : 'restore'}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-everflow-token': props.token }, body: JSON.stringify({ text }) });
+      if (!response.ok) { signedOut(response); throw new Error(`HTTP ${response.status}`); }
+    } catch (failure) {
+      setState((current) => ({ ...current, dismissed: hide ? (current.dismissed ?? []).filter((item) => item !== key) : [...new Set([...(current.dismissed ?? []), key])] }));
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally { stepRevision.current++; stepsPending.current--; setPending((current) => current.filter((item) => item !== key)); }
+  };
   const load = useCallback(async () => {
+    const revision = stepRevision.current;
     try {
       const response = await fetch(`/api/guide/${encodeURIComponent(props.id)}`, { cache: 'no-store', credentials: 'same-origin' });
       if (signedOut(response)) return;
-      if (response.ok) { setState(await response.json() as GuideState); setError(''); }
+      if (response.ok) { const next = await response.json() as GuideState; if (!stepsPending.current && revision === stepRevision.current) { setState(next); setError(''); } }
       else setError(`Guida non disponibile (HTTP ${response.status})`);
     } catch { setError('Guida non raggiungibile, nuovo tentativo tra poco'); }
   }, [props.id]);
@@ -261,32 +300,33 @@ export function GuidePage(props: { id: string; initialState: GuideState; token: 
     <RefreshCw aria-hidden="true" className={cn(busy && 'animate-spin')} />{busy ? 'In preparazione...' : ex ? 'Rigenera la guida' : 'Prepara la guida'}</Button>;
   return <div className="min-h-dvh">
     <header className="border-b bg-background/85 backdrop-blur-md">
-      <div className="mx-auto flex max-w-[1280px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 sm:px-6">
+      <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5 sm:px-6">
         <div className="flex min-w-0 items-center gap-2.5">
           <img src="/apple-icon.png" alt="" aria-hidden="true" className="size-9 object-contain" />
-          <div className="leading-tight"><p className="text-[15px] font-semibold tracking-tight">Everflow</p><p className="text-xs text-muted-foreground">Guida · {state.today}</p></div>
+          <div className="leading-tight"><p className="text-[15px] font-semibold tracking-tight">Everflow</p><p className="text-xs text-muted-foreground">Guida · {formatDate(state.today)}</p></div>
         </div>
         <nav aria-label="Pagine" className="flex gap-0.5 rounded-lg bg-muted p-0.5 text-sm">
           <a href="/" className="rounded-md px-3 py-1 text-muted-foreground hover:text-foreground">Board</a>
           <a href="/overview" aria-current="page" className="rounded-md bg-card px-3 py-1 font-medium shadow-xs">Overview</a>
         </nav>
         <a href="/overview" className="inline-flex items-center gap-1 text-sm text-primary hover:underline sm:ml-auto"><ArrowLeft aria-hidden="true" className="size-4" />Torna alla panoramica</a>
+        {ex && <button type="button" aria-pressed={indexVisible} onClick={toggleIndex} className="hidden rounded-md border px-3 py-1 text-sm hover:bg-accent lg:block">{indexVisible ? 'Nascondi indice' : 'Mostra indice'}</button>}
         {props.signOut && <Button variant="ghost" size="sm" className="text-muted-foreground"
           onClick={() => { void fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }).then((r) => r.headers.get('x-everflow-logout') ?? '/login', () => '/login').then((to) => window.location.assign(to)); }}>
           <LogOut aria-hidden="true" />Esci</Button>}
       </div>
     </header>
-    <div className="mx-auto max-w-[1280px] px-4 sm:px-6 lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:gap-10">
+    <div className={cn('mx-auto max-w-[1600px] px-4 sm:px-6', ex && indexVisible && 'lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:gap-10')}>
       {ex && <>
         <nav aria-label="Indice" className="sticky top-0 z-20 -mx-4 flex gap-1.5 overflow-x-auto border-b bg-background/95 px-4 py-2 backdrop-blur lg:hidden">
           {sections.map(([id, title]) => <a key={id} href={`#${id}`} onClick={() => toc(id)} aria-current={active === id ? 'location' : undefined}
             className="shrink-0 rounded-full border bg-card px-3 py-1 text-sm aria-[current=location]:border-primary aria-[current=location]:bg-primary aria-[current=location]:text-primary-foreground">{title}</a>)}
         </nav>
-        <nav aria-label="Indice della guida" className="sticky top-6 hidden h-fit self-start py-8 lg:block">
+        {indexVisible && <nav aria-label="Indice della guida" className="sticky top-6 z-20 hidden h-fit self-start py-8 lg:block">
           <p className="mb-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{view.client} · {view.title}</p>
           <ol className="space-y-0.5 border-l">{sections.map(([id, title], index) => <li key={id}><a href={`#${id}`} onClick={() => toc(id)} aria-current={active === id ? 'location' : undefined}
             className="-ml-px block border-l-2 border-transparent py-1 pl-3 text-sm text-muted-foreground hover:text-foreground aria-[current=location]:border-primary aria-[current=location]:font-medium aria-[current=location]:text-foreground">{index + 1}. {title}</a></li>)}</ol>
-        </nav>
+        </nav>}
       </>}
       <main className={cn('min-w-0 pb-16', !ex && 'lg:col-span-2')}>
         {(error || state.error) && <Alert variant="destructive" className="mt-4 border-warning/40 bg-warning-soft text-warning">
@@ -305,7 +345,7 @@ export function GuidePage(props: { id: string; initialState: GuideState; token: 
             <div className="mt-3">{!state.requested && !state.running && !asked && button}{busy && <span className="text-sm text-muted-foreground">In preparazione...</span>}</div>
           </div>
         </section> : <GlossProvider terms={ex.glossary}>
-          <Body explainer={ex} state={state} />
+          <Body explainer={ex} state={state} indexVisible={indexVisible} pending={pending} onStep={(text, hide) => { void step(text, hide); }} />
           <footer className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 border-t pt-4 text-xs text-muted-foreground">
             <span>Generata {state.at ? formatTime(state.at) : ''}</span><span>Modello {ex.model}</span>
             <span>{ex.notes.length + 1} note lette</span>{ex.rejected > 0 && <span>{ex.rejected} elementi scartati per mancanza di fonti</span>}

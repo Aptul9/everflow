@@ -8,7 +8,7 @@ import { Alert, AlertDescription, AlertTitle } from '../ui/alert.tsx';
 import { Button } from '../ui/button.tsx';
 import { Inline } from '../tickets/markdown.tsx';
 import { DependencyGraph, initials } from './dependency-graph.tsx';
-import { formatInitiativeTime as formatTime, Sources } from './sources.tsx';
+import { formatDate, formatInitiativeTime as formatTime, Sources } from './sources.tsx';
 
 const POLL_MS = 15_000;
 // Waits on others older than this many working days turn red
@@ -329,7 +329,7 @@ export function InitiativesPage(props: { initialState: InitiativesState; token: 
           <img src="/apple-icon.png" alt="" aria-hidden="true" className="size-9 object-contain" />
           <div className="leading-tight">
             <h1 className="text-[15px] font-semibold tracking-tight">Everflow</h1>
-            <p className="text-xs text-muted-foreground">Overview · {state.today}</p>
+            <p className="text-xs text-muted-foreground">Overview · {formatDate(state.today)}</p>
           </div>
         </div>
         <nav aria-label="Pages" className="flex gap-0.5 rounded-lg bg-muted p-0.5 text-sm">

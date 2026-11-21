@@ -48,10 +48,16 @@ test('cards show each initiative state; the detail draws who owes what, the boar
   expect(within(detail).getByRole('region', { name: 'Them (1)' }).textContent).toContain('6 working days');
   expect(within(detail).getByRole('region', { name: 'You (1)' }).textContent).toContain('Send v2.13 to Bob');
   expect(detail.textContent).toContain('1 items dropped for citing no source');
-  await userEvent.click(within(within(detail).getByRole('list')).getByRole('button', { name: 'Sources (1)' }));
-  expect(within(detail).getByRole('note').textContent).toContain('Pat: standard pending');
+  await userEvent.click(within(within(detail).getByRole('list')).getByRole('button', { name: 'Fonti (1)' }));
+  expect(screen.getByRole('dialog').textContent).toContain('18/11/2026Pat: standard pending');
+  expect(screen.getByRole('dialog').textContent).not.toContain('2026-11-18 09:48');
   await userEvent.click(within(within(detail).getByRole('region', { name: 'AI (1)' })).getByRole('button', { name: 'Draft' }));
   expect(detail.textContent).toContain('Hi Alice, any news on 1-4?');
+});
+
+test('overview dates use Rome time', () => {
+  render(<InitiativesPage {...props()} />);
+  expect(screen.getByText('Updated 18/11/2026 08:00')).toBeTruthy();
 });
 
 test('a failed initiative says so, the open is counted once a day, and Refresh asks the daemon', async () => {
@@ -102,7 +108,7 @@ function guide(): GuideState {
     graph: { nodes: [{ id: 'questions', kind: 'answer', label: 'questions 1-4', plain: '', status: 'open', owner: 'alice', since: null, src: ['G1'] }],
       edges: [{ from: 'alice', to: 'questions', kind: 'owes', why: 'Request', src: ['G1'] }, { from: 'questions', to: 'goal', kind: 'unblocks', why: 'Evidence', src: ['G1'] }] },
   };
-  return { initiative: acme(), today: '2026-11-18', at: null, explainer: ex, error: null, error_at: null, requested: false, running: false, providers: true };
+  return { initiative: acme(), today: '2026-11-18', at: null, explainer: ex, error: null, error_at: null, requested: false, running: false, providers: true, dismissed: [] };
 }
 
 test('a board card focuses only its uniquely matching node with the same source text', async () => {

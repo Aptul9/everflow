@@ -182,8 +182,14 @@ export type ExplainerDiagramKind = 'flow' | 'nest' | 'split' | 'hub' | 'row' | '
 export interface ExplainerDiagram { t: ExplainerDiagramKind; i: string[]; hi?: number; b?: string }
 export interface ExplainerTeam { id: string; name: string; plain: string; kind: 'client' | 'us' | 'platform' | 'security' | 'vendor' | 'other'; people: string[] }
 export interface ExplainerPerson { id: string; name: string; short: string; team: string; role: string; plain: string; ask_for: string; how: string; src: string[] }
+// say: optional key sentence, empty when the concept needs none (most concepts); diagram only when a drawing adds something
 export interface ExplainerConcept { id: string; title: string; plain: string; analogy: string; say: string; diagram: ExplainerDiagram | null; src: string[] }
-export interface ExplainerTerm { id: string; term: string; aliases: string[]; short: string; long: string; diagram: ExplainerDiagram | null; general: boolean; src: string[] }
+// Icons a glossary entry may carry: lucide icon names, rendered only when they say what the term is
+export const EXPLAINER_ICONS = ['vault', 'key-round', 'lock', 'shield', 'shield-alert', 'fingerprint', 'users', 'user', 'bot', 'server', 'database', 'cloud', 'container',
+  'network', 'git-branch', 'git-pull-request', 'ticket', 'file-text', 'book-open', 'bell', 'siren', 'scroll-text', 'clipboard-check', 'list-checks', 'terminal', 'monitor',
+  'workflow', 'refresh-cw', 'eye', 'building-2'] as const;
+export type ExplainerIcon = (typeof EXPLAINER_ICONS)[number];
+export interface ExplainerTerm { id: string; term: string; aliases: string[]; short: string; long: string; diagram: ExplainerDiagram | null; icon?: ExplainerIcon | null; general: boolean; src: string[] }
 export type ExplainerItemStatus = 'done' | 'doing' | 'todo' | 'blocked';
 export interface ExplainerPhase { id: string; title: string; plain: string; items: { title: string; status: ExplainerItemStatus; note: string; src: string[] }[] }
 // Graph: owes = a person (or "you") owes a node; unblocks = a node makes the next node (or "goal") possible
@@ -209,4 +215,11 @@ export interface GuideState {
   initiative: InitiativeView; today: string;
   at: string | null; explainer: Explainer | null; error: string | null; error_at: string | null;
   requested: boolean; running: boolean; providers: boolean;
+  // next_you items Antonio hid, as guideItemKey of their text
+  dismissed: string[];
+}
+
+// Stable key of a guide item text, so a hidden step stays hidden across reloads and changes of spacing or case
+export function guideItemKey(text: string): string {
+  return text.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 300);
 }
