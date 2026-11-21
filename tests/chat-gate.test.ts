@@ -283,8 +283,8 @@ test('served gate with EverID only: an EverID session opens the chat host, webso
     expect(old.headers['x-everflow-login']).toBe(`${PUBLIC}/login?next=${encodeURIComponent(`${CHAT}/?session=ses_1`)}`);
     const refused = await http(server.port, '/api/login', { method: 'POST', body: JSON.stringify({ email: account.user, password: 'synthetic secret' }),
       headers: { host: 'everflow.example.invalid', origin: PUBLIC, 'content-type': 'application/json' } });
-    expect(refused.status).toBe(403);
-    expect(JSON.parse(refused.text).error.code).toBe('login.password-off');
+    expect(refused.status).toBe(503);
+    expect(JSON.parse(refused.text).error.code).toBe('everid.unavailable');
     // the bridge behind the gate takes the EverID session too
     const page = await http(server.port, '/api/chat-bridge/mini-chat.html?mode=session&sessionId=ses_vault', { headers: { 'x-forwarded-host': 'chat.everflow.example.invalid', cookie } });
     expect(page.status).toBe(200);
