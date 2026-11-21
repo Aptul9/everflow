@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Explainer, ExplainerEdge, ExplainerNode } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Glossed } from './glossed.tsx';
-import { Fold, GuideSources } from './sources.tsx';
+import { FlagButton, Fold, GuideSources } from './sources.tsx';
 
 const NODE_W = 228, PERSON_MIN = 168, PERSON_MAX = 220, GOAL_W = 176, GOAL_H = 88, GUTTER = 96, GAP = 14, PAD = 14;
 
@@ -165,7 +165,7 @@ function Step(props: { n: number; children: React.ReactNode; why?: string; src?:
     <span className="min-w-0 text-sm leading-snug">
       <span className="font-medium">{props.children}</span>
       {props.why && <span className="mt-0.5 block text-[13px] text-muted-foreground"><Glossed text={props.why} /></span>}
-      {props.src && <GuideSources ids={props.src} sources={props.sources} />}
+      {props.src && <GuideSources ids={props.src} sources={props.sources} />}{props.why && <FlagButton text={props.why} />}
     </span>
   </li>;
 }
@@ -311,7 +311,7 @@ export function DependencyGraph(props: { explainer: Explainer; today: string; fo
     panel = <>
       <h3 className="text-base font-semibold">{node.label}</h3>
       <p className="mt-0.5 text-[13px] text-muted-foreground">{statusText[node.status]}{node.since && node.status !== 'done' ? ` · dal ${node.since.slice(8, 10)}/${node.since.slice(5, 7)} · ${waited(node)}` : ''}{node.owner ? ` · ${nameOf(node.owner)}` : ''}</p>
-      <p className="mt-2 text-sm leading-snug"><Glossed text={node.plain} /><GuideSources ids={node.src} sources={explainer.sources} /></p>
+      <p className="mt-2 text-sm leading-snug"><Glossed text={node.plain} /><GuideSources ids={node.src} sources={explainer.sources} /><FlagButton text={node.plain} /></p>
       {!incoming.length && !onward.length && <p className="mt-2 text-sm text-muted-foreground">Nessuna dipendenza documentata per questo elemento.</p>}
       {[['Da cosa dipende', incoming], ['Cosa sblocca', onward]].map(([title, list], group) => !!(list as ExplainerEdge[]).length && <div key={group} className="mt-3">
         <h4 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{title as string}</h4>
@@ -319,7 +319,7 @@ export function DependencyGraph(props: { explainer: Explainer; today: string; fo
           className="rounded-lg border bg-background/70 px-3 py-2" title={<span className="text-sm leading-snug font-medium">{group === 0
             ? edge.kind === 'owes' ? edge.from === 'you' ? verbs[node.kind][1] : `${nameOf(edge.from)} ${verbs[node.kind][0]}` : `Serve prima «${labelOf(edge.from)}»`
             : edge.to === 'goal' ? `Il traguardo: ${explainer.goal.label}` : `«${labelOf(edge.to)}»`}</span>}>
-          <p className="text-[13px] leading-snug text-muted-foreground"><Glossed text={edge.why} /><GuideSources ids={edge.src} sources={explainer.sources} /></p>
+          <p className="text-[13px] leading-snug text-muted-foreground"><Glossed text={edge.why} /><GuideSources ids={edge.src} sources={explainer.sources} /><FlagButton text={edge.why} /></p>
         </Fold>)}</div>
       </div>)}
     </>;

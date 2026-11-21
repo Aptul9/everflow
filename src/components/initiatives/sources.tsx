@@ -1,8 +1,8 @@
 'use client';
 
-import { Info, Play } from 'lucide-react';
-import { useState } from 'react';
-import { cleanSourceText } from '../../lib/web-types.ts';
+import { Flag, Info, Play } from 'lucide-react';
+import { createContext, useContext, useState } from 'react';
+import { cleanSourceText, guideItemKey } from '../../lib/web-types.ts';
 import type { ExplainerSource, InitiativeSource } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
@@ -60,6 +60,34 @@ function Chip({ items }: { items: Cited[] }) {
         <p className="whitespace-pre-wrap break-words"><SourceText text={text} /></p>
       </Fold>;
     })}</div>
+  </PopoverContent></Popover>;
+}
+
+// Flagging a guide text as wrong: only the guide page provides it, so the overview shows no flag buttons
+export const GuideFlags = createContext<{ flagged: readonly string[]; onFlag: (text: string, note: string, on: boolean) => void } | null>(null);
+
+export function FlagButton({ text }: { text: string }) {
+  const flags = useContext(GuideFlags);
+  const [note, setNote] = useState('');
+  const [open, setOpen] = useState(false);
+  if (!flags || !text.trim()) return null;
+  const on = flags.flagged.includes(guideItemKey(text));
+  return <Popover open={open} onOpenChange={setOpen}><PopoverTrigger asChild>
+    <button type="button" aria-label={on ? 'Segnalato come sbagliato' : 'Segnala come sbagliato'} title={on ? 'Segnalato come sbagliato' : 'Segnala come sbagliato'}
+      className={cn('ml-1 inline-flex align-middle', on ? 'text-destructive' : 'text-muted-foreground/50 hover:text-destructive')}>
+      <Flag aria-hidden="true" className={cn('size-3.5', on && 'fill-destructive')} />
+    </button>
+  </PopoverTrigger><PopoverContent align="start" collisionPadding={8} className="w-[min(340px,calc(100vw-16px))] space-y-2 p-3 text-sm">
+    {on ? <>
+      <p>Hai segnalato questo testo. La prossima guida non lo ripeterà.</p>
+      <button type="button" onClick={() => { flags.onFlag(text, '', false); setOpen(false); }} className="font-medium text-primary hover:underline">Togli la segnalazione</button>
+    </> : <>
+      <h3 className="font-semibold">Cosa non va?</h3>
+      <textarea value={note} onChange={(event) => setNote(event.target.value)} rows={3} maxLength={300} aria-label="Cosa non va"
+        placeholder="Facoltativo: data scritta male, in inglese, non si capisce..." className="w-full rounded-md border bg-background px-2 py-1.5 text-sm" />
+      <button type="button" onClick={() => { flags.onFlag(text, note, true); setNote(''); setOpen(false); }}
+        className="rounded-md bg-destructive px-3 py-1.5 font-medium text-white hover:bg-destructive/90">Segnala</button>
+    </>}
   </PopoverContent></Popover>;
 }
 

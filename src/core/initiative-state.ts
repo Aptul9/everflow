@@ -99,6 +99,22 @@ export function setDismissed(db: DatabaseSync, id: string, text: string, hidden:
   return next;
 }
 
+// explainer.flagged:<id>: guide texts Antonio marked as wrong, with his note; the generator gets them as mistakes not to repeat
+export interface GuideFlag { key: string; text: string; note: string; at: string }
+export function flaggedItems(db: DatabaseSync, id: string): GuideFlag[] {
+  try {
+    const value = JSON.parse(readSetting(db, `explainer.flagged:${id}`) ?? '[]') as unknown;
+    return Array.isArray(value) ? value.filter((item): item is GuideFlag => !!item && typeof item.key === 'string' && typeof item.text === 'string') : [];
+  } catch { return []; }
+}
+
+export function setFlagged(db: DatabaseSync, id: string, text: string, note: string, flagged: boolean): string[] {
+  const key = guideItemKey(text), current = flaggedItems(db, id).filter((item) => item.key !== key);
+  const next = flagged ? [...current, { key, text: text.slice(0, 600), note: note.trim().slice(0, 300), at: utc() }].slice(-100) : current;
+  writeSetting(db, `explainer.flagged:${id}`, JSON.stringify(next));
+  return next.map((item) => item.key);
+}
+
 export function readGuide(db: DatabaseSync, cfg: Config, id: string, at = Date.now()): GuideState | null {
   const state = readInitiatives(db, cfg, at);
   const initiative = state.initiatives.find((item) => item.id === id);
@@ -108,5 +124,5 @@ export function readGuide(db: DatabaseSync, cfg: Config, id: string, at = Date.n
   return { initiative, today: state.today, at: record.at, explainer: record.explainer, error: record.error, error_at: record.error_at,
     requested: !!readSetting(db, `explainer.requested:${id}`),
     running: !!running && at - Date.parse(running) < (cfg.overview.explainer_timeout_seconds + 60) * 1_000,
-    providers: state.providers, dismissed: dismissedItems(db, id) };
+    providers: state.providers, dismissed: dismissedItems(db, id), flagged: flaggedItems(db, id).map((item) => item.key) };
 }

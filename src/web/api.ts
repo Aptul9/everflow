@@ -2,7 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import { approve } from '../core/approval.ts';
 import { transaction } from '../core/db.ts';
-import { markSeen, readGuide, readInitiatives, requestExplainer, requestRefresh, setDismissed } from '../core/initiative-state.ts';
+import { markSeen, readGuide, readInitiatives, requestExplainer, requestRefresh, setDismissed, setFlagged } from '../core/initiative-state.ts';
 import { retry, startNow } from '../core/jobs.ts';
 import { requestModelOptions, saveSetting } from '../core/settings.ts';
 import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, MUTE_MAX_MINUTES, muteBatch, muteTicket, pauseInput, TicketError } from '../core/tickets.ts';
@@ -169,16 +169,20 @@ export function guideGet(request: Request, id: string): Response {
 }
 
 const guideItem = z.strictObject({ text: z.string().min(1).max(600) });
+const guideFlag = z.strictObject({ text: z.string().min(1).max(600), note: z.string().max(300).optional() });
+const guideActions = ['regenerate', 'dismiss', 'restore', 'flag', 'unflag'];
 
-// regenerate: the daemon writes the guide again at its next tick; dismiss / restore: hide or show again a next step
+// regenerate: the daemon writes the guide again at its next tick; dismiss / restore: hide or show again a next step;
+// flag / unflag: mark a guide text as wrong, with an optional note, so the next guide does not repeat it
 export async function guidePost(request: Request, id: string, action: string): Promise<Response> {
   try {
     const current = instance();
     guardPost(request.headers, current);
-    if (action !== 'regenerate' && action !== 'dismiss' && action !== 'restore') throw new HttpError(404, 'action.not-found', 'Action not found');
-    const input = await body(request, action === 'regenerate' ? empty : guideItem) as { text?: string };
+    if (!guideActions.includes(action)) throw new HttpError(404, 'action.not-found', 'Action not found');
+    const input = await body(request, action === 'regenerate' ? empty : action === 'flag' || action === 'unflag' ? guideFlag : guideItem) as { text?: string; note?: string };
     if (!Object.hasOwn(current.config.initiatives, id)) throw new HttpError(404, 'initiative.not-found', 'Initiative not found');
     const result = withDatabase(true, (db) => action === 'regenerate' ? (requestExplainer(db, id), { requested: true })
+      : action === 'flag' || action === 'unflag' ? { flagged: setFlagged(db, id, input.text!, input.note ?? '', action === 'flag') }
       : { dismissed: setDismissed(db, id, input.text!, action === 'dismiss') });
     return Response.json(result, { headers: { 'cache-control': 'no-store' } });
   } catch (error) { return errorResponse(error); }

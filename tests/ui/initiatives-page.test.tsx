@@ -108,7 +108,7 @@ function guide(): GuideState {
     graph: { nodes: [{ id: 'questions', kind: 'answer', label: 'questions 1-4', plain: '', status: 'open', owner: 'alice', since: null, src: ['G1'] }],
       edges: [{ from: 'alice', to: 'questions', kind: 'owes', why: 'Request', src: ['G1'] }, { from: 'questions', to: 'goal', kind: 'unblocks', why: 'Evidence', src: ['G1'] }] },
   };
-  return { initiative: acme(), today: '2026-11-18', at: null, explainer: ex, error: null, error_at: null, requested: false, running: false, providers: true, dismissed: [] };
+  return { initiative: acme(), today: '2026-11-18', at: null, explainer: ex, error: null, error_at: null, requested: false, running: false, providers: true, dismissed: [], flagged: [] };
 }
 
 test('a board card focuses only its uniquely matching node with the same source text', async () => {
@@ -120,6 +120,7 @@ test('a board card focuses only its uniquely matching node with the same source 
   await userEvent.click(within(detail).getByRole('button', { name: 'Show what Alice owes' }));
   expect(detail.querySelector('[data-graph]')?.getAttribute('data-focus')).toBe('questions');
   expect(detail.querySelector('[data-edge="questions>goal"]')?.getAttribute('data-live')).toBe('true');
+  expect(within(detail).queryAllByRole('button', { name: 'Segnala come sbagliato' })).toHaveLength(0);
   await userEvent.click(within(detail).getByRole('button', { name: 'Togli la selezione (Esc)' }));
   await userEvent.click(within(within(detail).getByRole('region', { name: 'AI (1)' })).getByRole('button', { name: 'Mostra dipendenze della scheda' }));
   expect(detail.querySelector('[data-focus-line]')?.textContent).toContain('Nessuna dipendenza documentata');

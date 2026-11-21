@@ -12,7 +12,8 @@ import { DependencyGraph, initials, workDays } from './dependency-graph.tsx';
 import { Diagram } from './diagram.tsx';
 import { GlossBack, GlossProvider, Glossed, useGloss } from './glossed.tsx';
 import { StatePill } from './initiatives-page.tsx';
-import { formatDate, formatInitiativeTime as formatTime, GuideSources } from './sources.tsx';
+import { FlagButton, formatDate, formatInitiativeTime as formatTime, GuideFlags, GuideSources } from './sources.tsx';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
 
 const POLL_MS = 10_000;
 
@@ -45,7 +46,7 @@ function Section(props: { id: string; n: number; title: string; wide?: boolean; 
 }
 
 function Prose({ text, sources, ids }: { text: string; sources: Explainer['sources']; ids?: string[] }) {
-  return <p><Glossed text={text} />{ids && <GuideSources ids={ids} sources={sources} />}</p>;
+  return <p><Glossed text={text} />{ids && <GuideSources ids={ids} sources={sources} />}<FlagButton text={text} /></p>;
 }
 
 function Stat(props: { icon: React.ReactNode; value: number | string; label: string }) {
@@ -94,7 +95,7 @@ function GlossaryEntry({ term }: { term: Explainer['glossary'][number] }) {
     <div className="min-w-0 text-[15px] leading-snug">
       <h3 className="text-base font-semibold">{Icon && <Icon aria-hidden="true" className="mr-2 inline size-4 text-primary" />}{term.term}{term.aliases.length > 0 && <span className="ml-2 text-xs font-normal text-muted-foreground">{term.aliases.join(', ')}</span>}</h3>
       <p className="mt-1 font-medium">{term.short}</p>
-      {term.long && <p className="mt-1.5 text-muted-foreground"><Glossed text={term.long} skip={term.id} /></p>}
+      {term.long ? <p className="mt-1.5 text-muted-foreground"><Glossed text={term.long} skip={term.id} /><FlagButton text={term.long} /></p> : <FlagButton text={term.short} />}
       {term.diagram && <Diagram diagram={term.diagram} className="mt-3" />}
       {on && <GlossBack />}
     </div>
@@ -123,7 +124,7 @@ function Body(props: { explainer: Explainer; state: GuideState; indexVisible: bo
     <Section id="breve" n={1} title="In breve" wide>
       <div className="max-w-[920px] space-y-4">
         <h1 className="text-3xl leading-tight font-semibold tracking-tight">{ex.title}</h1>
-        <p className="rounded-xl bg-primary px-5 py-4 text-lg leading-snug font-medium text-primary-foreground [&_.gloss-term]:border-primary-foreground"><Glossed text={ex.one_liner} /></p>
+        <p className="rounded-xl bg-primary px-5 py-4 text-lg leading-snug font-medium text-primary-foreground [&_.gloss-term]:border-primary-foreground [&_button[title]]:text-primary-foreground/60"><Glossed text={ex.one_liner} /><FlagButton text={ex.one_liner} /></p>
         {summary && <div className="flex flex-wrap items-center gap-2.5"><StatePill view={state.initiative} /><span className="text-[15px]"><Inline text={summary.headline} /></span></div>}
       </div>
       <div className="grid items-start gap-3 sm:grid-cols-3">
@@ -151,9 +152,9 @@ function Body(props: { explainer: Explainer; state: GuideState; indexVisible: bo
         {ex.concepts.map((concept) => <article key={concept.id} aria-label={concept.title} className="flex flex-col gap-3 rounded-xl border bg-card p-5">
           <h3 className="text-xl font-semibold">{concept.title}</h3>
           <Prose text={concept.plain} sources={sources} ids={concept.src} />
-          {concept.analogy && <p className="rounded-lg bg-muted/60 px-3.5 py-2.5 text-[15px]"><b>Analogia. </b><Glossed text={concept.analogy} /></p>}
+          {concept.analogy && <p className="rounded-lg bg-muted/60 px-3.5 py-2.5 text-[15px]"><b>Analogia. </b><Glossed text={concept.analogy} /><FlagButton text={concept.analogy} /></p>}
           {concept.diagram && <Diagram diagram={concept.diagram} />}
-          {concept.say && <p className="text-[15px] text-muted-foreground">In una frase: <q className="italic">{concept.say}</q></p>}
+          {concept.say && <p className="text-[15px] text-muted-foreground">In una frase: <q className="italic">{concept.say}</q><FlagButton text={concept.say} /></p>}
         </article>)}
       </div>
     </Section>
@@ -171,7 +172,7 @@ function Body(props: { explainer: Explainer; state: GuideState; indexVisible: bo
             </div>
             <ul className="mt-3 space-y-2.5">{phase.items.map((item, index) => <li key={index} className="flex gap-2.5 text-[15px] leading-snug">
               <span data-status={item.status} className={cn('mt-0.5 h-fit shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold', itemTone[item.status][1])}>{itemTone[item.status][0]}</span>
-              <span className="min-w-0"><span className="font-medium">{item.title}</span>{item.note && <span className="block text-sm text-muted-foreground"><Glossed text={item.note} /></span>}<GuideSources ids={item.src} sources={sources} /></span>
+              <span className="min-w-0"><span className="font-medium">{item.title}</span>{item.note && <span className="block text-sm text-muted-foreground"><Glossed text={item.note} /></span>}<GuideSources ids={item.src} sources={sources} /><FlagButton text={item.note || item.title} /></span>
             </li>)}</ul>
           </article>;
         })}
@@ -185,14 +186,14 @@ function Body(props: { explainer: Explainer; state: GuideState; indexVisible: bo
           const days = item.since ? workDays(item.since, state.today) : null;
           return <article key={index} aria-label={item.title} className="rounded-xl border border-destructive/30 bg-destructive-soft p-4 text-[15px] leading-snug">
             <h3 className="font-semibold">{item.title}</h3>
-            <p className="mt-1.5"><Glossed text={item.plain} /><GuideSources ids={item.src} sources={sources} /></p>
+            <p className="mt-1.5"><Glossed text={item.plain} /><GuideSources ids={item.src} sources={sources} /><FlagButton text={item.plain} /></p>
             <p className="mt-2 text-sm text-muted-foreground">Da chi: <b className="text-foreground">{nameOf(item.who)}</b>{days !== null && <> · da {days} {days === 1 ? 'giorno lavorativo' : 'giorni lavorativi'}</>}</p>
           </article>;
         })}
       </div>}
       {!!ex.next_you.length && <div className="max-w-[920px] rounded-xl border bg-card p-4">
         <h3 className="mb-2 text-base font-semibold">I tuoi prossimi passi</h3>
-        <ol className="list-decimal space-y-2 pl-5 text-[15px] leading-snug">{visible.map((item) => <li key={guideItemKey(item.text)}><div className="flex items-start gap-2"><div className="min-w-0 flex-1"><b className="font-medium"><Glossed text={item.text} /></b><span className="block text-muted-foreground"><Glossed text={item.why} /><GuideSources ids={item.src} sources={sources} /></span></div><button type="button" aria-label="Nascondi questo passo" disabled={props.pending.includes(guideItemKey(item.text))} onClick={() => props.onStep(item.text, true)} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted"><X aria-hidden="true" className="size-4" /></button></div></li>)}</ol>
+        <ol className="list-decimal space-y-2 pl-5 text-[15px] leading-snug">{visible.map((item) => <li key={guideItemKey(item.text)}><div className="flex items-start gap-2"><div className="min-w-0 flex-1"><b className="font-medium"><Glossed text={item.text} /></b><span className="block text-muted-foreground"><Glossed text={item.why} /><GuideSources ids={item.src} sources={sources} /><FlagButton text={item.text} /></span></div><button type="button" aria-label="Nascondi questo passo" disabled={props.pending.includes(guideItemKey(item.text))} onClick={() => props.onStep(item.text, true)} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-muted"><X aria-hidden="true" className="size-4" /></button></div></li>)}</ol>
         {hidden.length > 0 && <div className="mt-3 text-sm"><button type="button" aria-expanded={showHidden} onClick={() => setShowHidden(!showHidden)} className="font-medium text-primary hover:underline">{showHidden ? 'Nascondi elenco' : `Mostra nascosti (${hidden.length})`}</button>
           {showHidden && <ul className="mt-2 space-y-2">{hidden.map((item) => <li key={guideItemKey(item.text)} className="flex items-start gap-2"><span className="min-w-0 flex-1">{item.text}</span><button type="button" disabled={props.pending.includes(guideItemKey(item.text))} onClick={() => props.onStep(item.text, false)} className="shrink-0 text-primary hover:underline">Ripristina</button></li>)}</ul>}</div>}
       </div>}
@@ -213,7 +214,7 @@ function Body(props: { explainer: Explainer; state: GuideState; indexVisible: bo
     </Section>
     <Section id="attenzione" n={10} title="Attenzione">
       {ex.warnings.map((warning, index) => <div key={index} role="note" className="rounded-xl border border-warning/40 bg-warning-soft px-4 py-3 text-[15px] leading-snug">
-        <b className="text-warning">{warning.title}</b><p className="mt-1"><Glossed text={warning.text} /><GuideSources ids={warning.src} sources={sources} /></p>
+        <b className="text-warning">{warning.title}</b><p className="mt-1"><Glossed text={warning.text} /><GuideSources ids={warning.src} sources={sources} /><FlagButton text={warning.text} /></p>
       </div>)}
       {!ex.warnings.length && <p className="text-muted-foreground">Niente da segnalare.</p>}
     </Section>
@@ -237,6 +238,22 @@ export function GuidePage(props: { id: string; initialState: GuideState; token: 
     try { localStorage.setItem('everflow.guide.index', current ? 'hidden' : 'shown'); } catch {}
     return !current;
   });
+  const flag = async (text: string, note: string, on: boolean) => {
+    const key = guideItemKey(text);
+    const toggle = (add: boolean) => setState((current) => ({ ...current, flagged: add ? [...new Set([...(current.flagged ?? []), key])] : (current.flagged ?? []).filter((item) => item !== key) }));
+    stepRevision.current++;
+    stepsPending.current++;
+    setError('');
+    toggle(on);
+    try {
+      const response = await fetch(`/api/guide/${encodeURIComponent(props.id)}/${on ? 'flag' : 'unflag'}`, { method: 'POST', credentials: 'same-origin',
+        headers: { 'content-type': 'application/json', 'x-everflow-token': props.token }, body: JSON.stringify(on ? { text, note } : { text }) });
+      if (!response.ok) { signedOut(response); throw new Error(`HTTP ${response.status}`); }
+    } catch (failure) {
+      toggle(!on);
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally { stepRevision.current++; stepsPending.current--; }
+  };
   const step = async (text: string, hide: boolean) => {
     const key = guideItemKey(text);
     stepRevision.current++;
@@ -348,14 +365,20 @@ export function GuidePage(props: { id: string; initialState: GuideState; token: 
             <p className="mt-1 text-sm text-muted-foreground">Viene scritta dalla nota del progetto e dalle note collegate. Questa pagina si aggiorna da sola appena è pronta.</p>
             <div className="mt-3">{!state.requested && !state.running && !asked && button}{busy && <span className="text-sm text-muted-foreground">In preparazione...</span>}</div>
           </div>
-        </section> : <GlossProvider terms={ex.glossary}>
+        </section> : <GlossProvider terms={ex.glossary}><GuideFlags.Provider value={{ flagged: state.flagged ?? [], onFlag: (text, note, on) => { void flag(text, note, on); } }}>
           <Body explainer={ex} state={state} indexVisible={indexVisible} pending={pending} onStep={(text, hide) => { void step(text, hide); }} />
           <footer className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 border-t pt-4 text-xs text-muted-foreground">
             <span>Generata {state.at ? formatTime(state.at) : ''}</span><span>Modello {ex.model}</span>
             <span>{ex.notes.length + 1} note lette</span>{ex.rejected > 0 && <span>{ex.rejected} elementi scartati per mancanza di fonti</span>}
+            {ex.checks && <span data-checks="">Controllo automatico: {ex.checks.fixed} {ex.checks.fixed === 1 ? 'correzione' : 'correzioni'}{ex.checks.dropped.length > 0 && <>, <Popover>
+              <PopoverTrigger asChild><button type="button" className="font-medium text-primary hover:underline">{ex.checks.dropped.length} {ex.checks.dropped.length === 1 ? 'elemento scartato' : 'elementi scartati'}</button></PopoverTrigger>
+              <PopoverContent align="start" collisionPadding={8} className="max-h-[min(60vh,420px)] w-[min(420px,calc(100vw-16px))] overflow-y-auto p-3 text-[13px] leading-snug">
+                <h3 className="mb-2 text-sm font-semibold">Scartati dal controllo</h3><ul className="list-disc space-y-1.5 pl-4">{ex.checks.dropped.map((item, index) => <li key={index}>{item}</li>)}</ul>
+              </PopoverContent></Popover></>}</span>}
+            {(state.flagged ?? []).length > 0 && <span>{state.flagged.length} {state.flagged.length === 1 ? 'testo segnalato' : 'testi segnalati'}</span>}
             <span className="sm:ml-auto">{button}</span>
           </footer>
-        </GlossProvider>}
+        </GuideFlags.Provider></GlossProvider>}
       </main>
     </div>
   </div>;

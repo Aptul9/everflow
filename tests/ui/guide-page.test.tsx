@@ -124,6 +124,27 @@ test('source popover shows each source once dated, cleaned of chat ids, staff id
   expect(folds[1]!.dataset.open).toBe('true');
   expect(within(card).queryByText(/AGREED/)).toBeNull();
 });
+test('any guide text can be flagged with a note and unflagged; the footer shows what the check fixed and dropped', async () => {
+  const ex = explainer();
+  ex.checks = { fixed: 3, dropped: ['Invented step: è in inglese, va scritto in italiano'] };
+  render(<GuidePage {...props(guide({ explainer: ex }))} />);
+  const step = screen.getByText('Chase Alice').closest('li')!;
+  await userEvent.click(within(step).getByRole('button', { name: 'Segnala come sbagliato' }));
+  await userEvent.type(screen.getByRole('textbox', { name: 'Cosa non va' }), 'data sbagliata');
+  await userEvent.click(screen.getByRole('button', { name: 'Segnala' }));
+  expect(fetcher).toHaveBeenCalledWith('/api/guide/acme/flag', expect.objectContaining({ method: 'POST', body: JSON.stringify({ text: 'Chase Alice', note: 'data sbagliata' }),
+    headers: expect.objectContaining({ 'x-everflow-token': ACTION }) }));
+  expect(document.body.textContent).toContain('1 testo segnalato');
+  await userEvent.click(within(step).getByRole('button', { name: 'Segnalato come sbagliato' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Togli la segnalazione' }));
+  expect(fetcher).toHaveBeenCalledWith('/api/guide/acme/unflag', expect.objectContaining({ body: JSON.stringify({ text: 'Chase Alice' }) }));
+  expect(within(step).getByRole('button', { name: 'Segnala come sbagliato' })).toBeTruthy();
+  const footer = document.querySelector<HTMLElement>('[data-checks]')!;
+  expect(footer.textContent).toContain('Controllo automatico: 3 correzioni');
+  await userEvent.click(within(footer).getByRole('button', { name: '1 elemento scartato' }));
+  expect(screen.getByRole('dialog').textContent).toContain('Invented step');
+});
+
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 const ACTION = 'a'.repeat(64);
@@ -174,7 +195,7 @@ function guide(fields: Partial<GuideState> = {}): GuideState {
   return {
     initiative: { id: 'acme', title: 'Acme access', client: 'acme', note: '01_Projects/acme.md', at: '2026-11-18T07:00:00.000000Z', error: null, error_at: null,
       summary: { state: 'waiting_them', headline: 'Alice silent on 4 questions', now: [], waits: [], next: [], done: [], rejected: 0, entries: 5, model: 'm' } },
-    today: '2026-11-18', at: '2026-11-18T07:00:00.000000Z', explainer: explainer(), error: null, error_at: null, requested: false, running: false, providers: true, dismissed: [], ...fields,
+    today: '2026-11-18', at: '2026-11-18T07:00:00.000000Z', explainer: explainer(), error: null, error_at: null, requested: false, running: false, providers: true, dismissed: [], flagged: [], ...fields,
   };
 }
 
