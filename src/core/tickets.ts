@@ -845,6 +845,34 @@ export function makeTicket(db: DatabaseSync, batch: number, at?: string, actor: 
   });
 }
 
+export const newTicketSchema = z.strictObject({
+  title: z.string().trim().min(1).max(200), client: z.string().min(1),
+  summary: z.string().trim().max(4_000).default(''), ask: z.string().trim().max(2_000).default(''),
+  proposal: z.string().trim().max(4_000).default(''),
+  kb_notes: z.array(z.string().refine(isNotePath, 'Unsafe relative Markdown note path')).max(20).default([]),
+  key: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/, 'Key is 1-80 letters, digits, dot, dash or underscore').optional(),
+});
+export type NewTicket = z.input<typeof newTicketSchema>;
+
+// A ticket from Antonio's own plan rather than from a message: proposed, no conversation, no chat until approved.
+// key makes a scripted run repeatable: the same key returns the ticket it made the first time.
+export function createTicket(db: DatabaseSync, cfg: Pick<Config, 'clients'>, input: unknown, at?: string, actor: 'you' | 'chat' = 'you'): number {
+  const parsed = newTicketSchema.safeParse(input);
+  if (!parsed.success) throw new TicketError('ticket.invalid-input', parsed.error.message);
+  const fields = parsed.data;
+  if (!Object.hasOwn(cfg.clients, fields.client)) throw new TicketError('ticket.invalid-input', `Unknown configured client ${fields.client}`);
+  return transaction(db, () => {
+    const now = utc(at);
+    const key = fields.key ? `create:${fields.key}` : null;
+    const made = key ? db.prepare('SELECT ticket FROM timeline WHERE event_key=?').get(key) : undefined;
+    if (made) return Number(made.ticket);
+    const id = Number(db.prepare(`INSERT INTO ticket(title,client,summary,ask,proposal,kb_notes,created_at,last_activity_at)
+      VALUES (?,?,?,?,?,?,?,?)`).run(fields.title, fields.client, fields.summary, fields.ask, fields.proposal, JSON.stringify(fields.kb_notes), now, now).lastInsertRowid);
+    history(db, id, now, 'comment', actor, 'Created by hand', key ?? `create:ticket:${id}`);
+    return id;
+  });
+}
+
 // Reason of the dismissals made when Antonio's own reply settled a proposed ticket (no longer automatic); kept out of triage feedback
 export const ANSWERED_MYSELF = 'Answered myself in the source chat';
 

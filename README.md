@@ -287,6 +287,16 @@ Inspect the exact job error, fix its config, source reader or parser cause, then
 
 Quarantine replay reuses the saved line after the underlying cause is fixed. It does not repair invalid bytes. Earlier unreplayed rows must be resolved first. Truncated input cannot be replayed. `--all` commits replay, messages, cursors and receipts together or rolls back the whole selection. Do not edit away failures or skip the barrier to advance a source.
 
+## Tickets by hand
+
+Work that comes from Antonio's own plan rather than from a message gets a ticket from the CLI. `--client` must be a configured `[clients.<name>]`; `--title` is required, `--summary`, `--ask` and `--proposal` are optional and `--kb-note` repeats, each a relative Markdown path in the vault. The ticket is `proposed`, has no conversation and opens no chat until it is approved on the page, as any other proposed ticket. `--key` makes a scripted run repeatable: the same key returns the ticket it made the first time. Set `$client` to a configured client:
+
+```powershell
+& node $cli --artifact $receipt --config $config ticket create --client $client --title 'Cut one AKS node' --summary 'Saves 350 USD a month' --kb-note '01_Projects/acme/plan.md' --key 'acme-cost-1.4'
+```
+
+The command prints `{"ticket": <id>}`. The timeline of the ticket starts with `Created by hand`. A ticket that names the initiative's note in its KB notes is offered first to the Overview summary and guide of that initiative.
+
 ## Source health
 
 While the selected synthetic daemon is running, set `$port` to its returned ready/status port. The CLI status command reports daemon identity and metadata. Full source/account/provider health is exposed by the local page and `GET /api/state`:
