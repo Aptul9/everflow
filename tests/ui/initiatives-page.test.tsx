@@ -49,7 +49,7 @@ test('cards show each initiative state; the detail draws who owes what, the boar
   expect(within(detail).getByRole('region', { name: 'You (1)' }).textContent).toContain('Send v2.13 to Bob');
   expect(detail.textContent).toContain('1 items dropped for citing no source');
   await userEvent.click(within(within(detail).getByRole('list')).getByRole('button', { name: 'Fonti (1)' }));
-  expect(screen.getByRole('dialog').textContent).toContain('18/11/2026Pat: standard pending');
+  expect(screen.getByRole('dialog').textContent).toContain('18/11/2026 · Registro del progettoPat: standard pending');
   expect(screen.getByRole('dialog').textContent).not.toContain('2026-11-18 09:48');
   await userEvent.click(within(within(detail).getByRole('region', { name: 'AI (1)' })).getByRole('button', { name: 'Draft' }));
   expect(detail.textContent).toContain('Hi Alice, any news on 1-4?');
@@ -80,7 +80,7 @@ test('every card links to its guide, saying when it is still being prepared', ()
   expect(link.map((item) => item.getAttribute('href'))).toContain('/overview/example-platform');
 });
 
-test('clicking a person fades the others and lists what they owe; Mostra tutto resets', async () => {
+test('clicking a person fades the others and lists what they owe; Torna alla mappa resets', async () => {
   render(<InitiativesPage {...props()} />);
   const detail = screen.getByRole('region', { name: 'acme Access' });
   await userEvent.click(detail.querySelector('[data-person="Alice"]')!);
@@ -88,7 +88,7 @@ test('clicking a person fades the others and lists what they owe; Mostra tutto r
   expect(detail.querySelector('[data-person="Alice"]')!.getAttribute('data-dim')).toBeNull();
   expect(detail.querySelector('[data-focus-waits]')!.textContent).toContain('questions 1-4');
   expect(detail.querySelector('[data-focus-waits]')!.textContent).toContain('6 working days');
-  await userEvent.click(within(detail).getByRole('button', { name: 'Mostra tutto' }));
+  await userEvent.click(within(detail).getByRole('button', { name: 'Torna alla mappa' }));
   expect(detail.querySelector('[data-focus-waits]')).toBeNull();
   expect(detail.querySelectorAll('[data-dim="true"]')).toHaveLength(0);
 });
@@ -120,7 +120,7 @@ test('a board card focuses only its uniquely matching node with the same source 
   await userEvent.click(within(detail).getByRole('button', { name: 'Show what Alice owes' }));
   expect(detail.querySelector('[data-graph]')?.getAttribute('data-focus')).toBe('questions');
   expect(detail.querySelector('[data-edge="questions>goal"]')?.getAttribute('data-live')).toBe('true');
-  await userEvent.click(within(detail).getByRole('button', { name: 'Mostra tutto (Esc)' }));
+  await userEvent.click(within(detail).getByRole('button', { name: 'Togli la selezione (Esc)' }));
   await userEvent.click(within(within(detail).getByRole('region', { name: 'AI (1)' })).getByRole('button', { name: 'Mostra dipendenze della scheda' }));
   expect(detail.querySelector('[data-focus-line]')?.textContent).toContain('Nessuna dipendenza documentata');
   expect(detail.querySelector('[data-graph]')).toBeNull();

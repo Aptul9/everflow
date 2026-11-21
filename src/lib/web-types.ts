@@ -223,3 +223,23 @@ export interface GuideState {
 export function guideItemKey(text: string): string {
   return text.normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 300);
 }
+
+// Dates as Italians write them: 2026-10-27 -> 27/10/2026, 10-27 -> 27/10. Code spans are left alone.
+export function italianDates(text: string): string {
+  return text.split(/(`[^`\n]+`)/).map((part, index) => index % 2 ? part : part
+    .replace(/(?<![\d\-/.])(\d{4})-(\d{2})-(\d{2})(?![\d\-/])/g, '$3/$2/$1')
+    .replace(/(?<![\p{L}\d\-/.:])(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?![\d\-/])/gu, '$2/$1')).join('');
+}
+
+// A cited source as a person reads it: no leading log date (shown apart), no chat thread ids, staff ids or local paths
+export function cleanSourceText(text: string): string {
+  const out = text
+    .replace(/^\d{4}-\d{2}-\d{2}[^\n]{0,30}?\s-\s/, '')
+    .replace(/^[\w./-]+\.md\s+·\s+/, '')
+    .replace(/(?:\b(?:meeting\s+)?chat\s+)?[(`]?19:[^\s@`]+@thread\.[a-z0-9]+[)`]?[,;:]?\s*/gi, '')
+    .replace(/[,;]?\s*\b(?:transcript|file)?\s*`(?:[A-Za-z]:[\\/]|~\/|\/home\/|Downloads\/)[^`]*`/gi, '')
+    .replace(/\s+[A-Z]{2}\d{7,9}\b/g, '')
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '')
+    .replace(/\(\s*\)/g, '').replace(/[ \t]{2,}/g, ' ').trim();
+  return italianDates(out.charAt(0).toUpperCase() + out.slice(1));
+}
