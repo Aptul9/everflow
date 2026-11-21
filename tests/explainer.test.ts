@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { openDb } from '../src/core/db.ts';
 import { explainerDue, explainerInputs, generateExplainer, parseA, parseB, refreshExplainer } from '../src/core/explainer.ts';
-import { readGuide, requestExplainer, setDismissed, writeSetting } from '../src/core/initiative-state.ts';
+import { readGuide, requestExplainer, setDismissed, setFlagged, writeSetting } from '../src/core/initiative-state.ts';
 import type { ExplainerSource } from '../src/lib/web-types.ts';
 import { kbFixture, provider, scriptedPeer } from './kb-support.ts';
 
@@ -143,6 +143,32 @@ test('the status call says whether the client is watched and which next steps An
   expect(readGuide(db, cfg, 'demo')!.dismissed).toEqual([]);
 });
 
+test('the check sends problems back once, drops what is still wrong, passes the flags and keeps the previous guide when the main text stays English', async () => {
+  const { cfg } = fixture();
+  using db = openDb(cfg.db.path);
+  setFlagged(db, 'demo', 'Old  wrong text', 'date al contrario', true);
+  let oneLiner = A.one_liner;
+  const concepts = [...A.concepts, { id: 'en', title: 'En', plain: 'This concept is written in English for the reader.', analogy: '', say: '', diagram: null, src: ['L1'] }];
+  const next_you = [...B.next_you, { text: 'Inviare il report settimanale alla propria azienda.', why: '', src: ['L1'] }];
+  await using peer = await scriptedPeer((body) => sse(JSON.stringify(isA(body.system) ? { ...A, one_liner: oneLiner, concepts } : { ...B, next_you })));
+  const options = { providers: { first: provider(peer.baseURL) } };
+  await refreshExplainer(cfg, db, 'demo', options);
+  expect(peer.requests).toHaveLength(4);
+  expect(peer.requests[1]!.messages.at(-1)!.content).toContain('concepts[2].plain: è in inglese');
+  expect(peer.requests[3]!.messages.at(-1)!.content).toContain("attività amministrativa verso l'azienda di Antonio");
+  for (const index of [0, 2]) expect(JSON.parse(peer.requests[index]!.messages[0]!.content as string).flagged_by_antonio).toEqual([{ text: 'Old  wrong text', note: 'date al contrario' }]);
+  const guide = readGuide(db, cfg, 'demo')!;
+  expect(guide.error).toBeNull();
+  expect(guide.flagged).toEqual(['old wrong text']);
+  expect(guide.explainer!.concepts.map((concept) => concept.id)).toEqual(['rbac', 'odd']);
+  expect(guide.explainer!.next_you.map((item) => item.text)).toEqual(['Write']);
+  expect(guide.explainer!.checks!.dropped).toEqual(['En: è in inglese, va scritto in italiano', "Inviare il report settimanale alla propria azienda.: è un'attività amministrativa verso l'azienda di Antonio, non un passo del progetto"]);
+  oneLiner = 'We map the privileged access and this is the plan for the client.';
+  await refreshExplainer(cfg, db, 'demo', options);
+  const after = readGuide(db, cfg, 'demo')!;
+  expect(after.error).toMatch(/^Explanation: still wrong after the correction: one_liner: è in inglese/);
+  expect(after.explainer!.one_liner).toBe(A.one_liner);
+});
 test('status: uncited items, bad endpoints and unknown references are cleaned up', () => {
   const { value, rejected } = parseB(JSON.stringify(B), offered('L1', 'L2'), new Set(['alice']));
   expect(rejected).toBe(6);

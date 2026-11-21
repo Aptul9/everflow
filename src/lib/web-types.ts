@@ -209,6 +209,8 @@ export interface Explainer {
   sources: Record<string, ExplainerSource>;
   // notes read besides the main note, items dropped for citing nothing valid, model that wrote it
   notes: string[]; rejected: number; model: string;
+  // what the check after generation fixed by itself (dates, ids, paths) and the items it dropped; absent on older guides
+  checks?: { fixed: number; dropped: string[] };
 }
 // What the guide page gets: the initiative (with its summary), the stored guide and its run state
 export interface GuideState {
@@ -217,6 +219,8 @@ export interface GuideState {
   requested: boolean; running: boolean; providers: boolean;
   // next_you items Antonio hid, as guideItemKey of their text
   dismissed: string[];
+  // guide texts Antonio flagged as wrong, as guideItemKey of their text
+  flagged: string[];
 }
 
 // Stable key of a guide item text, so a hidden step stays hidden across reloads and changes of spacing or case
@@ -231,15 +235,20 @@ export function italianDates(text: string): string {
     .replace(/(?<![\p{L}\d\-/.:])(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?![\d\-/])/gu, '$2/$1')).join('');
 }
 
-// A cited source as a person reads it: no leading log date (shown apart), no chat thread ids, staff ids or local paths
-export function cleanSourceText(text: string): string {
-  const out = text
-    .replace(/^\d{4}-\d{2}-\d{2}[^\n]{0,30}?\s-\s/, '')
-    .replace(/^[\w./-]+\.md\s+·\s+/, '')
+// Text without what only a machine reads: Teams chat and thread ids, staff ids, local paths, note file names, uuids
+export function stripNoise(text: string): string {
+  return text
     .replace(/(?:\b(?:meeting\s+)?chat\s+)?[(`]?19:[^\s@`]+@thread\.[a-z0-9]+[)`]?[,;:]?\s*/gi, '')
     .replace(/[,;]?\s*\b(?:transcript|file)?\s*`(?:[A-Za-z]:[\\/]|~\/|\/home\/|Downloads\/)[^`]*`/gi, '')
-    .replace(/\s+[A-Z]{2}\d{7,9}\b/g, '')
+    .replace(/\s*(?<![\w-])[A-Z]{2}\d{7,9}\b/g, '')
     .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '')
-    .replace(/\(\s*\)/g, '').replace(/[ \t]{2,}/g, ' ').trim();
+    .replace(/(?<![\w`])(?:[A-Za-z]:\\|~\/|\/home\/)[^\s`,;)]+/g, '')
+    .replace(/(?<![\w/`-])[\w-]+\.md\b/g, '')
+    .replace(/\(\s*\)/g, '').replace(/\s+([,.;:])/g, '$1').replace(/[ \t]{2,}/g, ' ').trim();
+}
+
+// A cited source as a person reads it: no leading log date (shown apart) and none of the noise above
+export function cleanSourceText(text: string): string {
+  const out = stripNoise(text.replace(/^\d{4}-\d{2}-\d{2}[^\n]{0,30}?\s-\s/, '').replace(/^[\w./-]+\.md\s+·\s+/, ''));
   return italianDates(out.charAt(0).toUpperCase() + out.slice(1));
 }
