@@ -4,6 +4,7 @@ import * as jobs from '../src/core/jobs.ts';
 import * as chat from '../src/core/chat.ts';
 import { close, merge } from '../src/core/tickets.ts';
 import { connect } from '../src/core/opencode.ts';
+import { saveSetting, storeModelOptions } from '../src/core/settings.ts';
 import { applySessionEvent } from '../src/core/retitle.ts';
 import { AT, addBatch, chatFixture, claimed, proposed, reopenByTriage, row } from './chat-support.ts';
 import { remoteSession, scriptedPeer, PEER_AT } from './opencode-support.ts';
@@ -313,6 +314,59 @@ test('activity in the chat without a new input keeps the recovery and its rate l
   vi.setSystemTime(new Date('2026-11-06T01:00:00Z'));
   await chat.forward(f.cfg, f.db, claimed(f.db, f.cfg));
   expect(f.peer.calls.filter((call) => call.url.pathname.endsWith('/prompt')).map((call) => call.body.id)).toContain(f.recovery.prompt_id);
+});
+
+const MAX_LIMIT = { type: 'provider.rate-limit', message: 'rate_limit_error: Claude Max rate limit reached. Wait a moment and try again.', status: 200,
+  response: { body: '{"type":"error","error":{"type":"rate_limit_error","message":"Claude Max rate limit reached. Wait a moment and try again.","retry_after":2744}}' } };
+
+async function pinnedChat(model: string, effort: string | null, offered: string[]) {
+  const peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  cfg.opencode.model = 'pool/claude-opus-5-5';
+  const db = openDb(path);
+  const ticket = proposed(db);
+  saveSetting(db, 'chat.model', model);
+  if (effort) saveSetting(db, 'chat.effort', effort);
+  storeModelOptions(db, { chat: offered.map((id) => ({ id, name: id, efforts: [] })), accounts: {}, at: AT, error: null });
+  chat.approve(cfg, db, ticket, '');
+  await chat.startChat(cfg, db, claimed(db, cfg));
+  const first = db.prepare('SELECT * FROM turn').get()!;
+  return { peer, cfg, db, first, session: String(first.session_id), [Symbol.asyncDispose]: async () => { db.close(); await peer[Symbol.asyncDispose](); } };
+}
+
+test('chat pinned to one account moves to the pool on its rate limit and its recovery goes out at once', async () => {
+  await using f = await pinnedChat('first/claude-sonnet-5-5', 'high', ['pool/claude-opus-5-5', 'pool/claude-sonnet-5-5', 'first/claude-sonnet-5-5']);
+  expect(f.peer.sessions.get(f.session)!.model).toEqual({ providerID: 'first', id: 'claude-sonnet-5-5', variant: 'high' });
+  f.peer.finish(f.session, String(f.first.prompt_id), '', 'failed', MAX_LIMIT);
+  await chat.collect(f.cfg, f.db, claimed(f.db, f.cfg));
+  expect(f.peer.sessions.get(f.session)!.model).toEqual({ providerID: 'pool', id: 'claude-sonnet-5-5', variant: 'high' });
+  const recovery = f.db.prepare("SELECT * FROM turn WHERE kind='recovery'").get()!;
+  expect(f.db.prepare("SELECT * FROM job WHERE state='queued' AND kind='forward'").get()).toMatchObject({ turn_id: recovery.id, next_at: AT });
+  expect(f.db.prepare("SELECT body FROM timeline WHERE kind='failure'").get()!.body).toContain('chat moved to pool/claude-sonnet-5-5');
+  await chat.forward(f.cfg, f.db, claimed(f.db, f.cfg));
+  expect(f.peer.calls.filter((call) => call.url.pathname.endsWith('/prompt')).map((call) => call.body.id)).toEqual([f.first.prompt_id, recovery.prompt_id]);
+});
+
+test('pool without the pinned model takes the config chat model, without the old effort', async () => {
+  await using f = await pinnedChat('first/claude-fable-5-2', 'max', ['pool/claude-opus-5-5', 'first/claude-fable-5-2']);
+  f.peer.finish(f.session, String(f.first.prompt_id), '', 'failed', MAX_LIMIT);
+  await chat.collect(f.cfg, f.db, claimed(f.db, f.cfg));
+  expect(f.peer.sessions.get(f.session)!.model).toEqual({ providerID: 'pool', id: 'claude-opus-5-5' });
+});
+
+test('chat already on the pool keeps the rate limit backoff: every account is spent', async () => {
+  await using f = await pinnedChat('pool/claude-opus-5-5', null, ['pool/claude-opus-5-5']);
+  f.peer.finish(f.session, String(f.first.prompt_id), '', 'failed', MAX_LIMIT);
+  await chat.collect(f.cfg, f.db, claimed(f.db, f.cfg));
+  expect(f.peer.calls.some((call) => call.url.pathname.endsWith('/model'))).toBe(false);
+  expect(f.db.prepare("SELECT next_at FROM job WHERE state='queued' AND kind='forward'").get()!.next_at).toBe('2026-11-06T00:45:44.000000Z');
+});
+
+test('failure that is not a rate limit leaves a pinned chat on its account', async () => {
+  await using f = await pinnedChat('first/claude-sonnet-5-5', null, ['pool/claude-sonnet-5-5']);
+  f.peer.finish(f.session, String(f.first.prompt_id), '', 'failed', { type: 'provider.transport', message: 'socket hang up' });
+  await chat.collect(f.cfg, f.db, claimed(f.db, f.cfg));
+  expect(f.peer.sessions.get(f.session)!.model).toEqual({ providerID: 'first', id: 'claude-sonnet-5-5' });
 });
 
 test('two nondependency recoveries maximum survives intervening dependency failure without budget reset', async () => {

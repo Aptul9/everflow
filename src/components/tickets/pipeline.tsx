@@ -113,7 +113,9 @@ function ModelPicker(props: { scope: 'triage' | 'chat'; choice: Choice; options:
         <span className="truncate" title={choice.model}>{current.name}</span>
       </Picker>
       {provider && <p className="-mt-0.5 px-0.5 text-[11px] leading-snug text-muted-foreground">
-        Account: <span className="text-foreground/80">{name(provider)}</span></p>}
+        Account: <span className="text-foreground/80">{name(provider)}</span>
+        {scope === 'chat' && split(choice.default_model).provider && (provider === split(choice.default_model).provider
+          ? ' · next account by priority when one runs out' : ` · moves to ${name(split(choice.default_model).provider!)} on a limit`)}</p>}
       <Picker label={`${what} effort`} value={choice.effort ?? ''} disabled={props.disabled}
         items={[{ value: '', label: 'Default effort', detail: "model's own" }, ...efforts.map((effort) => ({ value: effort, label: effort }))]}
         onPick={(effort) => { void save(`${scope}.effort`, effort).catch(() => {}); }}>

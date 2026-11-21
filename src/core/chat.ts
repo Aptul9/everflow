@@ -9,7 +9,7 @@ import { backoff, classify, complete, defer, enqueue, fail, hasPendingInput, hea
 import type { Job } from './jobs.ts';
 import { connect } from './opencode.ts';
 import type { Peer, TurnDetail } from './opencode.ts';
-import { modelChoice } from './settings.ts';
+import { modelChoice, readModelOptions } from './settings.ts';
 import { addRefs, batchMessages, boardColumn, extractRefs, ownContext, route, stage, stageTitle, TICKET_MESSAGES, TicketError, ticketMessages } from './tickets.ts';
 import type { Message, Ticket } from './tickets.ts';
 import { utc } from './time.ts';
@@ -531,7 +531,29 @@ async function finishReport(cfg: Config, db: DatabaseSync, job: Job, pending: Pe
   }
 }
 
-function recovery(cfg: Config, db: DatabaseSync, job: Job, turn: Turn, result: Completion, options: ChatOptions): void {
+function rateLimited(error: unknown): boolean {
+  let text: string;
+  try { text = JSON.stringify(error) ?? ''; } catch { return false; }
+  return /rate_limit_error|"provider\.rate-limit"|"status":429\b/.test(text);
+}
+
+// The config chat model names the pool provider (Meridian priority routing across every account). A chat pinned to one account
+// that hit that account's limit moves to the pool: same model when the pool offers it, else the config model. Returns the model
+// it moved to, or null when the chat already runs on the pool (every account spent) or has no known model.
+async function failover(cfg: Config, db: DatabaseSync, turn: Turn, error: unknown, peer: Peer, signal?: AbortSignal): Promise<string | null> {
+  const at = cfg.opencode.model.indexOf('/');
+  if (at <= 0 || !rateLimited(error)) return null;
+  const pool = cfg.opencode.model.slice(0, at);
+  const current = (await peer.get(turn.session_id, signal)).model;
+  if (!current || current.providerID === pool) return null;
+  const same = `${pool}/${current.id}`;
+  const target = readModelOptions(db).chat.some((option) => option.id === same) ? same : cfg.opencode.model;
+  const id = target.slice(at + 1);
+  await peer.switchModel(turn.session_id, { providerID: pool, id, ...(current.variant && id === current.id ? { variant: current.variant } : {}) }, signal);
+  return target;
+}
+
+function recovery(cfg: Config, db: DatabaseSync, job: Job, turn: Turn, result: Completion, options: ChatOptions, movedTo: string | null = null): void {
   const now = clock(options);
   const error = result.error ?? { type: `session.${result.outcome}`, message: `Input ${turn.prompt_id} ${result.outcome}` };
   const failure = classify(error);
@@ -570,10 +592,12 @@ ${quoteMessages(db, own.messages)}`;
       batch_ids: turn.batch_ids, pending_batch_ids: ids(current.payload.pending_batch_ids) }, turn.ticket);
     const health = db.prepare("SELECT detail FROM health WHERE dependency='opencode:execution'").get();
     const failures = Number(health ? JSON.parse(String(health.detail)).consecutive_errors ?? 0 : 0) + 1;
-    db.prepare('UPDATE job SET turn_id=?,reserved_at=?,next_at=? WHERE id=?')
-      .run(id, turn.reserved_at ?? now(), after(now(), backoff(dependent ? failures : 1, cfg.jobs, failure.retry_after, Math.random(), now())), queued);
+    // A chat just moved off a spent account goes on at once on the pool instead of waiting out that account's reset
+    const due = movedTo ? now() : after(now(), backoff(dependent ? failures : 1, cfg.jobs, failure.retry_after, Math.random(), now()));
+    db.prepare('UPDATE job SET turn_id=?,reserved_at=?,next_at=? WHERE id=?').run(id, turn.reserved_at ?? now(), due, queued);
     db.prepare('UPDATE job SET payload=? WHERE id=?').run(JSON.stringify({ ...current.payload, failed_result: result, recovery_turn: id }), job.id);
-    timeline(db, turn.ticket, now(), 'failure', `${failure.message}; recovery input ${id} queued`, `recovery:turn:${turn.id}`);
+    timeline(db, turn.ticket, now(), 'failure', movedTo ? `${failure.message}; chat moved to ${movedTo}, recovery input ${id} queued`
+      : `${failure.message}; recovery input ${id} queued`, `recovery:turn:${turn.id}`);
     if (dependent) healthError(db, cfg, 'opencode:execution', error, now());
   }, now);
 }
@@ -612,7 +636,12 @@ export async function collect(cfg: Config, db: DatabaseSync, job: Job, options: 
       }, now);
       return;
     }
-    if (result.outcome !== 'succeeded') { recovery(cfg, db, job, turn, result, options); return; }
+    if (result.outcome !== 'succeeded') {
+      // A failed switch leaves the chat where it was: it then waits out its account's reset as before
+      const movedTo = await failover(cfg, db, turn, result.error, peer, options.signal).catch(() => null);
+      recovery(cfg, db, job, turn, result, options, movedTo);
+      return;
+    }
     let status: PendingReport['status'];
     try { status = parseStatus(result.text); completionAt(result); }
     catch (error) {
