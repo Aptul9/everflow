@@ -1,8 +1,9 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { openDb } from '../src/core/db.ts';
-import { localTime, markSeen, noteContext, parseSummary, readInitiatives, refreshDue, refreshInitiatives, requestRefresh, workingDays } from '../src/core/initiatives.ts';
+import { storedTickets } from '../src/core/initiative-state.ts';
+import { localTime, markSeen, noteContext, noteTickets, parseSummary, readInitiatives, refreshDue, refreshInitiatives, requestRefresh, syncTickets, workingDays } from '../src/core/initiatives.ts';
 import type { InitiativeSource } from '../src/lib/web-types.ts';
 import { kbFixture, provider, scriptedPeer } from './kb-support.ts';
 
@@ -119,6 +120,69 @@ test('tickets naming the initiative note are offered first, ahead of the client\
   const tickets = JSON.parse(peer.requests[0]!.messages[0]!.content as string).tickets as { id: string; title: string }[];
   expect(tickets).toHaveLength(30);
   expect(tickets[0]).toMatchObject({ id: 'T1', title: 'Plan item' });
+});
+
+const TICKETS = `
+## Tickets
+- [ ] 0.1 Delete docs app (429 USD/m) | you: Mirko | since 2026-11-16 | ask: is it Maruca's documentation?
+- [ ] 0.4 Serverless dbs to DTU | you
+- [ ] 2.1 AU without SFTP | them: Andrè | since 2026-11-11 | ask: can api-au go?
+- [ ] X.3 Price the 2027 expiry | ai
+- [ ] R.7 Hybrid Benefit | them | ask: licence count
+- [x] 0.2 TS decommission | done 2026-11-17
+- [x] 0.0 Old cleanup | done 2026-11-02
+- not a ticket line
+`;
+
+test('note tickets: owner, person, since, ask and done date per line, other lines ignored', () => {
+  const tickets = noteTickets(NOTE + TICKETS);
+  expect(tickets.map((ticket) => [ticket.id, ticket.owner, ticket.who, ticket.since, ticket.done, ticket.done_at])).toEqual([
+    ['0.1', 'you', 'Mirko', '2026-11-16', false, null], ['0.4', 'you', null, null, false, null], ['2.1', 'them', 'Andrè', '2026-11-11', false, null],
+    ['X.3', 'ai', null, null, false, null], ['R.7', 'them', 'them', null, false, null], ['0.2', 'you', null, null, true, '2026-11-17'],
+    ['0.0', 'you', null, null, true, '2026-11-02']]);
+  expect(tickets[0]).toMatchObject({ title: 'Delete docs app (429 USD/m)', ask: "is it Maruca's documentation?" });
+  expect(noteTickets(NOTE)).toEqual([]);
+});
+
+test('note tickets replace the summary cards: map and Them for what is owed, AI and You for the rest, Done for the last 7 days', async () => {
+  const { cfg } = fixture();
+  writeFileSync(join(cfg.vault.path, '01_Projects/demo.md'), NOTE + TICKETS);
+  using db = openDb(cfg.db.path);
+  const good = { state: 'moving', headline: 'Plan running', now: [{ text: 'AU waits on Andrè', src: ['K2.1'] }],
+    waits: [{ who: 'Geoff', owes: 'them', what: 'Vault Qs 1-3', src: ['L2'] }], next: [{ owner: 'you', text: 'Model step', src: ['L1'] }], done: [] };
+  await using peer = await scriptedPeer(() => ({ body: { content: [{ type: 'text', text: JSON.stringify(good) }] } }));
+  syncTickets(cfg, db);
+  requestRefresh(db);
+  await refreshInitiatives(cfg, db, { providers: { first: provider(peer.baseURL) } });
+  const data = JSON.parse(peer.requests[0]!.messages[0]!.content as string);
+  expect(data.plan_tickets.map((ticket: { id: string }) => ticket.id)).toEqual(['K0.1', 'K0.4', 'K2.1', 'KX.3', 'KR.7', 'K0.2', 'K0.0']);
+  const summary = readInitiatives(db, cfg).initiatives[0]!.summary!;
+  expect(summary.now.map((line) => line.text)).toEqual(['AU waits on Andrè']);
+  expect(summary.waits.map((wait) => [wait.who, wait.owes, wait.text, wait.days])).toEqual([
+    ['Mirko', 'you', "0.1 Delete docs app (429 USD/m): is it Maruca's documentation?", 2],
+    ['Andrè', 'them', '2.1 AU without SFTP: can api-au go?', 5],
+    ['them', 'them', 'R.7 Hybrid Benefit: licence count', 0]]);
+  expect(summary.next.map((next) => [next.owner, next.text])).toEqual([
+    ['you', "0.1 Delete docs app (429 USD/m). Mirko: is it Maruca's documentation?"], ['you', '0.4 Serverless dbs to DTU'], ['ai', 'X.3 Price the 2027 expiry']]);
+  expect(summary.done.map((line) => line.text)).toEqual(['0.2 TS decommission']);
+  expect(summary.waits[0]!.sources).toEqual([{ id: 'K0.1', date: '2026-11-16', text: expect.stringContaining('- [ ] 0.1 Delete docs app') }]);
+});
+
+test('note tickets are read again only when the note changes', () => {
+  const { cfg } = fixture();
+  using db = openDb(cfg.db.path);
+  const path = join(cfg.vault.path, '01_Projects/demo.md');
+  writeFileSync(path, NOTE + TICKETS);
+  utimesSync(path, new Date('2026-11-18T08:00:00Z'), new Date('2026-11-18T08:00:00Z'));
+  syncTickets(cfg, db);
+  expect(storedTickets(db, 'demo').tickets).toHaveLength(7);
+  writeFileSync(path, NOTE + '\n## Tickets\n- [ ] 9.9 Only one | you\n');
+  utimesSync(path, new Date('2026-11-18T08:00:00Z'), new Date('2026-11-18T08:00:00Z'));
+  syncTickets(cfg, db);
+  expect(storedTickets(db, 'demo').tickets).toHaveLength(7);
+  utimesSync(path, new Date('2026-11-18T08:05:00Z'), new Date('2026-11-18T08:05:00Z'));
+  syncTickets(cfg, db);
+  expect(storedTickets(db, 'demo').tickets.map((ticket) => ticket.id)).toEqual(['9.9']);
 });
 
 test('a failed refresh keeps the last summary, shows the error and tries again after half an hour', async () => {

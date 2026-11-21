@@ -17,7 +17,7 @@ import { claim, complete, defer, enqueue, fail, hasPendingInput, healthError, he
 import type { Job } from './jobs.ts';
 import { handleTriage } from './kb-agent.ts';
 import { explainerDue, refreshExplainer } from './explainer.ts';
-import { refreshDue, refreshInitiatives } from './initiatives.ts';
+import { refreshDue, refreshInitiatives, syncTickets } from './initiatives.ts';
 import { ACCOUNT_CHECK_MS, applyAccounts, nextAccountCheck, readAccounts } from './meridian.ts';
 import { startRetitler, startSessionEvents } from './retitle.ts';
 import { connect } from './opencode.ts';
@@ -444,7 +444,7 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
     let stage = 'runtime.schedule';
     try {
       stage = 'runtime.models'; refreshModels(); checkAccounts();
-      stage = 'runtime.initiatives'; refreshOverview(); refreshGuide();
+      stage = 'runtime.initiatives'; syncTickets(cfg, db); refreshOverview(); refreshGuide();
       stage = 'runtime.schedule';
       schedule(db, cfg); stage = 'runtime.maintenance'; scheduleMaintenance(db, cfg);
       for (const id of reconcile) if (['done', 'cancelled', 'parked'].includes(String(db.prepare('SELECT state FROM job WHERE id=?').get(id)?.state))) reconcile.delete(id);
