@@ -2,7 +2,7 @@
 
 import { ArrowRight, BookOpen, LayoutGrid, LogOut, RefreshCw, TriangleAlert } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { cleanSourceText, italianDates } from '../../lib/web-types.ts';
+import { cleanSourceText, italianDates, OVERVIEW_COOKIE } from '../../lib/web-types.ts';
 import type { Explainer, GuideState, Group, InitiativesState, InitiativeStateName, InitiativeView, InitiativeWait, OverviewState, TicketCard as CardData } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert.tsx';
@@ -211,11 +211,17 @@ function signedOut(response: Response): boolean {
   return true;
 }
 
-export function InitiativesPage(props: { initialState: InitiativesState; initialBoard: OverviewState; initialEtag: string; token: string; initialNow?: number; signOut?: boolean }) {
+// initialSelected: the initiative last opened, from the OVERVIEW_COOKIE the page sets on each choice
+export function InitiativesPage(props: { initialState: InitiativesState; initialBoard: OverviewState; initialEtag: string; token: string; initialNow?: number; signOut?: boolean;
+  initialSelected?: string | null }) {
   // The board's own state, polling and actions: the initiatives' tickets live there
   const board = useOverview(props.initialBoard, props.initialEtag, props.token, props.initialNow);
   const [state, setState] = useState(props.initialState);
-  const [selected, setSelected] = useState(props.initialState.initiatives[0]?.id ?? null);
+  const [selected, setSelected] = useState(props.initialSelected ?? props.initialState.initiatives[0]?.id ?? null);
+  const open = (id: string) => {
+    setSelected(id);
+    document.cookie = `${OVERVIEW_COOKIE}=${encodeURIComponent(id)}; Path=/overview; Max-Age=31536000; SameSite=Lax${window.location.protocol === 'https:' ? '; Secure' : ''}`;
+  };
   const [guides, setGuides] = useState<Record<string, GuideState>>({});
   const [error, setError] = useState('');
   const idsKey = state.initiatives.map((item) => item.id).join(',');
@@ -297,7 +303,7 @@ export function InitiativesPage(props: { initialState: InitiativesState; initial
             const tickets = board.state.initiatives[item.id];
             return <div key={item.id} data-selected={item.id === view?.id}
               className="flex flex-col rounded-xl border bg-card shadow-xs transition-colors hover:border-foreground/20 data-[selected=true]:border-primary data-[selected=true]:ring-1 data-[selected=true]:ring-primary">
-              <button type="button" aria-pressed={item.id === view?.id} onClick={() => setSelected(item.id)} className="flex flex-1 flex-col gap-2 rounded-t-xl p-3.5 text-left">
+              <button type="button" aria-pressed={item.id === view?.id} onClick={() => open(item.id)} className="flex flex-1 flex-col gap-2 rounded-t-xl p-3.5 text-left">
                 <span className="text-[11px] tracking-wide text-muted-foreground uppercase">{item.client}</span>
                 <span className="text-[15px] font-semibold">{item.title}</span>
                 <StatePill view={item} />
