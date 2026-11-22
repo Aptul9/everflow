@@ -226,7 +226,8 @@ function refineBatch(db: DatabaseSync): void {
   if (!db.prepare('PRAGMA table_info(batch)').all().some((column) => column.name === 'cleared_at')) {
     transaction(db, () => db.exec('ALTER TABLE batch ADD COLUMN cleared_at TEXT'));
   }
-  for (const column of ['cleared_at', 'chat_running_at']) {
+  // initiative: the Overview initiative a ticket belongs to; such tickets show on the Overview, not on the board
+  for (const column of ['cleared_at', 'chat_running_at', 'initiative']) {
     if (!db.prepare('PRAGMA table_info(ticket)').all().some((row) => row.name === column)) {
       transaction(db, () => db.exec(`ALTER TABLE ticket ADD COLUMN ${column} TEXT`));
     }

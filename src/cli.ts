@@ -16,7 +16,7 @@ Commands:
   stop                        Graceful owned stop, exact-identity bounded fallback
   status                      Read-only status; no migration or first-start cutoff
   ticket show ID
-  ticket create --client NAME --title TEXT [--summary TEXT] [--ask TEXT] [--proposal TEXT] [--kb-note PATH]... [--key KEY]
+  ticket create --client NAME --title TEXT [--summary TEXT] [--ask TEXT] [--proposal TEXT] [--kb-note PATH]... [--key KEY] [--initiative ID]
   ticket merge SOURCE_ID TARGET_ID
   ticket relink CONVERSATION_ID TARGET_ID
   ticket close ID [--reason TEXT]
@@ -53,7 +53,7 @@ export function childEnvironment(): NodeJS.ProcessEnv & Record<string, string> {
 }
 export interface Command {
   name: string; args: number[]; configPath?: string; buildReceipt?: string; port?: number; reason?: string; all?: boolean; runId?: string;
-  ticket?: { client: string; title: string; summary?: string; ask?: string; proposal?: string; kb_notes?: string[]; key?: string };
+  ticket?: { client: string; title: string; summary?: string; ask?: string; proposal?: string; kb_notes?: string[]; key?: string; initiative?: string };
 }
 
 export function parseCommand(args: string[], artifactEnvironment = process.env.EVERFLOW_ARTIFACT): Command {
@@ -62,7 +62,7 @@ export function parseCommand(args: string[], artifactEnvironment = process.env.E
       help: { type: 'boolean', short: 'h' }, config: { type: 'string' }, artifact: { type: 'string' }, port: { type: 'string' },
       reason: { type: 'string' }, all: { type: 'boolean' }, 'run-id': { type: 'string' },
       client: { type: 'string' }, title: { type: 'string' }, summary: { type: 'string' }, ask: { type: 'string' }, proposal: { type: 'string' },
-      'kb-note': { type: 'string', multiple: true }, key: { type: 'string' },
+      'kb-note': { type: 'string', multiple: true }, key: { type: 'string' }, initiative: { type: 'string' },
     } }); } catch { throw new CliError('cli.arguments'); }
   })();
   const { values, positionals } = parsed;
@@ -77,7 +77,7 @@ export function parseCommand(args: string[], artifactEnvironment = process.env.E
   if (rest.length !== count[name] || rest.some((id) => !/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))) throw new CliError('cli.arguments');
   if (values.all && name !== 'quarantine replay' || values.port !== undefined && !['start', '_run'].includes(name)
     || values.reason !== undefined && !['job park', 'ticket close'].includes(name) || values['run-id'] !== undefined && name !== '_run') throw new CliError('cli.arguments');
-  const ticketFields = (['client', 'title', 'summary', 'ask', 'proposal', 'kb-note', 'key'] as const).filter((option) => values[option] !== undefined);
+  const ticketFields = (['client', 'title', 'summary', 'ask', 'proposal', 'kb-note', 'key', 'initiative'] as const).filter((option) => values[option] !== undefined);
   if (name === 'ticket create' ? typeof values.client !== 'string' || typeof values.title !== 'string' : ticketFields.length) throw new CliError('cli.arguments');
   const port = values.port === undefined ? undefined : Number(values.port);
   if (port !== undefined && (typeof values.port !== 'string' || !/^\d+$/.test(values.port) || !Number.isInteger(port) || port < 0 || port > 65535)) throw new CliError('cli.arguments');
@@ -90,7 +90,8 @@ export function parseCommand(args: string[], artifactEnvironment = process.env.E
     ...(values.all ? { all: true } : {}), ...(typeof values['run-id'] === 'string' ? { runId: values['run-id'] } : {}),
     ...(name === 'ticket create' ? { ticket: { client: values.client!, title: values.title!, ...(values.summary === undefined ? {} : { summary: values.summary }),
       ...(values.ask === undefined ? {} : { ask: values.ask }), ...(values.proposal === undefined ? {} : { proposal: values.proposal }),
-      ...(values['kb-note'] === undefined ? {} : { kb_notes: values['kb-note'] }), ...(values.key === undefined ? {} : { key: values.key }) } } : {}) };
+      ...(values['kb-note'] === undefined ? {} : { kb_notes: values['kb-note'] }), ...(values.key === undefined ? {} : { key: values.key }),
+      ...(values.initiative === undefined ? {} : { initiative: values.initiative }) } } : {}) };
 }
 
 export function cliFailure(error: unknown): { error: { code: string; reason?: string; native_status?: number } & FailureFields } {

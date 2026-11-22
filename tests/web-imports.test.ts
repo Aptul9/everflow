@@ -36,7 +36,7 @@ function webGraph() {
     'src/app/overview/[id]/page.tsx', 'src/app/api/guide/[id]/route.ts', 'src/app/api/guide/[id]/[action]/route.ts',
     ...['guide-page', 'dependency-graph', 'glossed', 'diagram', 'sources'].map((name) => `src/components/initiatives/${name}.tsx`),
     'src/app/api/batch/[id]/ticket/route.ts', 'src/app/api/batch/[id]/mute/route.ts', 'src/app/api/batch/[id]/clear/route.ts', 'src/app/api/conversation/[id]/unmute/route.ts', 'src/app/api/input/route.ts', 'src/app/api/setting/route.ts', 'src/app/api/job/[id]/retry/route.ts',
-    ...['action-dialog', 'chat-dialog', 'file-viewer', 'document-preview', 'markdown', 'pipeline', 'ticket-board', 'ticket-card', 'use-overview'].map((name) => `src/components/tickets/${name}.${name === 'use-overview' ? 'ts' : 'tsx'}`),
+    ...['action-dialog', 'chat-dialog', 'file-viewer', 'document-preview', 'markdown', 'pipeline', 'ticket-board', 'ticket-card', 'ticket-columns', 'use-overview'].map((name) => `src/components/tickets/${name}.${name === 'use-overview' ? 'ts' : 'tsx'}`),
     ...['alert', 'badge', 'button', 'card', 'checkbox', 'dialog', 'input', 'popover', 'scroll-area', 'separator', 'tabs', 'textarea'].map((name) => `src/components/ui/${name}.tsx`),
   ];
   const allowed = new Set(paths.map((path) => resolve(path)));

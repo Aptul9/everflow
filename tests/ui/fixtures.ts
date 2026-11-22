@@ -12,7 +12,7 @@ export function card(id: number, fields: Partial<TicketCard> = {}): TicketCard {
 
 export function uiState(): OverviewState {
   return {
-    tickets_enabled: true, chats_enabled: true, day: '2026-11-06',
+    tickets_enabled: true, chats_enabled: true, day: '2026-11-06', initiatives: {},
     groups: {
       needs_you: [card(1), card(2, { title: 'Second proposal' })],
       working: [card(3, { title: 'Active work', lifecycle: 'active', stage: 'Idle', report: 'working', report_line: 'Membership checked', session_title: 'North access investigation' })],

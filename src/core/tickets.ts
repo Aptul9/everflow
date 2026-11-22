@@ -851,23 +851,29 @@ export const newTicketSchema = z.strictObject({
   proposal: z.string().trim().max(4_000).default(''),
   kb_notes: z.array(z.string().refine(isNotePath, 'Unsafe relative Markdown note path')).max(20).default([]),
   key: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/, 'Key is 1-80 letters, digits, dot, dash or underscore').optional(),
+  initiative: z.string().min(1).optional(),
 });
 export type NewTicket = z.input<typeof newTicketSchema>;
 
 // A ticket from Antonio's own plan rather than from a message: proposed, no conversation, no chat until approved.
 // key makes a scripted run repeatable: the same key returns the ticket it made the first time.
-export function createTicket(db: DatabaseSync, cfg: Pick<Config, 'clients'>, input: unknown, at?: string, actor: 'you' | 'chat' = 'you'): number {
+// initiative: the Overview initiative it belongs to, of the same client; it then shows on the Overview, not on the board.
+export function createTicket(db: DatabaseSync, cfg: Pick<Config, 'clients' | 'initiatives'>, input: unknown, at?: string, actor: 'you' | 'chat' = 'you'): number {
   const parsed = newTicketSchema.safeParse(input);
   if (!parsed.success) throw new TicketError('ticket.invalid-input', parsed.error.message);
   const fields = parsed.data;
-  if (!Object.hasOwn(cfg.clients, fields.client)) throw new TicketError('ticket.invalid-input', `Unknown configured client ${fields.client}`);
+  // An initiative names its own client, which need not have a [clients.<name>] entry
+  if (fields.initiative !== undefined) {
+    if (cfg.initiatives[fields.initiative]?.client !== fields.client) throw new TicketError('ticket.invalid-input', `Unknown initiative ${fields.initiative} for client ${fields.client}`);
+  } else if (!Object.hasOwn(cfg.clients, fields.client)) throw new TicketError('ticket.invalid-input', `Unknown configured client ${fields.client}`);
   return transaction(db, () => {
     const now = utc(at);
     const key = fields.key ? `create:${fields.key}` : null;
     const made = key ? db.prepare('SELECT ticket FROM timeline WHERE event_key=?').get(key) : undefined;
     if (made) return Number(made.ticket);
-    const id = Number(db.prepare(`INSERT INTO ticket(title,client,summary,ask,proposal,kb_notes,created_at,last_activity_at)
-      VALUES (?,?,?,?,?,?,?,?)`).run(fields.title, fields.client, fields.summary, fields.ask, fields.proposal, JSON.stringify(fields.kb_notes), now, now).lastInsertRowid);
+    const id = Number(db.prepare(`INSERT INTO ticket(title,client,summary,ask,proposal,kb_notes,initiative,created_at,last_activity_at)
+      VALUES (?,?,?,?,?,?,?,?,?)`).run(fields.title, fields.client, fields.summary, fields.ask, fields.proposal, JSON.stringify(fields.kb_notes),
+      fields.initiative ?? null, now, now).lastInsertRowid);
     history(db, id, now, 'comment', actor, 'Created by hand', key ?? `create:ticket:${id}`);
     return id;
   });

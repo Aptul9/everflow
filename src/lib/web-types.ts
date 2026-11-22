@@ -130,6 +130,8 @@ export interface OverviewState {
   chats_enabled: boolean;
   day: string;
   groups: Record<Group, TicketCard[]>;
+  // Tickets of each Overview initiative, by board column; they are not in groups. Finished cards stay 7 days
+  initiatives: Record<string, Record<Group, TicketCard[]>>;
   skipped: SkippedBatch[];
   triaging: TriageBatch[];
   agents: Agent[];
@@ -158,23 +160,19 @@ export interface ChatFile { path: string; name: string; size: number; mtime: str
 
 // Overview page: an initiative summed up from its vault note. Every line keeps the log entries or tickets it rests on.
 export interface InitiativeSource { id: string; date: string; text: string }
-// A ticket of the note's ## Tickets section behind an Overview card; details: the row of its id in the note's tables
-export interface InitiativeTicket {
-  id: string; title: string; who: string | null; ask: string | null; since: string | null; after: string | null; done_at: string | null;
-  details: { label: string; value: string }[];
-}
-export interface InitiativeLine { text: string; sources: InitiativeSource[]; tickets?: InitiativeTicket[] }
-// owes them: that person owes Antonio or the work; owes you: Antonio owes them. since: date of the oldest source, days: working days since
+export interface InitiativeLine { text: string; sources: InitiativeSource[] }
+// owes them: that person owes Antonio or the work; owes you: Antonio owes them. since: the day it began, days: working days since
 export interface InitiativeWait extends InitiativeLine { who: string; owes: 'you' | 'them'; since: string; days: number }
-export interface InitiativeNext extends InitiativeLine { owner: 'ai' | 'you'; draft: string | null }
 export type InitiativeStateName = 'moving' | 'waiting_them' | 'needs_you' | 'stuck' | 'quiet';
 export interface InitiativeSummary {
-  state: InitiativeStateName; headline: string; now: InitiativeLine[]; waits: InitiativeWait[]; next: InitiativeNext[]; done: InitiativeLine[];
-  // rejected: items dropped for citing no offered source; entries: log entries offered
+  state: InitiativeStateName; headline: string; now: InitiativeLine[];
+  // rejected: lines dropped for citing no offered source; entries: log entries offered
   rejected: number; entries: number; model: string;
 }
+// waits: one per ticket of the initiative waiting on someone, who from its STATUS line "<who>: <text>"
 export interface InitiativeView {
   id: string; title: string; client: string; note: string; at: string | null; summary: InitiativeSummary | null; error: string | null; error_at: string | null;
+  waits: InitiativeWait[];
 }
 export interface InitiativesState {
   initiatives: InitiativeView[]; today: string; views: Record<string, number>; requested: boolean; refreshing: boolean; providers: boolean;

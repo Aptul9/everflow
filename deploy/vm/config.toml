@@ -29,7 +29,7 @@ model = "meridian-auto/claude-opus-5-5"
 providers = ["meridian-notarify", "meridian-roar", "meridian-everbright"]
 model = "claude-haiku-5-5"
 
-# Overview page summaries: same routes as triage, a stronger model, 3 calls a weekday
+# Overview page summaries and ticket proposals: same routes as triage, a stronger model, two calls per initiative a weekday
 [overview]
 model = "claude-opus-5-5"
 

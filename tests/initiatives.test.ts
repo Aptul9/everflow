@@ -1,9 +1,8 @@
-import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { openDb } from '../src/core/db.ts';
-import { storedTickets, ticketCards } from '../src/core/initiative-state.ts';
-import { localTime, markSeen, noteContext, noteTickets, parseSummary, readInitiatives, refreshDue, refreshInitiatives, requestRefresh, syncTickets, workingDays } from '../src/core/initiatives.ts';
+import { localTime, markSeen, noteContext, parseSummary, proposeTickets, readInitiatives, refreshDue, refreshInitiatives, requestRefresh, workingDays } from '../src/core/initiatives.ts';
 import type { InitiativeSource } from '../src/lib/web-types.ts';
 import { kbFixture, provider, scriptedPeer } from './kb-support.ts';
 
@@ -42,6 +41,7 @@ function fixture() {
   mkdirSync(join(cfg.vault.path, '01_Projects'), { recursive: true });
   writeFileSync(join(cfg.vault.path, '01_Projects/demo.md'), NOTE);
   cfg.initiatives = { demo: { title: 'OCP IAM', client: 'acme', note: '01_Projects/demo.md' } };
+  cfg.overview.propose_tickets = false;
   return kb;
 }
 
@@ -64,31 +64,25 @@ test('working days skip weekends and Rome local time decides the day', () => {
   expect(localTime(Date.parse('2026-11-21T10:00:00Z'), 'Europe/Rome').weekend).toBe(true);
 });
 
-test('items citing no offered entry are dropped and counted; waits date from their oldest source', () => {
+test('lines citing no offered entry are dropped and counted; their sources come oldest first', () => {
   const summary = parseSummary(JSON.stringify({
     state: 'waiting_them', headline: 'Mohamed holds four questions',
-    now: [{ text: 'Real line', src: ['L1'] }, { text: 'Invented line', src: ['L99'] }, { text: 'No source', src: [] }],
-    waits: [{ who: 'Mohamed', owes: 'them', what: 'questions 1-4', src: ['L2', 'L1'] }],
-    next: [{ owner: 'ai', text: 'Remind Mohamed', src: ['L2'], draft: 'Hi Mohamed, any news on 1-4?' }, { owner: 'you', text: 'Send v2.13', src: ['T7'] }],
-    done: [],
-  }), offered('L1', 'L2', 'T7'), 'first/model', 3, '2026-11-18');
-  expect(summary.now.map((line) => line.text)).toEqual(['Real line']);
-  expect(summary.rejected).toBe(2);
-  expect(summary.waits[0]).toMatchObject({ who: 'Mohamed', owes: 'them', since: '2026-11-11', days: 5 });
-  expect(summary.next.map((next) => [next.owner, next.draft])).toEqual([['ai', 'Hi Mohamed, any news on 1-4?'], ['you', null]]);
+    now: [{ text: 'Real line', src: ['L2', 'L1'] }, { text: 'Invented line', src: ['L99'] }, { text: 'No source', src: [] }],
+  }), offered('L1', 'L2', 'T7'), 'first/model', 3);
+  expect(summary).toMatchObject({ state: 'waiting_them', headline: 'Mohamed holds four questions', rejected: 2, entries: 3, model: 'first/model' });
+  expect(summary.now.map((line) => [line.text, line.sources.map((source) => source.id)])).toEqual([['Real line', ['L1', 'L2']]]);
 });
 
 test('a summary with no sourced now line, or not JSON, is refused', () => {
-  expect(() => parseSummary('not json', offered('L1'), 'm', 1, '2026-11-18')).toThrow(/not JSON/);
-  expect(() => parseSummary(JSON.stringify({ state: 'moving', headline: 'x', now: [{ text: 'a', src: ['L5'] }] }), offered('L1'), 'm', 1, '2026-11-18')).toThrow(/No line of now/);
-  expect(() => parseSummary(JSON.stringify({ state: 'busy', headline: 'x', now: [] }), offered('L1'), 'm', 1, '2026-11-18')).toThrow(/schema/);
+  expect(() => parseSummary('not json', offered('L1'), 'm', 1)).toThrow(/not JSON/);
+  expect(() => parseSummary(JSON.stringify({ state: 'moving', headline: 'x', now: [{ text: 'a', src: ['L5'] }] }), offered('L1'), 'm', 1)).toThrow(/No line of now/);
+  expect(() => parseSummary(JSON.stringify({ state: 'busy', headline: 'x', now: [] }), offered('L1'), 'm', 1)).toThrow(/schema/);
 });
 
 test('refresh asks the provider without tools, repairs once, and stores a summary the page reads', async () => {
   const { cfg } = fixture();
   using db = openDb(cfg.db.path);
-  const good = { state: 'needs_you', headline: 'v2.13 waits on you', now: [{ text: 'Liubomir answered', src: ['L1'] }],
-    waits: [{ who: 'Geoff', owes: 'them', what: 'Vault Qs 1-3', src: ['L2'] }], next: [], done: [] };
+  const good = { state: 'needs_you', headline: 'v2.13 waits on you', now: [{ text: 'Liubomir answered', src: ['L1'] }] };
   await using peer = await scriptedPeer((_body, index) => ({ body: { content: [{ type: 'text', text: index === 0 ? '{"state":"moving"' : JSON.stringify(good) }] } }));
   requestRefresh(db);
   expect(refreshDue(db, cfg)).toBe(true);
@@ -100,8 +94,8 @@ test('refresh asks the provider without tools, repairs once, and stores a summar
   expect(data.log.map((entry: { id: string }) => entry.id)).toEqual(['L1', 'L2', 'L3']);
   expect(peer.requests[1]!.messages.at(-1)!.content).toMatch(/rejected/);
   const state = readInitiatives(db, cfg);
-  expect(state.initiatives[0]).toMatchObject({ id: 'demo', client: 'acme', error: null, summary: { state: 'needs_you', model: 'first/synthetic-small' } });
-  expect(state.initiatives[0]!.summary!.waits[0]).toMatchObject({ who: 'Geoff', since: '2026-11-17', days: 1 });
+  expect(state.initiatives[0]).toMatchObject({ id: 'demo', client: 'acme', error: null, waits: [], summary: { state: 'needs_you', model: 'first/synthetic-small' } });
+  expect(state.initiatives[0]!.summary!.now.map((line) => line.text)).toEqual(['Liubomir answered']);
   expect(state.requested).toBe(false);
   expect(refreshDue(db, cfg)).toBe(false);
 });
@@ -113,101 +107,13 @@ test('tickets naming the initiative note are offered first, ahead of the client\
   for (let index = 0; index < 31; index++) {
     db.prepare("INSERT INTO ticket(title,client,lifecycle,created_at,last_activity_at) VALUES (?,'acme','active',?,?)").run(`Other ${index}`, AT, AT);
   }
-  const good = { state: 'moving', headline: 'x', now: [{ text: 'a', src: ['L1'] }], waits: [], next: [], done: [] };
+  const good = { state: 'moving', headline: 'x', now: [{ text: 'a', src: ['L1'] }] };
   await using peer = await scriptedPeer(() => ({ body: { content: [{ type: 'text', text: JSON.stringify(good) }] } }));
   requestRefresh(db);
   await refreshInitiatives(cfg, db, { providers: { first: provider(peer.baseURL) } });
   const tickets = JSON.parse(peer.requests[0]!.messages[0]!.content as string).tickets as { id: string; title: string }[];
   expect(tickets).toHaveLength(30);
   expect(tickets[0]).toMatchObject({ id: 'T1', title: 'Plan item' });
-});
-
-const TICKETS = `
-## Tickets
-- [ ] 0.1 Delete docs app (429 USD/m) | you: Mirko | since 2026-11-16 | ask: is it Maruca's documentation?
-- [ ] 0.4 Serverless dbs to DTU | you
-- [ ] 2.1 AU without SFTP | them: Andrè | since 2026-11-11 | ask: can api-au go?
-- [ ] X.3 Price the 2027 expiry | ai
-- [ ] R.7 Hybrid Benefit | them | ask: licence count
-- [x] 0.2 TS decommission | done 2026-11-17
-- [x] 0.0 Old cleanup | done 2026-11-02
-- not a ticket line
-`;
-
-test('note tickets: owner, person, since, ask and done date per line, other lines ignored', () => {
-  const tickets = noteTickets(NOTE + TICKETS);
-  expect(tickets.map((ticket) => [ticket.id, ticket.owner, ticket.who, ticket.since, ticket.done, ticket.done_at])).toEqual([
-    ['0.1', 'you', 'Mirko', '2026-11-16', false, null], ['0.4', 'you', null, null, false, null], ['2.1', 'them', 'Andrè', '2026-11-11', false, null],
-    ['X.3', 'ai', null, null, false, null], ['R.7', 'them', 'them', null, false, null], ['0.2', 'you', null, null, true, '2026-11-17'],
-    ['0.0', 'you', null, null, true, '2026-11-02']]);
-  expect(tickets[0]).toMatchObject({ title: 'Delete docs app (429 USD/m)', ask: "is it Maruca's documentation?" });
-  expect(noteTickets(NOTE)).toEqual([]);
-});
-
-test('note tickets replace the summary cards: map and Them for what is owed, AI and You for the rest, Done for the last 7 days', async () => {
-  const { cfg } = fixture();
-  writeFileSync(join(cfg.vault.path, '01_Projects/demo.md'), NOTE + TICKETS);
-  using db = openDb(cfg.db.path);
-  const good = { state: 'moving', headline: 'Plan running', now: [{ text: 'AU waits on Andrè', src: ['K2.1'] }],
-    waits: [{ who: 'Geoff', owes: 'them', what: 'Vault Qs 1-3', src: ['L2'] }], next: [{ owner: 'you', text: 'Model step', src: ['L1'] }], done: [] };
-  await using peer = await scriptedPeer(() => ({ body: { content: [{ type: 'text', text: JSON.stringify(good) }] } }));
-  syncTickets(cfg, db);
-  requestRefresh(db);
-  await refreshInitiatives(cfg, db, { providers: { first: provider(peer.baseURL) } });
-  const data = JSON.parse(peer.requests[0]!.messages[0]!.content as string);
-  expect(data.plan_tickets.map((ticket: { id: string }) => ticket.id)).toEqual(['K0.1', 'K0.4', 'K2.1', 'KX.3', 'KR.7', 'K0.2', 'K0.0']);
-  const summary = readInitiatives(db, cfg).initiatives[0]!.summary!;
-  expect(summary.now.map((line) => line.text)).toEqual(['AU waits on Andrè']);
-  expect(summary.waits.map((wait) => [wait.who, wait.owes, wait.text, wait.days])).toEqual([
-    ['Mirko', 'you', "0.1 Delete docs app (429 USD/m): is it Maruca's documentation?", 2],
-    ['Andrè', 'them', '2.1 AU without SFTP: can api-au go?', 5],
-    ['them', 'them', 'R.7 Hybrid Benefit: licence count', 0]]);
-  expect(summary.next.map((next) => [next.owner, next.text])).toEqual([
-    ['you', "0.1 Delete docs app (429 USD/m). Mirko: is it Maruca's documentation?"], ['you', '0.4 Serverless dbs to DTU'], ['ai', 'X.3 Price the 2027 expiry']]);
-  expect(summary.done.map((line) => line.text)).toEqual(['0.2 TS decommission']);
-  expect(summary.waits[0]!.sources).toEqual([{ id: 'K0.1', date: '2026-11-16', text: 'Ticket 0.1: Delete docs app (429 USD/m)' }]);
-});
-
-test('waits with the same person and ask become one card; tickets carry after and the row of their table', () => {
-  const note = `${NOTE}
-## Tickets
-- [ ] R.1 Reservation D8as_v5 | them: Roar admin | since 2026-11-21 | ask: ok to buy 1Y reservations
-- [ ] R.3 Reservation P1v3 | them: Roar admin | since 2026-11-20 | ask: ok to buy 1Y reservations | after: 1.5
-- [ ] 2.1 AU without SFTP | them: Andrè | since 2026-11-19 | ask: can api-au go?
-
-## Plan
-| # | Intervention | USD/m | RTO | T |
-|---|---|---:|---|---|
-| R.1 | RI 1Y D8as_v5 x3 | 349 | none | #94 |
-| 2.1 | AU decommission | ~760 | api-au unreachable | |
-`;
-  const tickets = noteTickets(note);
-  expect(tickets[0]!.details).toEqual([{ label: 'Intervention', value: 'RI 1Y D8as_v5 x3' }, { label: 'USD/m', value: '349' }, { label: 'RTO', value: 'none' }]);
-  expect(tickets[1]).toMatchObject({ after: '1.5', details: [] });
-  const empty = { state: 'moving' as const, headline: 'h', now: [], waits: [], next: [], done: [], rejected: 0, entries: 0, model: 'm' };
-  const cards = ticketCards(empty, tickets, '2026-11-23');
-  expect(cards.waits.map((wait) => [wait.who, wait.text, wait.since, wait.days, wait.tickets!.map((ticket) => ticket.id)])).toEqual([
-    ['Roar admin', 'ok to buy 1Y reservations (R.1, R.3)', '2026-11-20', 1, ['R.1', 'R.3']],
-    ['Andrè', '2.1 AU without SFTP: can api-au go?', '2026-11-19', 2, ['2.1']]]);
-  expect(cards.waits[0]!.sources.map((item) => item.id)).toEqual(['KR.1', 'KR.3']);
-  expect(cards.waits[1]!.tickets![0]!.details).toEqual([{ label: 'Intervention', value: 'AU decommission' }, { label: 'USD/m', value: '~760' }, { label: 'RTO', value: 'api-au unreachable' }]);
-});
-
-test('note tickets are read again only when the note changes', () => {
-  const { cfg } = fixture();
-  using db = openDb(cfg.db.path);
-  const path = join(cfg.vault.path, '01_Projects/demo.md');
-  writeFileSync(path, NOTE + TICKETS);
-  utimesSync(path, new Date('2026-11-18T08:00:00Z'), new Date('2026-11-18T08:00:00Z'));
-  syncTickets(cfg, db);
-  expect(storedTickets(db, 'demo').tickets).toHaveLength(7);
-  writeFileSync(path, NOTE + '\n## Tickets\n- [ ] 9.9 Only one | you\n');
-  utimesSync(path, new Date('2026-11-18T08:00:00Z'), new Date('2026-11-18T08:00:00Z'));
-  syncTickets(cfg, db);
-  expect(storedTickets(db, 'demo').tickets).toHaveLength(7);
-  utimesSync(path, new Date('2026-11-18T08:05:00Z'), new Date('2026-11-18T08:05:00Z'));
-  syncTickets(cfg, db);
-  expect(storedTickets(db, 'demo').tickets.map((ticket) => ticket.id)).toEqual(['9.9']);
 });
 
 test('a failed refresh keeps the last summary, shows the error and tries again after half an hour', async () => {
@@ -248,4 +154,37 @@ test('page opens are counted per local day', () => {
   markSeen(db, cfg);
   expect(markSeen(db, cfg, Date.parse('2026-11-19T08:00:00Z'))).toEqual({ '2026-11-18': 2, '2026-11-19': 1 });
   expect(readInitiatives(db, cfg).views).toEqual({ '2026-11-18': 2, '2026-11-19': 1 });
+});
+
+test('proposed tickets: new work from the note becomes tickets of the initiative, a returned key is never duplicated, existing tickets are offered', async () => {
+  const { cfg } = fixture();
+  cfg.overview.propose_tickets = true;
+  using db = openDb(cfg.db.path);
+  db.prepare("INSERT INTO ticket(title,client,initiative,lifecycle,created_at) VALUES ('Old dismissed idea','acme','demo','dismissed',?)").run(AT);
+  const answer = { tickets: [{ key: 'ask-geoff-vault', title: 'Ask Geoff: Vault questions 1-3', summary: 'Sent 17/11, no answer.', ask: 'Get the Vault answers.', proposal: '1. Remind Geoff in writing.' },
+    { key: 'ask-geoff-vault', title: 'Ask Geoff again', summary: '', ask: '', proposal: '' }] };
+  await using peer = await scriptedPeer((_body, index) => ({ body: { content: [{ type: 'text', text: index === 0 ? 'not json' : JSON.stringify(answer) }] } }));
+  const made = await proposeTickets(cfg, db, 'demo', { providers: { first: provider(peer.baseURL) } });
+  expect(peer.requests).toHaveLength(2);
+  expect(peer.requests[0]!.system).toContain('ticket list of one initiative');
+  const data = JSON.parse(peer.requests[0]!.messages[0]!.content as string);
+  expect(data.existing_tickets).toEqual([{ id: 'T1', title: 'Old dismissed idea', lifecycle: 'dismissed' }]);
+  expect(data.note).toContain('## goal');
+  expect(data.note).not.toContain('## log');
+  expect(made).toEqual([2, 2]);
+  expect(db.prepare('SELECT title,client,initiative,lifecycle,kb_notes FROM ticket WHERE id=2').get()).toEqual({ title: 'Ask Geoff: Vault questions 1-3', client: 'acme',
+    initiative: 'demo', lifecycle: 'proposed', kb_notes: '["01_Projects/demo.md"]' });
+});
+
+test('a failed proposal is recorded and leaves the summary of the same run in place', async () => {
+  const { cfg } = fixture();
+  cfg.overview.propose_tickets = true;
+  using db = openDb(cfg.db.path);
+  const good = { state: 'moving', headline: 'h', now: [{ text: 'a', src: ['L1'] }] };
+  await using peer = await scriptedPeer((body) => ({ body: { content: [{ type: 'text', text: String((body as { system?: string }).system ?? '').includes('ticket list') ? 'broken' : JSON.stringify(good) }] } }));
+  requestRefresh(db);
+  await refreshInitiatives(cfg, db, { providers: { first: provider(peer.baseURL) } });
+  expect(readInitiatives(db, cfg).initiatives[0]).toMatchObject({ error: null, summary: { headline: 'h' } });
+  expect(JSON.parse(String(db.prepare("SELECT value FROM setting WHERE key='initiative.proposed:demo'").get()!.value))).toMatchObject({ tickets: [], error: 'Proposed tickets are not valid JSON of the asked shape; answer starts: broken' });
+  expect(db.prepare('SELECT COUNT(*) AS n FROM ticket').get()!.n).toBe(0);
 });

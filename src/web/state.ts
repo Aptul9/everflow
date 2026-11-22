@@ -100,16 +100,25 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
   midnight.setHours(0, 0, 0, 0);
   const shownSince = utc(midnight.toISOString());
   const finished = (row: { lifecycle?: unknown }) => row.lifecycle === 'done' || row.lifecycle === 'dismissed';
-  // Only cards on the board get their detail built: the page polls this every 10 s and closed tickets pile up
-  const tickets = db.prepare('SELECT id,lifecycle,closed_at,cleared_at FROM ticket ORDER BY id').all()
-    .filter((row) => !finished(row) || row.closed_at && row.cleared_at === null && utc(String(row.closed_at)) >= shownSince)
-    .map((row) => ticketDetail(db, Number(row.id)).ticket)
+  // Only cards on show get their detail built: the page polls this every 10 s and closed tickets pile up.
+  // Tickets of an Overview initiative show there, not on the board, and keep their finished cards for 7 days.
+  const weekAgo = utc(new Date(midnight.getTime() - 6 * 86_400_000).toISOString());
+  const rows = db.prepare('SELECT id,lifecycle,closed_at,cleared_at,initiative FROM ticket ORDER BY id').all();
+  const shown = (row: (typeof rows)[number], since: string) => !finished(row) || !!row.closed_at && row.cleared_at === null && utc(String(row.closed_at)) >= since;
+  const cards = (selected: typeof rows) => selected.map((row) => ticketDetail(db, Number(row.id)).ticket)
     .sort((a, b) => Number(b.lifecycle === 'proposed') - Number(a.lifecycle === 'proposed')
       || utc(b.last_activity_at ?? b.created_at).localeCompare(utc(a.last_activity_at ?? a.created_at)) || b.id - a.id);
+  const tickets = cards(rows.filter((row) => row.initiative === null && shown(row, shownSince)));
   // Same column function as the session title, so card and title never disagree
   const group: Record<Column, keyof OverviewState['groups']> = { 'Needs you': 'needs_you', Working: 'working', 'Waiting on them': 'waiting_them',
     Failed: 'failed', Done: 'done_today', Skipped: 'skipped' };
-  for (const ticket of tickets) groups[group[boardColumn(ticket.stage as Stage, ticket.lifecycle)]].push(ticket);
+  const place = (target: OverviewState['groups'], list: readonly TicketCard[]) => { for (const ticket of list) target[group[boardColumn(ticket.stage as Stage, ticket.lifecycle)]].push(ticket); };
+  place(groups, tickets);
+  const initiatives: OverviewState['initiatives'] = Object.fromEntries(Object.keys(cfg.initiatives).map((id) => {
+    const target: OverviewState['groups'] = { needs_you: [], working: [], waiting_them: [], failed: [], done_today: [], skipped: [] };
+    place(target, cards(rows.filter((row) => row.initiative === id && shown(row, weekAgo))));
+    return [id, target];
+  }));
   const skipped = db.prepare(`SELECT b.id,c.title,c.source,c.account,b.outcome,b.created_at,
     (SELECT t.reason FROM triage_log t WHERE t.batch=b.id ORDER BY t.id DESC LIMIT 1) AS reason FROM batch b JOIN conversation c ON c.id=b.conversation
     WHERE b.outcome IN ('not_on_us','backlog','answered','muted') AND b.cleared_at IS NULL AND COALESCE(b.done_at,b.created_at)>=?
@@ -129,7 +138,7 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
   }));
   const agents: OverviewState['agents'] = [
     ...triaging.filter((batch) => batch.job === 'running').map((batch) => ({ kind: 'triage' as const, clients: batch.clients, title: batch.title, ticket: null })),
-    ...tickets.filter((ticket) => ticket.chat_running && ticket.lifecycle === 'active').map((ticket) => ({ kind: 'chat' as const,
+    ...[...tickets, ...Object.values(initiatives).flatMap((target) => target.working)].filter((ticket) => ticket.chat_running && ticket.lifecycle === 'active').map((ticket) => ({ kind: 'chat' as const,
       clients: ticket.client ? [ticket.client] : [], title: ticket.title, ticket: ticket.id })),
   ];
   const muted = db.prepare('SELECT id,title,source,account,muted_until FROM conversation WHERE muted_until > ? ORDER BY muted_until,id').all(utc(at.toISOString()))
@@ -147,7 +156,7 @@ export function readState(db: DatabaseSync, cfg: Config, at = new Date()): Overv
     AND NOT EXISTS (SELECT 1 FROM triage_log v WHERE v.batch=t.batch AND v.id>t.id AND v.action IN ('new','update','skip')) ORDER BY at DESC,id DESC`).all()
     .map((row) => ({ id: Number(row.id), batch: row.batch === null ? null : Number(row.batch), at: String(row.at),
       raw: row.raw as string | null, parse_error: row.reason as string | null }));
-  return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, skipped, triaging, agents,
+  return { tickets_enabled: cfg.tickets.enabled === true, chats_enabled: cfg.chats.enabled === true, day, groups, initiatives, skipped, triaging, agents,
     models: { triage: modelChoice(db, cfg, 'triage'), chat: modelChoice(db, cfg, 'chat'), options: readModelOptions(db), triage_routes: cfg.triage.providers }, chat_project: basename(cfg.opencode.directory || ''),
     chat_projects: Object.fromEntries(Object.keys(cfg.clients).map((client) => [client, basename(chatDirectory(cfg, client))])), muted,
     ...(cfg.web.chat_origin ? { chat_origin: cfg.web.chat_origin } : {}),

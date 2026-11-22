@@ -101,6 +101,8 @@ const configSchema = z.looseObject({
     window_days: positive.max(90).default(21),
     timeout_seconds: positive.max(600).default(300),
     explainer_timeout_seconds: positive.max(1_800).default(900),
+    // With each summary run, new work found in the note becomes proposed tickets of the initiative
+    propose_tickets: z.boolean().default(true),
   }).prefault({}),
 }).refine((cfg) => !cfg.web.chat_origin || !!cfg.opencode.openchamber_port, {
   path: ['web', 'chat_origin'], message: 'chat_origin needs [opencode] openchamber_port',
