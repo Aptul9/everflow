@@ -44,7 +44,13 @@ export interface TicketCard {
   // Approved input not yet sent to the chat, queued since then; null when nothing waits
   chat_waiting_since: string | null;
   session_title: string | null;
+  // triage's reason (the latest triage timeline entry); AI tickets carry why instead
   reason: string | null;
+  // Why the AI proposed it, with the note sections (S) and log entries (L) it cites; null on other and older tickets
+  why: { text: string; sources: { id: string; kind: 'log' | 'section'; date?: string; text: string }[] } | null;
+  // 'overview_chat' when the client's Overview chat dismissed it; restorable: Ripristina puts it back among the proposals
+  dismissed_by: 'overview_chat' | null;
+  restorable: boolean;
   timeline_revision: string;
   messages: SourceMessage[];
   refs: Reference[];
@@ -179,6 +185,9 @@ export interface InitiativeView {
 export interface InitiativesState {
   initiatives: InitiativeView[]; today: string; views: Record<string, number>; requested: boolean; refreshing: boolean; providers: boolean;
 }
+// The client's chat of the day on the Overview and the guide: opened (created at the first open of the day), and its state
+export interface ClientChatOpen { client: string; day: string; session_id: string; directory: string }
+export interface ClientChatStatus { client: string; day: string; session_id: string | null; running: boolean }
 // Cookie of the initiative last opened on the Overview: the server reads it, so the page reopens on it after the board, a guide or a reload
 export const OVERVIEW_COOKIE = 'everflow_overview';
 // Initiative guide (/overview/<id>): a plain-language explainer of one initiative, written in Italian from its vault note and

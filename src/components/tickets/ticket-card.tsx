@@ -1,6 +1,7 @@
 'use client';
 
-import { BookOpen, Check, Clock, ExternalLink, GitCommitVertical, LoaderCircle, Maximize2, MessageSquarePlus, MessagesSquare, Paperclip, Play, RotateCw, X } from 'lucide-react';
+import { BookOpen, Check, Clock, ExternalLink, GitCommitVertical, LoaderCircle, Maximize2, MessageSquarePlus, MessagesSquare, Paperclip, Play, RotateCcw, RotateCw, X } from 'lucide-react';
+import { Sparkles } from '../initiatives/client-chat.tsx';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { SourceMessage, TicketCard as CardData, TicketDetail } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
@@ -211,6 +212,16 @@ function Notes({ ticket }: { ticket: CardData }) {
   </div>;
 }
 
+// The note sections (S) and log entries (L) an AI ticket's why rests on, as small chips with the text on hover
+function WhySources({ why }: { why: NonNullable<CardData['why']> }) {
+  return <ul aria-label="Sources" className="mt-1 flex flex-wrap gap-1 whitespace-normal">
+    {why.sources.map((source) => <li key={source.id} title={source.text}
+      className="inline-flex max-w-full min-w-0 items-center rounded border bg-background px-1.5 py-px text-[10px] font-medium text-muted-foreground">
+      <span className="truncate">{source.id} · {source.kind === 'log' && source.date ? `${source.date.slice(8, 10)}/${source.date.slice(5, 7)}` : source.text}</span>
+    </li>)}
+  </ul>;
+}
+
 function TicketDetails({ ticket, now, badge }: { ticket: CardData; now: number; badge: string }) {
   const messagesId = useId();
   const timelineId = useId();
@@ -229,7 +240,8 @@ function TicketDetails({ ticket, now, badge }: { ticket: CardData; now: number; 
         <Field label="Proposal" expanded><Markdown text={ticket.proposal || '(none)'} /></Field>
       </>}
       {ticket.report_line && <Field label="Report" expanded><Markdown text={ticket.report_line} /></Field>}
-      {ticket.reason && <Field label="Why" expanded><Markdown text={ticket.reason} /></Field>}
+      {ticket.why ? <Field label="Why" expanded><Markdown text={ticket.why.text} /><WhySources why={ticket.why} /></Field>
+        : ticket.reason && <Field label="Why" expanded><Markdown text={ticket.reason} /></Field>}
       {ticket.session_title && <Field label="Session" expanded>{ticket.session_title}</Field>}
     </dl>
     <Notes ticket={ticket} />
@@ -265,9 +277,11 @@ export function TicketCard(props: {
   const timelineId = useId();
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
-  const keys = { start: `ticket:${ticket.id}:start`, discuss: `ticket:${ticket.id}:discuss`, dismiss: `ticket:${ticket.id}:dismiss`, close: `ticket:${ticket.id}:close`, clear: `ticket:${ticket.id}:clear`, startNow: `ticket:${ticket.id}:start-now` };
+  const keys = { start: `ticket:${ticket.id}:start`, discuss: `ticket:${ticket.id}:discuss`, dismiss: `ticket:${ticket.id}:dismiss`, close: `ticket:${ticket.id}:close`, clear: `ticket:${ticket.id}:clear`,
+    startNow: `ticket:${ticket.id}:start-now`, restore: `ticket:${ticket.id}:restore` };
   const terminal = ticket.lifecycle === 'done' || ticket.lifecycle === 'dismissed';
-  const error = props.errors[keys.start] || props.errors[keys.discuss] || props.errors[keys.dismiss] || props.errors[keys.close] || props.errors[keys.clear] || props.errors[keys.startNow];
+  const error = props.errors[keys.start] || props.errors[keys.discuss] || props.errors[keys.dismiss] || props.errors[keys.close] || props.errors[keys.clear] || props.errors[keys.startNow]
+    || props.errors[keys.restore];
   const style = tones[tone(ticket)];
   const actions = props.enabled && !terminal;
   const starting = props.pending.has(keys.start);
@@ -317,12 +331,15 @@ export function TicketCard(props: {
         {ticket.lifecycle === 'proposed' && ticket.stage === 'Failed' && <Badge variant="destructive" className="px-1.5 text-[11px]">Failed</Badge>}
         {ticket.confidence !== null && <span className="text-muted-foreground"><span className="font-medium text-foreground tabular-nums">{Math.round(ticket.confidence * 100)}%</span> conf.</span>}
         {ticket.maybe_ticket !== null && <span className="rounded border border-dashed px-1 text-muted-foreground">Maybe #{ticket.maybe_ticket}</span>}
+        {ticket.lifecycle === 'dismissed' && ticket.dismissed_by === 'overview_chat' && <Badge variant="outline" title="Dismissed by the client's Overview chat after your yes"
+          className="gap-1 px-1.5 text-[11px]"><Sparkles className="size-3" />dalla chat</Badge>}
         <span className="ml-auto font-mono text-muted-foreground">#{ticket.id}</span>
       </div>
       {/* The card is a glance: the AI sum-up, or the chat's latest status while it runs; the rest is in Expand */}
       {(ticket.lifecycle === 'active' && ticket.report_line || ticket.summary) && <p className="line-clamp-2 text-[13px] whitespace-pre-wrap">
         <Inline text={ticket.lifecycle === 'active' && ticket.report_line || ticket.summary} />
       </p>}
+      {ticket.why && ticket.lifecycle === 'proposed' && <dl><Field label="Perché" expanded={false}><Inline text={ticket.why.text} /><WhySources why={ticket.why} /></Field></dl>}
       <TicketDetails ticket={ticket} now={props.now} badge={style.badge} />
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
     </div>
@@ -343,6 +360,12 @@ export function TicketCard(props: {
       <ActionDialog label="Dismiss" display="Dismiss" title={`Dismiss ticket #${ticket.id}`} confirm="Confirm dismiss" shortcut="d" action="dismiss" mute="optional"
         size="sm" icon={<X aria-hidden="true" />} className="h-9 min-w-0 sm:h-8" disabled={props.expired || props.pending.has(keys.dismiss)}
         onConfirm={(reason, mute) => post(keys.dismiss, `/api/ticket/${ticket.id}/dismiss`, mute === undefined ? { reason } : { reason, mute_minutes: mute })} />
+    </div>}
+    {/* A proposal the Overview chat dismissed, never started: back to its column */}
+    {props.enabled && ticket.restorable && <div className="border-t px-3 py-2">
+      <Button type="button" variant="outline" size="sm" className="h-9 w-full sm:h-8" aria-label={`Ripristina ticket #${ticket.id}`} title="Back among the proposals"
+        disabled={props.expired || props.pending.has(keys.restore)} onClick={() => { void post(keys.restore, `/api/ticket/${ticket.id}/restore`).catch(() => {}); }}>
+        <RotateCcw aria-hidden="true" />Ripristina</Button>
     </div>}
     <div className="flex flex-wrap items-center gap-1 border-t px-2 py-1">
       <Toggle expanded={messagesOpen} controls={messagesId} onClick={() => setMessagesOpen(!messagesOpen)} icon={<MessagesSquare aria-hidden="true" />}>Messages ({ticket.messages.length})</Toggle>
