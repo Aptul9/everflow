@@ -2,7 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from './config.ts';
 import { utc } from './time.ts';
 import { guideItemKey } from '../lib/web-types.ts';
-import type { Explainer, GuideState, InitiativeLine, InitiativeNext, InitiativesState, InitiativeSummary, InitiativeView, InitiativeWait } from '../lib/web-types.ts';
+import type { Explainer, GuideState, InitiativeLine, InitiativeNext, InitiativesState, InitiativeSummary, InitiativeTicket, InitiativeView, InitiativeWait } from '../lib/web-types.ts';
 
 // The Overview page's side of the initiatives: stored summaries, the refresh request and page opens, all in the setting
 // table. No provider or vault access here, so the web routes stay off the model runtime.
@@ -54,6 +54,7 @@ export function requestRefresh(db: DatabaseSync): void { writeSetting(db, 'initi
 export interface NoteTicket {
   id: string; title: string; done: boolean; owner: 'you' | 'ai' | 'them'; who: string | null;
   since: string | null; ask: string | null; done_at: string | null; line: string;
+  after?: string | null; details?: { label: string; value: string }[];
 }
 export interface StoredTickets { mtime: number | null; tickets: NoteTicket[] }
 
@@ -64,22 +65,32 @@ export function storedTickets(db: DatabaseSync, id: string): StoredTickets {
   } catch { return { mtime: null, tickets: [] }; }
 }
 
-// With tickets in the note, the cards are the tickets: waits (map and Them) for what somebody owes, AI and You for the rest,
-// Done for what closed in the last 7 days. The summary keeps its headline and now lines.
+// With tickets in the note, the cards are the tickets: waits (map and Them) for what somebody owes, one per person and ask,
+// AI and You for the rest, Done for what closed in the last 7 days. Each card carries its tickets for the detail view.
+// The summary keeps its headline and now lines.
 export function ticketCards(summary: InitiativeSummary, tickets: readonly NoteTicket[], today: string): InitiativeSummary {
   if (!tickets.length) return summary;
   const source = (ticket: NoteTicket) => ({ id: `K${ticket.id}`, date: ticket.done_at ?? ticket.since ?? today, text: ticket.line });
   const label = (ticket: NoteTicket) => `${ticket.id} ${ticket.title}`;
+  const card = (ticket: NoteTicket): InitiativeTicket => ({ id: ticket.id, title: ticket.title, who: ticket.who, ask: ticket.ask, since: ticket.since,
+    after: ticket.after ?? null, done_at: ticket.done_at, details: ticket.details ?? [] });
   const open = tickets.filter((ticket) => !ticket.done);
-  const waits = open.filter((ticket) => ticket.who !== null && ticket.owner !== 'ai').map((ticket): InitiativeWait => {
-    const since = ticket.since ?? today;
-    return { who: ticket.who!, owes: ticket.owner === 'them' ? 'them' : 'you', text: ticket.ask ? `${label(ticket)}: ${ticket.ask}` : label(ticket),
-      since, days: workingDays(since, today), sources: [source(ticket)] };
+  const groups = new Map<string, NoteTicket[]>();
+  for (const ticket of open.filter((item) => item.who !== null && item.owner !== 'ai')) {
+    const key = [ticket.owner, ticket.who!.toLowerCase(), ticket.ask?.toLowerCase() ?? `#${ticket.id}`].join('\n');
+    groups.set(key, [...groups.get(key) ?? [], ticket]);
+  }
+  const waits = [...groups.values()].map((group): InitiativeWait => {
+    const [first] = group as [NoteTicket, ...NoteTicket[]];
+    const since = group.map((ticket) => ticket.since ?? today).sort()[0]!;
+    const text = group.length === 1 ? first.ask ? `${label(first)}: ${first.ask}` : label(first) : `${first.ask} (${group.map((ticket) => ticket.id).join(', ')})`;
+    return { who: first.who!, owes: first.owner === 'them' ? 'them' : 'you', text, since, days: workingDays(since, today),
+      sources: group.map(source), tickets: group.map(card) };
   });
   const next = open.filter((ticket) => ticket.owner !== 'them').map((ticket): InitiativeNext => ({ owner: ticket.owner === 'ai' ? 'ai' : 'you',
-    text: ticket.ask && ticket.who ? `${label(ticket)}. ${ticket.who}: ${ticket.ask}` : label(ticket), draft: null, sources: [source(ticket)] }));
+    text: ticket.ask && ticket.who ? `${label(ticket)}. ${ticket.who}: ${ticket.ask}` : label(ticket), draft: null, sources: [source(ticket)], tickets: [card(ticket)] }));
   const done = tickets.filter((ticket) => ticket.done && ticket.done_at && ticket.done_at >= shiftDay(today, -7))
-    .map((ticket): InitiativeLine => ({ text: label(ticket), sources: [source(ticket)] }));
+    .map((ticket): InitiativeLine => ({ text: label(ticket), sources: [source(ticket)], tickets: [card(ticket)] }));
   return { ...summary, waits, next, done };
 }
 

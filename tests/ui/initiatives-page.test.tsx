@@ -173,3 +173,30 @@ test('the overview person map supports keyboard activation and reset', async () 
   await userEvent.keyboard(' ');
   expect(detail.querySelector('[data-focus-waits]')).toBeNull();
 });
+
+test('a card from the note tickets opens in place with its table row; a grouped Them card lists every ticket', async () => {
+  const ticket = (id: string, title: string, extra: object = {}) => ({ id, title, who: null, ask: null, since: null, after: null, done_at: null, details: [], ...extra });
+  const view = acme();
+  view.summary = { ...view.summary!,
+    waits: [{ who: 'Admin', owes: 'them', text: 'ok to buy (R.1, R.3)', since: '2026-11-21', days: 0, sources: [source('KR.1', '2026-11-21', '- [ ] R.1')],
+      tickets: [ticket('R.1', 'Reservation D8as_v5', { who: 'Admin', ask: 'ok to buy', since: '2026-11-21' }), ticket('R.3', 'Reservation P1v3', { who: 'Admin', ask: 'ok to buy', after: '1.5' })] }],
+    next: [{ owner: 'you', text: '1.4 AKS EU 12 to 11 nodes', draft: null, sources: [source('K1.4', '2026-11-22', '- [ ] 1.4')],
+      tickets: [ticket('1.4', 'AKS EU 12 to 11 nodes', { details: [{ label: 'RTO', value: 'none, cordon + drain' }, { label: 'USD/m', value: '350' }] })] }] };
+  render(<InitiativesPage {...props()} initialState={{ ...state(), initiatives: [view] }} />);
+  const detail = screen.getByRole('region', { name: 'acme Access' });
+  const you = within(detail).getByRole('region', { name: 'You (1)' });
+  expect(you.textContent).not.toContain('cordon + drain');
+  await userEvent.click(within(you).getByText('1.4 AKS EU 12 to 11 nodes'));
+  expect(you.textContent).toContain('RTOnone, cordon + drain');
+  expect(you.textContent).toContain('USD/m350');
+  expect(within(detail).queryByRole('button', { name: 'Torna alla mappa' })).toBeNull();
+  await userEvent.click(within(you).getByRole('button', { name: 'Hide details' }));
+  expect(you.textContent).not.toContain('cordon + drain');
+  const them = within(detail).getByRole('region', { name: 'Them (1)' });
+  expect(them.textContent).toContain('since 21/11');
+  await userEvent.click(within(them).getByRole('button', { name: 'Show details' }));
+  expect(them.textContent).toContain('R.1 Reservation D8as_v5');
+  expect(them.textContent).toContain('R.3 Reservation P1v3');
+  expect(them.textContent).toContain('After1.5');
+  expect(them.textContent).toContain('Since21/11/2026');
+});
