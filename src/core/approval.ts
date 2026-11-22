@@ -14,6 +14,16 @@ export function approve(cfg: Config, db: DatabaseSync, ticket: number, note = ''
     if (!row) throw new TicketError('ticket.not-found', `Ticket ${ticket} not found`);
     const owner = row as unknown as Ticket;
     if (!cfg.tickets.enabled || !cfg.chats.enabled) return ticket;
+    // A wait is approved with no chat: Discuss opens its first one, with Antonio's question as the note
+    if (discuss && owner.approved_at && owner.lifecycle === 'active' && !owner.session_id
+      && !db.prepare("SELECT 1 FROM job WHERE ticket=? AND kind='start_chat'").get(ticket)) {
+      const now = utc();
+      db.prepare('UPDATE ticket SET approval_note=?,last_activity_at=? WHERE id=?').run(note, now, ticket);
+      db.prepare("INSERT INTO timeline(ticket,at,kind,actor,body,event_key) VALUES (?,?,'approval','you',?,?)")
+        .run(ticket, now, ['Discuss in chat first', note].filter(Boolean).join('\n'), `approval:ticket:${ticket}`);
+      enqueue(db, 'start_chat', `start:ticket:${ticket}`, { discuss: true }, ticket);
+      return ticket;
+    }
     if (owner.approved_at) {
       if (owner.approval_note !== note) throw new TicketError('ticket.conflict', 'Ticket already approved with a different note');
       return ticket;

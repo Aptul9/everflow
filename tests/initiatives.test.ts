@@ -171,7 +171,7 @@ test('proposed tickets: new work from the note becomes tickets of the initiative
   expect(data.existing_tickets).toEqual([{ id: 'T1', title: 'Old dismissed idea', lifecycle: 'dismissed' }]);
   expect(data.note).toContain('## goal');
   expect(data.note).not.toContain('## log');
-  expect(made).toEqual([2, 2]);
+  expect(made).toEqual({ tickets: [2, 2], waits: [], answered: [] });
   expect(db.prepare('SELECT title,client,initiative,origin,lifecycle,kb_notes FROM ticket WHERE id=2').get()).toEqual({ title: 'Ask Geoff: Vault questions 1-3', client: 'acme',
     initiative: 'demo', origin: 'ai', lifecycle: 'proposed', kb_notes: '["01_Projects/demo.md"]' });
 });
@@ -185,6 +185,75 @@ test('a failed proposal is recorded and leaves the summary of the same run in pl
   requestRefresh(db);
   await refreshInitiatives(cfg, db, { providers: { first: provider(peer.baseURL) } });
   expect(readInitiatives(db, cfg).initiatives[0]).toMatchObject({ error: null, summary: { headline: 'h' } });
-  expect(JSON.parse(String(db.prepare("SELECT value FROM setting WHERE key='initiative.proposed:demo'").get()!.value))).toMatchObject({ tickets: [], error: 'Proposed tickets are not valid JSON of the asked shape; answer starts: broken' });
+  expect(JSON.parse(String(db.prepare("SELECT value FROM setting WHERE key='initiative.proposed:demo'").get()!.value))).toMatchObject({ tickets: [], waits: [], answered: [], error: 'Proposed tickets are not valid JSON of the asked shape; answer starts: broken' });
   expect(db.prepare('SELECT COUNT(*) AS n FROM ticket').get()!.n).toBe(0);
+});
+
+test('questions already put become waits citing their log entry: a proposed ask turns into its wait, an unknown entry is dropped, a run again changes nothing', async () => {
+  const { cfg } = fixture();
+  using db = openDb(cfg.db.path);
+  db.prepare("INSERT INTO ticket(title,client,initiative,origin,lifecycle,created_at) VALUES ('Ask Geoff: Vault questions 1-3','acme','demo','ai','proposed',?)").run(AT);
+  const waits = [{ who: 'Geoff', what: 'Vault questions 1-3', src: 'L2', ticket: 'T1' }, { who: 'Mohamed', what: 'GEN 15.4 staying or removed', src: 'L3', ticket: null },
+    { who: 'Ghost', what: 'invented', src: 'L99', ticket: null }];
+  await using peer = await scriptedPeer(() => ({ body: { content: [{ type: 'text', text: JSON.stringify({ tickets: [], waits, answered: [] }) }] } }));
+  const options = { providers: { first: provider(peer.baseURL) } };
+  expect(await proposeTickets(cfg, db, 'demo', options)).toEqual({ tickets: [], waits: [1, 2], answered: [] });
+  expect(db.prepare('SELECT id,title,lifecycle,report,report_line,report_at,origin FROM ticket ORDER BY id').all()).toEqual([
+    { id: 1, title: 'Waiting on Geoff: Vault questions 1-3', lifecycle: 'active', report: 'waiting_them', report_line: 'Geoff: Vault questions 1-3', report_at: '2026-11-17T12:00:00.000000Z', origin: 'ai' },
+    { id: 2, title: 'Waiting on Mohamed: GEN 15.4 staying or removed', lifecycle: 'active', report: 'waiting_them', report_line: 'Mohamed: GEN 15.4 staying or removed', report_at: '2026-11-11T12:00:00.000000Z', origin: 'ai' }]);
+  expect(String(db.prepare('SELECT summary FROM ticket WHERE id=2').get()!.summary)).toBe('Asked 11/11: SENT Mohamed 4): standard section 1 still maps GEN 15.4, staying or removed?');
+  expect(readInitiatives(db, cfg).initiatives[0]!.waits.map((wait) => [wait.who, wait.days])).toEqual([['Geoff', 1], ['Mohamed', 5]]);
+  // Again: the link to T1, now a wait, creates nothing; the same Mohamed wait returns its ticket
+  expect(await proposeTickets(cfg, db, 'demo', options)).toEqual({ tickets: [], waits: [2], answered: [] });
+  expect(db.prepare('SELECT COUNT(*) AS n FROM ticket').get()!.n).toBe(2);
+  const offered = JSON.parse(peer.requests[1]!.messages[0]!.content as string).existing_tickets;
+  expect(offered[0]).toEqual({ id: 'T1', title: 'Waiting on Geoff: Vault questions 1-3', lifecycle: 'active', waiting_on: 'Geoff: Vault questions 1-3', since: '2026-11-17' });
+});
+
+test('an answer in the log moves its wait to Needs you, only from an entry dated on or after the question', async () => {
+  const { cfg } = fixture();
+  using db = openDb(cfg.db.path);
+  const answers = [{ tickets: [], waits: [{ who: 'Geoff', what: 'Vault questions 1-3', src: 'L2' }, { who: 'Mohamed', what: 'GEN 15.4', src: 'L3' }], answered: [] },
+    { tickets: [], waits: [], answered: [{ ticket: 'T1', src: 'L3' }, { ticket: 'T2', src: 'L1' }, { ticket: 'T9', src: 'L1' }] }];
+  await using peer = await scriptedPeer((_body, index) => ({ body: { content: [{ type: 'text', text: JSON.stringify(answers[Math.min(index, 1)]) }] } }));
+  const options = { providers: { first: provider(peer.baseURL) } };
+  await proposeTickets(cfg, db, 'demo', options);
+  expect(await proposeTickets(cfg, db, 'demo', options)).toEqual({ tickets: [], waits: [], answered: [2] });
+  expect(db.prepare('SELECT id,report,report_line FROM ticket ORDER BY id').all()).toEqual([
+    { id: 1, report: 'waiting_them', report_line: 'Geoff: Vault questions 1-3' },
+    { id: 2, report: 'needs_you', report_line: 'Answered 18/11: SENT Liubomir: thanks, point taken.' }]);
+  expect(readInitiatives(db, cfg).initiatives[0]!.waits.map((wait) => wait.who)).toEqual(['Geoff']);
+  expect(await proposeTickets(cfg, db, 'demo', options)).toEqual({ tickets: [], waits: [], answered: [] });
+});
+
+test('one log entry that put several questions to the same person gives one wait each; only the same question twice leaves AI as dismissed', async () => {
+  const { cfg } = fixture();
+  using db = openDb(cfg.db.path);
+  for (const title of ['Ask Geoff: kv-ocp-platform readers', 'Ask Geoff: role id', 'Ask Geoff: rebuild delete', 'Ask Geoff again: role id'])
+    db.prepare("INSERT INTO ticket(title,client,initiative,origin,lifecycle,created_at) VALUES (?,'acme','demo','ai','proposed',?)").run(title, AT);
+  const waits = [{ who: 'Geoff', what: 'kv-ocp-platform readers', src: 'L2', ticket: 'T1' }, { who: 'Geoff', what: 'role id', src: 'L2', ticket: 'T2' },
+    { who: 'Geoff', what: 'rebuild delete', src: 'L2', ticket: 'T3' }, { who: 'Geoff', what: 'Role ID', src: 'L2', ticket: 'T4' }];
+  await using peer = await scriptedPeer(() => ({ body: { content: [{ type: 'text', text: JSON.stringify({ tickets: [], waits, answered: [] }) }] } }));
+  expect(await proposeTickets(cfg, db, 'demo', { providers: { first: provider(peer.baseURL) } })).toEqual({ tickets: [], waits: [1, 2, 3, 2], answered: [] });
+  expect(db.prepare('SELECT id,lifecycle,report_line FROM ticket ORDER BY id').all()).toEqual([
+    { id: 1, lifecycle: 'active', report_line: 'Geoff: kv-ocp-platform readers' }, { id: 2, lifecycle: 'active', report_line: 'Geoff: role id' },
+    { id: 3, lifecycle: 'active', report_line: 'Geoff: rebuild delete' }, { id: 4, lifecycle: 'dismissed', report_line: 'Already asked: same as wait #2' }]);
+});
+
+test('work that cannot move until an asked answer waits on it with its own title and texts, two pieces of work can wait on one answer, and a reworded wait linked to a listed wait creates nothing', async () => {
+  const { cfg } = fixture();
+  using db = openDb(cfg.db.path);
+  for (const title of ['Resize MySQL prod (204 USD/m)', 'MySQL 8.0 to 8.4 on 4 servers'])
+    db.prepare("INSERT INTO ticket(title,client,initiative,origin,lifecycle,summary,proposal,created_at) VALUES (?,'acme','demo','ai','proposed','Facts','1. Window\n2. Resize',?)").run(title, AT);
+  const answers = [{ waits: [{ who: 'Mohamed', what: 'maintenance window', src: 'L3', ticket: 'T1' }, { who: 'Mohamed', what: 'maintenance window', src: 'L3', ticket: 'T2' }] },
+    { waits: [{ who: 'Mohamed', what: 'the maintenance window for both', src: 'L3', ticket: 'T1' }] }];
+  await using peer = await scriptedPeer((_body, index) => ({ body: { content: [{ type: 'text', text: JSON.stringify(answers[Math.min(index, 1)]) }] } }));
+  const options = { providers: { first: provider(peer.baseURL) } };
+  expect(await proposeTickets(cfg, db, 'demo', options)).toEqual({ tickets: [], waits: [1, 2], answered: [] });
+  expect(db.prepare('SELECT id,title,summary,proposal,report,report_line FROM ticket ORDER BY id').all()).toEqual([
+    { id: 1, title: 'Resize MySQL prod (204 USD/m)', summary: 'Facts', proposal: '1. Window\n2. Resize', report: 'waiting_them', report_line: 'Mohamed: maintenance window' },
+    { id: 2, title: 'MySQL 8.0 to 8.4 on 4 servers', summary: 'Facts', proposal: '1. Window\n2. Resize', report: 'waiting_them', report_line: 'Mohamed: maintenance window' }]);
+  expect(readInitiatives(db, cfg).initiatives[0]!.waits.map((wait) => [wait.who, wait.days])).toEqual([['Mohamed', 5], ['Mohamed', 5]]);
+  expect(await proposeTickets(cfg, db, 'demo', options)).toEqual({ tickets: [], waits: [], answered: [] });
+  expect(db.prepare('SELECT COUNT(*) AS n FROM ticket').get()!.n).toBe(2);
 });

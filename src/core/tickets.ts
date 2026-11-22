@@ -734,7 +734,7 @@ function closeFuture(db: DatabaseSync, ticket: number, at: string, keepUnseen = 
   }
 }
 
-function finishTicket(db: DatabaseSync, ticket: number, lifecycle: 'done' | 'dismissed', reason: string, at?: string, actor: 'you' | 'chat' = 'you'): number {
+function finishTicket(db: DatabaseSync, ticket: number, lifecycle: 'done' | 'dismissed', reason: string, at?: string, actor: 'you' | 'chat' | 'agent' = 'you'): number {
   if (typeof reason !== 'string') throw new TicketError('ticket.invalid-input', 'Correction reason must be a string');
   return transaction(db, () => {
     const now = utc(at);
@@ -855,13 +855,25 @@ export const newTicketSchema = z.strictObject({
   key: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/, 'Key is 1-80 letters, digits, dot, dash or underscore').optional(),
   initiative: z.string().min(1).optional(),
   origin: z.literal('ai').optional(),
+  // A question Antonio already put: the ticket starts in Waiting on them, with no chat until something opens one
+  waiting: z.object({ who: z.string().trim().min(1).max(40).regex(/^[^:]+$/, 'who has no colon'), what: z.string().trim().min(1).max(200),
+    since: z.iso.date() }).optional(),
 });
 export type NewTicket = z.input<typeof newTicketSchema>;
+export type Waiting = NonNullable<z.output<typeof newTicketSchema>['waiting']>;
+
+// A wait is active and approved without a chat; its STATUS-shaped line "<who>: <what>" is what the Overview map reads.
+// since: the day the question went out, the start of the waiting days
+function setWaiting(db: DatabaseSync, ticket: number, waiting: Waiting, now: string): void {
+  db.prepare(`UPDATE ticket SET lifecycle='active',approved_at=?,approval_note='',report='waiting_them',report_line=?,report_at=?,last_activity_at=? WHERE id=?`)
+    .run(now, `${waiting.who}: ${waiting.what}`, utc(`${waiting.since}T12:00:00Z`), now, ticket);
+}
 
 // A ticket from Antonio's own plan rather than from a message: proposed, no conversation, no chat until approved.
 // key makes a scripted run repeatable: the same key returns the ticket it made the first time.
 // initiative: the Overview initiative it belongs to, of the same client; it then shows on the Overview, not on the board.
 // origin 'ai': the AI suggested it; its initiative shows it in the AI column until it is started.
+// waiting: it is a wait, not work to start (see setWaiting).
 export function createTicket(db: DatabaseSync, cfg: Pick<Config, 'clients' | 'initiatives'>, input: unknown, at?: string, actor: 'you' | 'chat' = 'you'): number {
   const parsed = newTicketSchema.safeParse(input);
   if (!parsed.success) throw new TicketError('ticket.invalid-input', parsed.error.message);
@@ -878,8 +890,49 @@ export function createTicket(db: DatabaseSync, cfg: Pick<Config, 'clients' | 'in
     const id = Number(db.prepare(`INSERT INTO ticket(title,client,summary,ask,proposal,kb_notes,initiative,origin,created_at,last_activity_at)
       VALUES (?,?,?,?,?,?,?,?,?,?)`).run(fields.title, fields.client, fields.summary, fields.ask, fields.proposal, JSON.stringify(fields.kb_notes),
       fields.initiative ?? null, fields.origin ?? null, now, now).lastInsertRowid);
-    history(db, id, now, 'comment', actor, fields.origin === 'ai' ? 'Suggested by AI' : 'Created by hand', key ?? `create:ticket:${id}`);
+    if (fields.waiting) setWaiting(db, id, fields.waiting, now);
+    history(db, id, now, 'comment', actor, fields.waiting ? `Waiting on ${fields.waiting.who} since ${fields.waiting.since}${fields.origin === 'ai' ? ', found by AI' : ''}`
+      : fields.origin === 'ai' ? 'Suggested by AI' : 'Created by hand', key ?? `create:ticket:${id}`);
     return id;
+  });
+}
+
+// A proposed ticket that cannot move until an answer already asked for becomes a wait, keeping its number and its own
+// texts. question: the ticket is only that question; it takes the wait's title, and when another ticket already holds
+// the wait it is the same question, dismissed as such. Other work waits on the same answer while that ticket still
+// waits. key: the wait's key, held by the first ticket to wait on it. Returns the ticket that holds or joins the wait,
+// or null when nothing changed.
+export function becomeWait(db: DatabaseSync, ticket: number, wait: { waiting: Waiting; title: string; question: boolean }, key: string, at?: string): number | null {
+  return transaction(db, () => {
+    const now = utc(at);
+    const row = getTicket(db, ticket);
+    if (row.lifecycle !== 'proposed' || row.approved_at || row.merged_into) return null;
+    const held = db.prepare('SELECT ticket FROM timeline WHERE event_key=?').get(`create:${key}`);
+    if (held && wait.question) {
+      finishTicket(db, ticket, 'dismissed', `Already asked: same as wait #${held.ticket}`, now, 'agent');
+      return Number(held.ticket);
+    }
+    if (held) {
+      const holder = getTicket(db, Number(held.ticket));
+      if (holder.lifecycle !== 'active' || holder.report !== 'waiting_them') return null;
+    }
+    history(db, ticket, now, 'comment', 'agent', `Already asked: now waiting on ${wait.waiting.who} since ${wait.waiting.since}`, held ? `wait:${key}:ticket:${ticket}` : `create:${key}`);
+    if (wait.question) db.prepare('UPDATE ticket SET title=? WHERE id=?').run(wait.title, ticket);
+    setWaiting(db, ticket, wait.waiting, now);
+    return ticket;
+  });
+}
+
+// The answer to a wait showed up outside its chat (the initiative's log): the ticket moves to Needs you with it, and
+// Antonio reads it and closes or goes on. Only a wait with no chat: a chat reports its own ticket. key: one move per answer.
+export function waitAnswered(db: DatabaseSync, ticket: number, line: string, key: string, at?: string): boolean {
+  return transaction(db, () => {
+    const now = utc(at);
+    const row = getTicket(db, ticket);
+    if (row.lifecycle !== 'active' || row.report !== 'waiting_them' || row.session_id) return false;
+    if (!history(db, ticket, now, 'status', 'agent', line, `answered:${key}`)) return false;
+    db.prepare("UPDATE ticket SET report='needs_you',report_line=?,report_at=?,last_activity_at=? WHERE id=?").run(line, now, now, ticket);
+    return true;
   });
 }
 

@@ -204,6 +204,19 @@ test('a forward input repeats only the STATUS contract, the data boundary and th
   expect(text).not.toContain('For relink or merge');
 });
 
+test('a message that opens the first chat of a wait carries the whole brief, not the short forward reminder', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  using db = openDb(path);
+  const ticket = proposed(db, { lifecycle: 'active', approved_at: AT, approval_note: '', report: 'waiting_them', report_line: 'Bob: AU APIs',
+    report_at: AT, summary: 'Asked 05/11: SENT Bob the AU API question' });
+  db.prepare("UPDATE ticket SET session_id='ses_wait' WHERE id=?").run(ticket);
+  jobs.enqueue(db, 'forward', 'wait-answer', { batch_ids: [addBatch(db, ticket, { text: 'Bob: the AU APIs can go' })] }, ticket);
+  const text = chat.prepareTurn(cfg, db, claimed(db, cfg), 'forward')!.text;
+  for (const exact of ['Everflow is in trial', 'Summary: Asked 05/11: SENT Bob the AU API question', 'Bob: the AU APIs can go', 'End every turn with STATUS:']) expect(text).toContain(exact);
+  expect(text).not.toContain(`New input for ticket #${ticket}`);
+});
+
 test('with a build.txt beside the config the close command runs the build pinned there when it runs, not the one the chat started on', async () => {
   const f = await admittedFixture();
   await using peer = f.peer;

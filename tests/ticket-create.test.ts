@@ -5,7 +5,7 @@ import { approve } from '../src/core/approval.ts';
 import { loadConfig } from '../src/core/config.ts';
 import { openDb } from '../src/core/db.ts';
 import { readInitiatives } from '../src/core/initiative-state.ts';
-import { createTicket, stage } from '../src/core/tickets.ts';
+import { becomeWait, createTicket, stage, waitAnswered } from '../src/core/tickets.ts';
 import { scratch } from './support.ts';
 
 const AT = '2026-11-21T09:00:00.000000Z';
@@ -116,4 +116,73 @@ test('a ticket of an initiative is created only for that initiative client and s
   const suggested = createTicket(db, cfg, { client: 'acme', title: 'Remind Bob', initiative: 'acme-plan', origin: 'ai' });
   expect(readState(db, cfg, new Date(AT)).initiatives['acme-plan']!.needs_you.find((ticket) => ticket.id === suggested)?.origin).toBe('ai');
   expect(() => parseCommand([...BASE, 'ticket', 'close', '7', '--ai'], undefined)).toThrow(CliError);
+});
+
+test('a wait starts in Waiting on them with no chat, and the Overview map reads who and since from it', async () => {
+  const { path, cfg } = fixture();
+  cfg.initiatives = { 'acme-plan': { title: 'Plan', client: 'acme', note: '01_Projects/acme/plan.md', related: [] } };
+  using db = openDb(path);
+  const waiting = { who: 'Bob', what: 'answer on the AU APIs', since: '2026-11-18' };
+  const id = createTicket(db, cfg, { client: 'acme', initiative: 'acme-plan', title: 'Waiting on Bob: answer on the AU APIs', waiting, key: 'acme-plan-wait-1', origin: 'ai' });
+  expect(db.prepare('SELECT lifecycle,approval_note,report,report_line,report_at,session_id FROM ticket WHERE id=?').get(id)).toEqual({ lifecycle: 'active', approval_note: '',
+    report: 'waiting_them', report_line: 'Bob: answer on the AU APIs', report_at: '2026-11-18T12:00:00.000000Z', session_id: null });
+  expect(approve(cfg, db, id)).toBe(id);
+  expect(stage(db, id)).toBe('Waiting on them');
+  expect(db.prepare('SELECT COUNT(*) AS n FROM job').get()!.n).toBe(0);
+  expect(createTicket(db, cfg, { client: 'acme', initiative: 'acme-plan', title: 'Again', waiting, key: 'acme-plan-wait-1' })).toBe(id);
+  expect(readInitiatives(db, cfg, Date.parse('2026-11-23T09:00:00Z')).initiatives[0]!.waits.map((wait) => [wait.who, wait.since, wait.days])).toEqual([['Bob', '2026-11-18', 3]]);
+  const { readState } = await import('../src/web/state.ts');
+  expect(readState(db, cfg, new Date(AT)).initiatives['acme-plan']!.waiting_them.map((ticket) => ticket.id)).toEqual([id]);
+  expect(() => createTicket(db, cfg, { client: 'acme', title: 'X', waiting: { ...waiting, who: 'Bob: Smith' } })).toThrow(/colon/);
+});
+
+test('a proposed ask becomes its wait once, renamed and keeping its texts; a second ask of it leaves AI as dismissed, other work waits on the same answer', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const id = createTicket(db, cfg, { client: 'acme', title: 'Ask Bob: AU APIs', summary: 'Sent 18/11', ask: 'Get the answer', proposal: '1. Remind Bob', origin: 'ai' });
+  const wait = { waiting: { who: 'Bob', what: 'AU APIs', since: '2026-11-18' }, title: 'Waiting on Bob: AU APIs', question: true };
+  expect(becomeWait(db, id, wait, 'acme-wait-1')).toBe(id);
+  expect(db.prepare('SELECT title,summary,ask,proposal,lifecycle,report,report_line FROM ticket WHERE id=?').get(id)).toEqual({ title: 'Waiting on Bob: AU APIs',
+    summary: 'Sent 18/11', ask: 'Get the answer', proposal: '1. Remind Bob', lifecycle: 'active', report: 'waiting_them', report_line: 'Bob: AU APIs' });
+  expect(becomeWait(db, id, wait, 'acme-wait-1')).toBeNull();
+  expect(createTicket(db, cfg, { client: 'acme', title: 'Other', key: 'acme-wait-1' })).toBe(id);
+  const twin = createTicket(db, cfg, { client: 'acme', title: 'Ask Bob again: AU APIs', origin: 'ai' });
+  expect(becomeWait(db, twin, wait, 'acme-wait-1')).toBe(id);
+  expect(db.prepare('SELECT lifecycle,report_line FROM ticket WHERE id=?').get(twin)).toEqual({ lifecycle: 'dismissed', report_line: `Already asked: same as wait #${id}` });
+  expect(db.prepare("SELECT actor FROM timeline WHERE ticket=? AND kind='status'").get(twin)!.actor).toBe('agent');
+  const work = createTicket(db, cfg, { client: 'acme', title: 'Decommission AU (760 USD/m)', proposal: '1. Export\n2. Delete' });
+  expect(becomeWait(db, work, { ...wait, question: false }, 'acme-wait-1')).toBe(work);
+  expect(db.prepare('SELECT title,proposal,report,report_line FROM ticket WHERE id=?').get(work)).toEqual({ title: 'Decommission AU (760 USD/m)', proposal: '1. Export\n2. Delete',
+    report: 'waiting_them', report_line: 'Bob: AU APIs' });
+  // Once the wait is answered, later work no longer joins it
+  db.prepare("UPDATE ticket SET report='needs_you' WHERE id IN (?,?)").run(id, work);
+  const late = createTicket(db, cfg, { client: 'acme', title: 'Delete US SFTP' });
+  expect(becomeWait(db, late, { ...wait, question: false }, 'acme-wait-1')).toBeNull();
+  expect(db.prepare('SELECT lifecycle FROM ticket WHERE id=?').get(late)!.lifecycle).toBe('proposed');
+});
+
+test('an answer found outside the chat moves a wait to Needs you once; a wait with a chat is left to its chat', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const waiting = { who: 'Bob', what: 'AU APIs', since: '2026-11-18' };
+  const id = createTicket(db, cfg, { client: 'acme', title: 'Waiting on Bob', waiting });
+  expect(waitAnswered(db, id, 'Answered 20/11: Bob says the AU APIs can go', 'ticket:1:a')).toBe(true);
+  expect(db.prepare('SELECT report,report_line FROM ticket WHERE id=?').get(id)).toEqual({ report: 'needs_you', report_line: 'Answered 20/11: Bob says the AU APIs can go' });
+  expect(stage(db, id)).toBe('Needs you');
+  expect(waitAnswered(db, id, 'again', 'ticket:1:b')).toBe(false);
+  const chatted = createTicket(db, cfg, { client: 'acme', title: 'Chat wait', waiting });
+  db.prepare("UPDATE ticket SET session_id='ses_x' WHERE id=?").run(chatted);
+  expect(waitAnswered(db, chatted, 'Answered', 'ticket:2:a')).toBe(false);
+});
+
+test('Discuss on a wait opens its first chat with the question as the note; later it changes nothing', () => {
+  const { path, cfg } = fixture();
+  using db = openDb(path);
+  const id = createTicket(db, cfg, { client: 'acme', title: 'Waiting on Bob', waiting: { who: 'Bob', what: 'AU APIs', since: '2026-11-18' } });
+  approve(cfg, db, id, 'Draft a reminder to Bob', true);
+  expect(db.prepare('SELECT kind,state,payload FROM job WHERE ticket=?').all(id)).toEqual([{ kind: 'start_chat', state: 'queued', payload: '{"discuss":true}' }]);
+  expect(db.prepare('SELECT approval_note FROM ticket WHERE id=?').get(id)!.approval_note).toBe('Draft a reminder to Bob');
+  expect(stage(db, id)).toBe('Working');
+  expect(approve(cfg, db, id, 'Draft a reminder to Bob', true)).toBe(id);
+  expect(db.prepare('SELECT COUNT(*) AS n FROM job WHERE ticket=?').get(id)!.n).toBe(1);
 });
