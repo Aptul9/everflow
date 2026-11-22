@@ -172,8 +172,8 @@ test('proposed tickets: new work from the note becomes tickets of the initiative
   expect(data.note).toContain('## goal');
   expect(data.note).not.toContain('## log');
   expect(made).toEqual([2, 2]);
-  expect(db.prepare('SELECT title,client,initiative,lifecycle,kb_notes FROM ticket WHERE id=2').get()).toEqual({ title: 'Ask Geoff: Vault questions 1-3', client: 'acme',
-    initiative: 'demo', lifecycle: 'proposed', kb_notes: '["01_Projects/demo.md"]' });
+  expect(db.prepare('SELECT title,client,initiative,origin,lifecycle,kb_notes FROM ticket WHERE id=2').get()).toEqual({ title: 'Ask Geoff: Vault questions 1-3', client: 'acme',
+    initiative: 'demo', origin: 'ai', lifecycle: 'proposed', kb_notes: '["01_Projects/demo.md"]' });
 });
 
 test('a failed proposal is recorded and leaves the summary of the same run in place', async () => {

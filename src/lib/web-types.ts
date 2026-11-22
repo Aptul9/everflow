@@ -32,6 +32,8 @@ export interface TicketCard {
   confidence: number | null;
   maybe_ticket: number | null;
   kb_notes: string[];
+  // 'ai' when the AI suggested the ticket; an initiative shows it in its AI column until it is started
+  origin: 'ai' | null;
   created_at: string;
   last_activity_at: string | null;
   closed_at: string | null;

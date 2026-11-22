@@ -111,8 +111,9 @@ function TriageCard(props: { batch: TriageBatch; now: number }) {
 }
 
 export type Board = ReturnType<typeof useOverview>;
-// One column: its group decides what a drop on it does; batches and triage cards only exist on the board
-export interface ColumnSpec { group: Group; label: string; cards: CardData[]; batches?: SkippedBatch[]; triaging?: TriageBatch[] }
+// One column: its group decides what a drop on it does; batches and triage cards only exist on the board.
+// id tells apart columns of the same group (default: the group)
+export interface ColumnSpec { group: Group; id?: string; label: string; cards: CardData[]; batches?: SkippedBatch[]; triaging?: TriageBatch[] }
 const gridColumns: Record<number, string> = { 5: 'xl:grid-cols-5', 6: 'xl:grid-cols-6' };
 
 // The board's columns with their cards, selection, drag and drop, bulk actions, keyboard and chat dialog.
@@ -153,8 +154,8 @@ export function TicketColumns(props: { board: Board; columns: ColumnSpec[]; titl
   const toggle = (set: (update: (previous: Set<number>) => Set<number>) => void, id: number, checked: boolean) =>
     set((previous) => { const next = new Set(previous); if (checked) next.add(id); else next.delete(id); return next; });
   const [dragging, setDragging] = useState<Dragged | null>(null);
-  const [over, setOver] = useState<Group | null>(null);
-  const [limits, setLimits] = useState<Partial<Record<Group, number>>>({});
+  const [over, setOver] = useState<string | null>(null);
+  const [limits, setLimits] = useState<Record<string, number>>({});
   const accepts = (group: Group) => !!dragging && dropAction(group, dragging, state.chats_enabled) !== null;
   const drop = (group: Group) => {
     const action = dragging && dropAction(group, dragging, state.chats_enabled);
@@ -197,17 +198,17 @@ export function TicketColumns(props: { board: Board; columns: ColumnSpec[]; titl
     return () => document.removeEventListener('keydown', keyboard);
   }, []);
 
-  const columns = props.columns.map(({ group, label, ...spec }) => {
+  const columns = props.columns.map(({ group, id = group, label, ...spec }) => {
     const batches = (spec.batches ?? []).filter((batch) => matches([batch.title, batch.source, batch.account, batch.outcome, ...batch.messages.map((message) => message.text)].join(' ')));
     const cards = spec.cards.filter((ticket) => matches([ticket.title, ticket.client, ticket.session_title, ticket.summary, ticket.ask, ticket.proposal, ...ticket.refs.map((ref) => ref.key)].join(' ')));
     const triaging = (spec.triaging ?? []).filter((batch) => matches([batch.title, batch.source, batch.account, ...batch.messages.map((message) => message.text)].join(' ')));
     const total = (spec.batches?.length ?? 0) + (spec.triaging?.length ?? 0) + spec.cards.length;
     const shown = batches.length + triaging.length + cards.length;
     // Each column renders its first `limit` cards in order: batches, then triage cards, then tickets
-    const limit = limits[group] ?? PAGE;
+    const limit = limits[id] ?? PAGE;
     const visible = { batches: batches.slice(0, limit), triaging: triaging.slice(0, Math.max(0, limit - batches.length)),
       cards: cards.slice(0, Math.max(0, limit - batches.length - triaging.length)) };
-    return { group, label, batches, triaging, cards, total, shown, limit, visible, hidden: Math.max(0, shown - limit) };
+    return { group, id, label, batches, triaging, cards, total, shown, limit, visible, hidden: Math.max(0, shown - limit) };
   });
 
   return <div ref={root}>
@@ -233,17 +234,17 @@ export function TicketColumns(props: { board: Board; columns: ColumnSpec[]; titl
         </div>}
       </div>
       <nav aria-label={`${props.title} columns`} className="-mx-4 flex gap-1.5 overflow-x-auto px-4 [scrollbar-width:none] sm:-mx-6 sm:px-6 xl:hidden">
-        {columns.map((column) => <a key={column.group} href={`#col-${column.group}`} className="inline-flex shrink-0 items-center gap-1.5 rounded-full border bg-card px-2.5 py-1 text-xs">
+        {columns.map((column) => <a key={column.id} href={`#col-${column.id}`} className="inline-flex shrink-0 items-center gap-1.5 rounded-full border bg-card px-2.5 py-1 text-xs">
           <span aria-hidden="true" className={cn('size-1.5 rounded-full', tones[columnTone[column.group]].dot)} />{column.label}<span className="font-semibold tabular-nums">{column.total}</span>
         </a>)}
       </nav>
       <div className={cn('relative -mx-4 flex snap-x snap-mandatory scroll-px-4 gap-3 overflow-x-auto px-4 pb-3 sm:-mx-6 sm:scroll-px-6 sm:px-6 xl:mx-0 xl:grid xl:overflow-visible xl:px-0 xl:pb-0', gridColumns[columns.length] ?? 'xl:grid-cols-6')}>
-        {columns.map((column) => <section key={column.group} id={`col-${column.group}`} data-column={column.group} aria-label={`${column.label} (${column.total})`}
-          onDragOver={(event) => { if (accepts(column.group)) { event.preventDefault(); if (over !== column.group) setOver(column.group); } }}
+        {columns.map((column) => <section key={column.id} id={`col-${column.id}`} data-column={column.id} aria-label={`${column.label} (${column.total})`}
+          onDragOver={(event) => { if (accepts(column.group)) { event.preventDefault(); if (over !== column.id) setOver(column.id); } }}
           onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(null); }}
           onDrop={(event) => { event.preventDefault(); drop(column.group); }}
           className={cn('flex w-[84vw] max-w-[340px] shrink-0 scroll-mt-28 snap-start flex-col rounded-xl bg-muted/80 ring-1 ring-border/60 transition-shadow sm:w-[300px] xl:w-auto xl:max-w-none xl:min-w-0',
-            accepts(column.group) && 'ring-2 ring-primary/30', over === column.group && 'bg-accent/70 ring-primary/70')}>
+            accepts(column.group) && 'ring-2 ring-primary/30', over === column.id && 'bg-accent/70 ring-primary/70')}>
           <div className="flex items-center gap-2 px-3 pt-3 pb-2">
             <span aria-hidden="true" className={cn('size-2 rounded-full', tones[columnTone[column.group]].dot)} />
             <h3 className="text-[13px] font-semibold">{column.label}</h3>
@@ -271,10 +272,10 @@ export function TicketColumns(props: { board: Board; columns: ColumnSpec[]; titl
             {(column.hidden > 0 || column.limit > PAGE) && <div className="flex gap-1.5">
               {column.hidden > 0 && <Button type="button" variant="ghost" size="sm" className="h-8 min-w-0 flex-1 text-xs text-muted-foreground"
                 aria-label={`Show ${Math.min(PAGE, column.hidden)} more in ${column.label}`}
-                onClick={() => setLimits((previous) => ({ ...previous, [column.group]: column.limit + PAGE }))}>
+                onClick={() => setLimits((previous) => ({ ...previous, [column.id]: column.limit + PAGE }))}>
                 <ChevronDown aria-hidden="true" />Show more<span className="tabular-nums">({column.hidden})</span></Button>}
               {column.limit > PAGE && <Button type="button" variant="ghost" size="sm" className="h-8 min-w-0 flex-1 text-xs text-muted-foreground"
-                aria-label={`Show less in ${column.label}`} onClick={() => setLimits((previous) => ({ ...previous, [column.group]: PAGE }))}>
+                aria-label={`Show less in ${column.label}`} onClick={() => setLimits((previous) => ({ ...previous, [column.id]: PAGE }))}>
                 <ChevronUp aria-hidden="true" />Show less</Button>}
             </div>}
             {column.shown === 0 && <p className="rounded-lg border border-dashed border-foreground/10 px-3 py-6 text-center text-xs text-muted-foreground">

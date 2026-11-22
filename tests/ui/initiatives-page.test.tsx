@@ -36,7 +36,7 @@ function state(): InitiativesState {
 function board(): OverviewState {
   const base = uiState();
   return { ...base, initiatives: { 'acme-access': {
-    needs_you: [card(101, { title: 'Ask Alice for questions 1-4', client: 'acme' })],
+    needs_you: [card(101, { title: 'Ask Alice for questions 1-4', client: 'acme' }), card(108, { title: 'Remind Bob of the review', client: 'acme', origin: 'ai' })],
     failed: [card(102, { title: 'Publish catalogue', client: 'acme', lifecycle: 'active', stage: 'Failed' })],
     working: [card(103, { title: 'Rebuild v2.14', client: 'acme', lifecycle: 'active', stage: 'Working', chat_running: true, session_id: 'ses_synthetic' })],
     waiting_them: [card(104, { title: 'Bob reviews catalogue', client: 'acme', lifecycle: 'active', stage: 'Waiting on them', report: 'waiting_them', report_line: 'Asked Bob on Teams' })],
@@ -45,18 +45,20 @@ function board(): OverviewState {
   }, 'example-platform': { needs_you: [], failed: [], working: [], waiting_them: [], done_today: [], skipped: [] } } };
 }
 
-test('an initiative shows its tickets in the board columns: You with failed ones, Working, Them, Done this week, Skipped', async () => {
+test('an initiative shows its tickets in the board columns: AI suggestions, You with failed ones, Working, Them, Done this week, Skipped', async () => {
   render(<InitiativesPage {...props()} />);
   const detail = screen.getByRole('region', { name: 'acme Access' });
   const column = (name: string) => within(detail).getByRole('region', { name });
   const ids = (name: string) => [...column(name).querySelectorAll('article[data-ticket-id]')].map((item) => item.getAttribute('data-ticket-id'));
+  expect(ids('AI (1)')).toEqual(['108']);
+  expect(within(column('AI (1)')).getByRole('button', { name: 'Start' })).toBeTruthy();
   expect(ids('You (2)')).toEqual(['101', '102']);
   expect(ids('Working (1)')).toEqual(['103']);
   expect(ids('Them (1)')).toEqual(['104']);
   expect(ids('Done this week (1)')).toEqual(['105']);
   expect(ids('Skipped (1)')).toEqual(['106']);
   expect(column('Them (1)').textContent).toContain('Asked Bob on Teams');
-  expect(screen.getByRole('button', { pressed: true }).textContent).toContain('You 2Working 1Them 1');
+  expect(screen.getByRole('button', { pressed: true }).textContent).toContain('AI 1You 2Working 1Them 1');
   await userEvent.click(within(column('You (2)')).getAllByRole('button', { name: 'Start' })[0]!);
   await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/ticket/101/start', expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'x-everflow-token': ACTION }) })));
   await userEvent.click(within(column('You (2)')).getByRole('button', { name: 'Expand ticket #101' }));

@@ -222,7 +222,7 @@ export async function proposeTickets(cfg: Config, db: DatabaseSync, id: string, 
     if (parsed?.success) {
       return parsed.data.tickets.flatMap((raw) => { const item = proposed.safeParse(raw); return item.success ? [item.data] : []; }).slice(0, MAX_PROPOSED)
         .map((item) => createTicket(db, cfg, { client: initiative.client, initiative: id, title: item.title, summary: item.summary,
-          ask: item.ask, proposal: item.proposal, kb_notes: [initiative.note], key: `${id}-${item.key}` }));
+          ask: item.ask, proposal: item.proposal, kb_notes: [initiative.note], key: `${id}-${item.key}`, origin: 'ai' }));
     }
     if (attempt > 0) throw new InvalidSummary(`Proposed tickets are not valid JSON of the asked shape; answer starts: ${answer.text.slice(0, 300)}`);
     messages.push({ role: 'assistant', content: answer.text || '(empty)' },

@@ -22,6 +22,9 @@ function themDays(waits: readonly InitiativeWait[]): number {
   return Math.max(0, ...waits.filter((wait) => wait.owes === 'them').map((wait) => wait.days));
 }
 
+// A ticket the AI suggested and nobody started yet: the AI column, ahead of You
+const suggested = (ticket: CardData) => ticket.origin === 'ai' && ticket.lifecycle === 'proposed';
+
 const stateLabels: Record<InitiativeStateName, string> = { moving: 'Moving', waiting_them: 'Waiting on them', needs_you: 'Needs you', stuck: 'Stuck', quiet: 'Quiet' };
 
 export function StatePill({ view }: { view: InitiativeView }) {
@@ -156,7 +159,8 @@ function Detail({ view, guide, board, tickets }: { view: InitiativeView; guide: 
   };
   const graphFocus = focus && explainer ? guidePerson(explainer, focus.who) : null;
   const groups = tickets ?? { needs_you: [], working: [], waiting_them: [], failed: [], done_today: [], skipped: [] };
-  const columns: ColumnSpec[] = [{ group: 'needs_you', label: 'You', cards: [...groups.needs_you, ...groups.failed] }, { group: 'working', label: 'Working', cards: groups.working },
+  const columns: ColumnSpec[] = [{ group: 'needs_you', id: 'ai', label: 'AI', cards: groups.needs_you.filter(suggested) },
+    { group: 'needs_you', label: 'You', cards: [...groups.needs_you.filter((ticket) => !suggested(ticket)), ...groups.failed] }, { group: 'working', label: 'Working', cards: groups.working },
     { group: 'waiting_them', label: 'Them', cards: groups.waiting_them }, { group: 'done_today', label: 'Done this week', cards: groups.done_today },
     { group: 'skipped', label: 'Skipped', cards: groups.skipped }];
   const count = columns.reduce((sum, column) => sum + column.cards.length, 0);
@@ -300,7 +304,8 @@ export function InitiativesPage(props: { initialState: InitiativesState; initial
                 {summary && <span className="line-clamp-2 text-xs text-muted-foreground"><Text text={summary.headline} /></span>}
                 {item.error && <span className="inline-flex items-center gap-1 text-[11px] text-destructive"><TriangleAlert aria-hidden="true" className="size-3" />Last refresh failed</span>}
                 {tickets && <span className="flex gap-3 text-[11px] text-muted-foreground">
-                  <span>You <b className="text-foreground">{tickets.needs_you.length + tickets.failed.length}</b></span>
+                  <span>AI <b className="text-foreground">{tickets.needs_you.filter(suggested).length}</b></span>
+                  <span>You <b className="text-foreground">{tickets.needs_you.filter((ticket) => !suggested(ticket)).length + tickets.failed.length}</b></span>
                   <span>Working <b className="text-foreground">{tickets.working.length}</b></span>
                   <span>Them <b className="text-foreground">{tickets.waiting_them.length}</b></span>
                 </span>}

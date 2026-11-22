@@ -111,4 +111,9 @@ test('a ticket of an initiative is created only for that initiative client and s
     { who: 'Bob', owes: 'them', text: 'answer on the AU APIs', since: '2026-11-18', days: 3, sources: [{ id: `T${planned}`, date: '2026-11-18', text: `Ticket #${planned}: Cut one node` }] },
     { who: 'Them', owes: 'them', text: 'Reply pending', since: '2026-11-18', days: 3, sources: [{ id: `T${unnamed}`, date: '2026-11-18', text: `Ticket #${unnamed}: Licence check` }] }]);
   expect(parseCommand([...BASE, 'ticket', 'create', '--client', 'acme', '--title', 'T', '--initiative', 'acme-plan'], undefined).ticket).toEqual({ client: 'acme', title: 'T', initiative: 'acme-plan' });
+  // --ai: a ticket the AI suggested, in the AI column of its initiative while proposed
+  expect(parseCommand([...BASE, 'ticket', 'create', '--client', 'acme', '--title', 'T', '--initiative', 'acme-plan', '--ai'], undefined).ticket).toEqual({ client: 'acme', title: 'T', initiative: 'acme-plan', origin: 'ai' });
+  const suggested = createTicket(db, cfg, { client: 'acme', title: 'Remind Bob', initiative: 'acme-plan', origin: 'ai' });
+  expect(readState(db, cfg, new Date(AT)).initiatives['acme-plan']!.needs_you.find((ticket) => ticket.id === suggested)?.origin).toBe('ai');
+  expect(() => parseCommand([...BASE, 'ticket', 'close', '7', '--ai'], undefined)).toThrow(CliError);
 });
