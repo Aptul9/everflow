@@ -2,7 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from './config.ts';
 import { utc } from './time.ts';
 import { guideItemKey } from '../lib/web-types.ts';
-import type { Explainer, GuideState, InitiativesState, InitiativeSummary, InitiativeView } from '../lib/web-types.ts';
+import type { Explainer, GuideState, InitiativeLine, InitiativeNext, InitiativesState, InitiativeSummary, InitiativeView, InitiativeWait } from '../lib/web-types.ts';
 
 // The Overview page's side of the initiatives: stored summaries, the refresh request and page opens, all in the setting
 // table. No provider or vault access here, so the web routes stay off the model runtime.
@@ -50,6 +50,39 @@ export function stored(db: DatabaseSync, id: string): Stored {
 
 export function requestRefresh(db: DatabaseSync): void { writeSetting(db, 'initiatives.requested', utc()); }
 
+// A line of the note's ## Tickets section; the daemon reads them again whenever the note changes (initiative.tickets:<id>)
+export interface NoteTicket {
+  id: string; title: string; done: boolean; owner: 'you' | 'ai' | 'them'; who: string | null;
+  since: string | null; ask: string | null; done_at: string | null; line: string;
+}
+export interface StoredTickets { mtime: number | null; tickets: NoteTicket[] }
+
+export function storedTickets(db: DatabaseSync, id: string): StoredTickets {
+  try {
+    const value = JSON.parse(readSetting(db, `initiative.tickets:${id}`) ?? 'null') as StoredTickets | null;
+    return value && Array.isArray(value.tickets) ? value : { mtime: null, tickets: [] };
+  } catch { return { mtime: null, tickets: [] }; }
+}
+
+// With tickets in the note, the cards are the tickets: waits (map and Them) for what somebody owes, AI and You for the rest,
+// Done for what closed in the last 7 days. The summary keeps its headline and now lines.
+export function ticketCards(summary: InitiativeSummary, tickets: readonly NoteTicket[], today: string): InitiativeSummary {
+  if (!tickets.length) return summary;
+  const source = (ticket: NoteTicket) => ({ id: `K${ticket.id}`, date: ticket.done_at ?? ticket.since ?? today, text: ticket.line });
+  const label = (ticket: NoteTicket) => `${ticket.id} ${ticket.title}`;
+  const open = tickets.filter((ticket) => !ticket.done);
+  const waits = open.filter((ticket) => ticket.who !== null && ticket.owner !== 'ai').map((ticket): InitiativeWait => {
+    const since = ticket.since ?? today;
+    return { who: ticket.who!, owes: ticket.owner === 'them' ? 'them' : 'you', text: ticket.ask ? `${label(ticket)}: ${ticket.ask}` : label(ticket),
+      since, days: workingDays(since, today), sources: [source(ticket)] };
+  });
+  const next = open.filter((ticket) => ticket.owner !== 'them').map((ticket): InitiativeNext => ({ owner: ticket.owner === 'ai' ? 'ai' : 'you',
+    text: ticket.ask && ticket.who ? `${label(ticket)}. ${ticket.who}: ${ticket.ask}` : label(ticket), draft: null, sources: [source(ticket)] }));
+  const done = tickets.filter((ticket) => ticket.done && ticket.done_at && ticket.done_at >= shiftDay(today, -7))
+    .map((ticket): InitiativeLine => ({ text: label(ticket), sources: [source(ticket)] }));
+  return { ...summary, waits, next, done };
+}
+
 // One count per page open and day, for the pilot's use test
 export function markSeen(db: DatabaseSync, cfg: Config, at = Date.now()): Record<string, number> {
   const day = localTime(at, cfg.overview.timezone).day;
@@ -67,7 +100,8 @@ export function readInitiatives(db: DatabaseSync, cfg: Config, at = Date.now()):
   try { views = JSON.parse(readSetting(db, 'initiatives.views') ?? '{}') as Record<string, number>; } catch { /* none counted */ }
   const initiatives = Object.entries(cfg.initiatives).map(([id, initiative]): InitiativeView => {
     const record = stored(db, id);
-    const summary = record.summary && { ...record.summary, waits: record.summary.waits.map((wait) => ({ ...wait, days: workingDays(wait.since, today) })) };
+    const summary = record.summary && ticketCards({ ...record.summary, waits: record.summary.waits.map((wait) => ({ ...wait, days: workingDays(wait.since, today) })) },
+      storedTickets(db, id).tickets, today);
     return { id, title: initiative.title, client: initiative.client, note: initiative.note, at: record.at, summary, error: record.error, error_at: record.error_at };
   });
   return { initiatives, today, views, requested: !!readSetting(db, 'initiatives.requested'),
