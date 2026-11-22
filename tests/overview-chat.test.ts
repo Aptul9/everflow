@@ -8,8 +8,11 @@ import { openDb, prepareStart } from '../src/core/db.ts';
 import { connect } from '../src/core/opencode.ts';
 import { createTicket, dismiss, dismissFromChat, restorable, restoreTicket, ticketList } from '../src/core/tickets.ts';
 import type { Ticket } from '../src/core/tickets.ts';
+import { actionPost, clientChatPost } from '../src/web/api.ts';
+import { initialize, release } from '../src/web/instance.ts';
 import { scriptedPeer } from './opencode-support.ts';
 import { scratch } from './support.ts';
+import { webFixture } from './web-fixture.ts';
 
 const AT = '2026-11-23T11:00:00.000000Z';
 const BASE = ['--config', resolve('config.toml'), '--artifact', resolve('build-receipt.json')];
@@ -163,6 +166,42 @@ test('one chat per client and day: created at the first open in the client folde
   { using db = openDb(path); expect(JSON.parse(String(db.prepare("SELECT value FROM setting WHERE key='overview.chat:acme'").get()!.value))).toMatchObject({ day: '2026-11-24', session_id: 'ses_2', previous: 'ses_1', previous_archived: true, briefed: true }); }
   peer.sessions.get('ses_2')!.time.busy = Date.now() + 1;
   expect((await chats.status('acme')).running).toBe(true);
+});
+
+test('the page reaches the client chat through guarded POSTs; Ripristina goes through the ticket action route', async () => {
+  const fixture = webFixture();
+  const opened: string[] = [];
+  const current = { config: fixture.cfg, configPath: fixture.cfg._config_path, port: 12361, token: 'b'.repeat(64), clientChat: {
+    open: async (client: string) => {
+      opened.push(client);
+      if (client === 'gone') throw Object.assign(new Error('OpenChamber could not open the gone chat'), { status: 502, code: 'chat.unavailable' });
+      return { client, day: '2026-11-23', session_id: 'ses_1', directory: '/home/aptul/everflow-chats/acme' };
+    },
+    status: async (client: string) => ({ client, day: '2026-11-23', session_id: null, running: false }) } };
+  const post = (client: string, action: string, token = current.token, body = '{}') => clientChatPost(new Request(`http://127.0.0.1:12361/api/client-chat/${client}/${action}`, {
+    method: 'POST', body, headers: { host: '127.0.0.1:12361', origin: 'http://127.0.0.1:12361', 'x-everflow-token': token, 'content-type': 'application/json' } }), client, action);
+  { using db = openDb(fixture.path); db.prepare("UPDATE ticket SET client='acme' WHERE id=?").run(fixture.proposal); dismissFromChat(db, 'acme', [fixture.proposal], 'Not needed'); }
+  initialize(current);
+  try {
+    const open = await post('acme', 'open');
+    expect([open.status, await open.json()]).toEqual([200, { client: 'acme', day: '2026-11-23', session_id: 'ses_1', directory: '/home/aptul/everflow-chats/acme' }]);
+    expect(await (await post('acme', 'status')).json()).toEqual({ client: 'acme', day: '2026-11-23', session_id: null, running: false });
+    const failed = await post('gone', 'open');
+    expect([failed.status, (await failed.json()).error.code]).toEqual([502, 'chat.unavailable']);
+    expect((await post('acme', 'open', 'f'.repeat(64))).status).toBe(403);
+    expect((await post('acme', 'open', current.token, '{"extra":1}')).status).toBe(400);
+    expect((await post('acme', 'delete')).status).toBe(404);
+    expect(opened).toEqual(['acme', 'gone']);
+    const restore = (id: number) => actionPost(new Request(`http://127.0.0.1:12361/api/ticket/${id}/restore`, { method: 'POST', body: '{}',
+      headers: { host: '127.0.0.1:12361', origin: 'http://127.0.0.1:12361', 'x-everflow-token': current.token, 'content-type': 'application/json' } }), 'ticket', String(id), 'restore');
+    expect([(await restore(fixture.proposal)).status, (await restore(fixture.proposal)).status, (await restore(fixture.dismissed)).status]).toEqual([200, 409, 409]);
+    using db = openDb(fixture.path);
+    expect(row(db, fixture.proposal).lifecycle).toBe('proposed');
+  } finally { release(current); }
+  // without chat_origin there is no client chat to reach
+  const plain = { config: fixture.cfg, configPath: fixture.cfg._config_path, port: 12361, token: 'b'.repeat(64) };
+  initialize(plain);
+  try { expect([(await post('acme', 'open')).status]).toEqual([404]); } finally { release(plain); }
 });
 
 test('an OpenChamber failure says so as a chat error, and a brief not yet admitted is sent at the next open', async () => {
