@@ -11,6 +11,7 @@ import { Inline } from '../tickets/markdown.tsx';
 import { DependencyGraph, initials, workDays } from './dependency-graph.tsx';
 import { Diagram } from './diagram.tsx';
 import { GlossBack, GlossProvider, Glossed, useGloss } from './glossed.tsx';
+import { ClientChat } from './client-chat.tsx';
 import { StatePill } from './initiatives-page.tsx';
 import { FlagButton, formatDate, formatInitiativeTime as formatTime, GuideFlags, GuideSources } from './sources.tsx';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover.tsx';
@@ -224,7 +225,8 @@ function Body(props: { explainer: Explainer; state: GuideState; indexVisible: bo
   </>;
 }
 
-export function GuidePage(props: { id: string; initialState: GuideState; token: string; signOut?: boolean }) {
+// chatOrigin: [web] chat_origin with chats on, for the client's chat of the day
+export function GuidePage(props: { id: string; initialState: GuideState; token: string; signOut?: boolean; chatOrigin?: string | undefined }) {
   const [state, setState] = useState(props.initialState);
   const [error, setError] = useState('');
   const [active, setActive] = useState<string>(sections[0][0]);
@@ -381,5 +383,6 @@ export function GuidePage(props: { id: string; initialState: GuideState; token: 
         </GuideFlags.Provider></GlossProvider>}
       </main>
     </div>
+    <ClientChat client={view.client} origin={props.chatOrigin} token={props.token} />
   </div>;
 }

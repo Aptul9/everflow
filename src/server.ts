@@ -21,6 +21,7 @@ import { signIn } from './web/login-http.ts';
 import { ChatToken, chatGate, GATE_PATH } from './web/chat-gate.ts';
 import { BRIDGE_PREFIX, chatBridge } from './web/chat-bridge.ts';
 import { ChatFiles } from './web/chat-files.ts';
+import { ClientChats } from './core/client-chat.ts';
 
 export async function startServer(options: { configPath: string; buildReceipt: string; port?: number }) {
   const artifact = readBuildReceipt(options?.buildReceipt);
@@ -110,7 +111,8 @@ export async function startServer(options: { configPath: string; buildReceipt: s
     try { await app?.close(); } finally { if (current) release(current); }
   })();
   try {
-    current = { config, configPath: config._config_path, port, token: randomBytes(32).toString('hex'), ...(login ? { login } : {}), ...(chat ? { chat, files: new ChatFiles(chat) } : {}) };
+    current = { config, configPath: config._config_path, port, token: randomBytes(32).toString('hex'), ...(login ? { login } : {}),
+      ...(chat ? { chat, files: new ChatFiles(chat), clientChat: new ClientChats(config, { open: (session) => chat.open(session), buildReceipt: options.buildReceipt }) } : {}) };
     initialize(current);
     app = next({ dev: false, dir: artifact.root, hostname: '127.0.0.1', port, httpServer: server });
     await app.prepare();

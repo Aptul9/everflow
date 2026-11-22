@@ -1,43 +1,29 @@
 'use client';
 
-import { ExternalLink, LoaderCircle, PanelRightClose, PanelRightOpen, XIcon } from 'lucide-react';
+import { ExternalLink, PanelRightClose, PanelRightOpen, XIcon } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ChatFile } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog.tsx';
+import { ChatFrame, chatWebUrl, useChatFrame } from './chat-frame.tsx';
+import type { OpenedChat } from './chat-frame.tsx';
 import { FileViewer, useChatFiles } from './file-viewer.tsx';
 import type { DescribeFile, ListFiles, ReadFile } from './file-viewer.tsx';
 
-export type OpenChat = (ticket: number) => Promise<{ session_id: string; directory: string }>;
+export type OpenChat = (ticket: number) => Promise<OpenedChat>;
 
-/** How long the chat view gets, once loaded, to say its bridge runs before the dialog shows its own Close again. */
-export const BRIDGE_WAIT_MS = 6_000;
+export { BRIDGE_WAIT_MS } from './chat-frame.tsx';
 
 const phone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 639px)').matches;
 const closeButton = 'inline-flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring';
 
-// The ticket's chat managed from the board: OpenChamber's own chat view (mini-chat.html: messages, context gauge, composer
-// with model and agent) framed from the chat host, which carries the same sign-in. The server first resolves the folder
-// OpenChamber keeps the session in and registers it, without which the view opens empty. The chat host adds Everflow's
-// bridge to that view: a click on a file the chat names opens it in the panel beside the chat, and the view's pop-out
-// button becomes the dialog's Close. Messages count only from that frame and the chat host's origin.
+// The ticket's chat managed from the board: the chat view framed through useChatFrame (chat-frame.tsx, shared with the
+// Overview's client chat). Here the bridge's file clicks open the file in the panel beside the chat.
 export function ChatDialog(props: { ticket: { id: number; title: string; session_id: string } | null; origin: string; open: OpenChat; files: ListFiles; file: ReadFile;
   describe: DescribeFile; onClose: () => void }) {
   const { ticket } = props;
-  const [src, setSrc] = useState('');
-  const [error, setError] = useState('');
   const { open, origin } = props;
   const id = ticket?.id, session = ticket?.session_id;
-  // keyed on the ticket and session, not the card object: a board refresh must not reload a chat in use
-  useEffect(() => {
-    setSrc(''); setError('');
-    if (id === undefined || !session) return;
-    let current = true;
-    void open(id).then((chat) => {
-      if (current) setSrc(`${origin}/mini-chat.html?${new URLSearchParams({ mode: 'session', sessionId: chat.session_id, directory: chat.directory })}`);
-    }, (failure: unknown) => { if (current) setError(failure instanceof Error ? failure.message : 'Chat unavailable'); });
-    return () => { current = false; };
-  }, [id, session, open, origin]);
 
   // The files: those the chat wrote (polled), and those clicked in the chat this time the dialog is open. Open tabs are
   // their own state. The panel starts closed: the Files button opens it on the newest written file, a file clicked in the chat opens or focuses its tab.
@@ -93,33 +79,10 @@ export function ChatDialog(props: { ticket: { id: number; title: string; session
     } catch (failure) { setNotice(`${path}: ${failure instanceof Error ? failure.message : 'file unavailable'}`); }
   };
 
-  const frame = useRef<HTMLIFrameElement>(null);
-  const [bridged, setBridged] = useState(false);
-  const [late, setLate] = useState(false);
-  const loaded = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(() => { setBridged(false); setLate(false); return () => clearTimeout(loaded.current); }, [src]);
-  const handlers = useRef({ open: openPath, close: props.onClose });
-  handlers.current = { open: openPath, close: props.onClose };
-  useEffect(() => {
-    let expected: string;
-    try { expected = new URL(origin).origin; } catch { return; }
-    const listener = (event: MessageEvent) => {
-      if (event.origin !== expected || !frame.current || event.source !== frame.current.contentWindow) return;
-      const data = event.data as { type?: unknown; path?: unknown } | null;
-      if (!data || typeof data !== 'object') return;
-      if (data.type === 'everflow:ready') setBridged(true);
-      else if (data.type === 'everflow:close') handlers.current.close();
-      else if (data.type === 'everflow:open-file' && typeof data.path === 'string' && data.path && data.path.length <= 4096) void handlers.current.open(data.path);
-    };
-    window.addEventListener('message', listener);
-    return () => window.removeEventListener('message', listener);
-  }, [origin]);
-  const onLoad = () => {
-    clearTimeout(loaded.current);
-    loaded.current = setTimeout(() => setLate(true), BRIDGE_WAIT_MS);
-  };
-  // the chat view's own Close (the bridge) replaces the dialog's; without a chat view or a bridge, the dialog keeps one
-  const ownClose = !src || late && !bridged;
+  // keyed on the ticket and session, not the card object: a board refresh must not reload a chat in use
+  const chat = useChatFrame({ id: id !== undefined && session ? `${id}:${session}` : null, origin, open: () => open(id!), onClose: props.onClose,
+    onOpenFile: (path) => { void openPath(path); } });
+  const { ownClose } = chat;
 
   const withFiles = (files.length > 0 || tabs.length > 0 || !!notice) && id !== undefined, wide = withFiles && !hidden, full = wide && expanded;
   const encoded = encodeURIComponent(session ?? '');
@@ -143,7 +106,7 @@ export function ChatDialog(props: { ticket: { id: number; title: string; session
           </button>}
           <a href={`openchamber://session/${encoded}`} aria-label={`Open the chat of ticket #${ticket?.id} in the OpenChamber app`}
             className="rounded px-2 py-1 text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-ring">App</a>
-          <a href={`${origin}/?session=${encoded}`} target="_blank" rel="noopener" aria-label={`Open the chat of ticket #${ticket?.id} in OpenChamber`}
+          <a href={chatWebUrl(origin, session ?? '')} target="_blank" rel="noopener" aria-label={`Open the chat of ticket #${ticket?.id} in OpenChamber`}
             className="inline-flex items-center gap-1 rounded px-2 py-1 font-semibold text-primary underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-ring">
             OpenChamber<ExternalLink aria-hidden="true" className="size-3" />
           </a>
@@ -158,12 +121,7 @@ export function ChatDialog(props: { ticket: { id: number; title: string; session
       </div>}
       <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
         <div className={cn('flex min-h-0 min-w-0 flex-1 flex-col', wide && !full && 'sm:w-[min(800px,55%)] sm:flex-none', full && 'sm:hidden', withFiles && tab === 'file' && 'max-sm:hidden')}>
-          {src ? <iframe ref={frame} key={src} src={src} title={`Chat of ticket #${ticket?.id}`} allow="clipboard-read; clipboard-write; microphone" onLoad={onLoad}
-            className="min-h-0 w-full flex-1 border-0 bg-background sm:rounded-lg" />
-            : <div className="flex flex-1 items-center justify-center p-6 text-sm">
-              {error ? <p role="alert" className="max-w-md rounded-md bg-destructive-soft px-3 py-2 text-destructive">{error}</p>
-                : <p role="status" className="inline-flex items-center gap-2 text-muted-foreground"><LoaderCircle aria-hidden="true" className="size-4 animate-spin" />Opening the chat...</p>}
-            </div>}
+          <ChatFrame chat={chat} title={`Chat of ticket #${ticket?.id}`} className="sm:rounded-lg" />
         </div>
         {withFiles && <div className={cn('min-h-0 min-w-0 flex-1 sm:border-l', full && 'sm:border-l-0', tab === 'chat' && 'max-sm:hidden', hidden && 'sm:hidden')}>
           <FileViewer ticket={id} files={files} tabs={tabs} active={active} now={now} read={props.file} onOpen={focus} onCloseTab={closeTab}

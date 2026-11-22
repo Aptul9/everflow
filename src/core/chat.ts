@@ -150,19 +150,23 @@ function quoteMessages(db: DatabaseSync, messages: readonly Message[]): string {
 }
 
 // With a build.txt beside the config (scripts/everflow.ps1, deploy/vm) the command reads the pinned build when it runs:
-// a deploy deletes the build a long chat started on.
-function closeCommand(cfg: Config, ticket: number, buildReceipt = process.env.EVERFLOW_ARTIFACT): string {
+// a deploy deletes the build a long chat started on. command: the CLI command and its arguments, appended as given.
+export function cliCommand(cfg: Config, command: string, buildReceipt = process.env.EVERFLOW_ARTIFACT): string {
   const pin = join(dirname(cfg._config_path), 'build.txt');
   const quoted = (value: string) => `'${value.replaceAll("'", "''")}'`;
   if (fs.existsSync(/* turbopackIgnore: true */ pin)) {
     if (process.platform === 'win32') {
-      return `$r = (Get-Content -LiteralPath ${quoted(pin)} -Raw).Trim(); & ${quoted(process.execPath)} (Join-Path (Split-Path $r) 'dist/cli.js') --artifact $r --config ${quoted(cfg._config_path)} ticket close ${ticket}`;
+      return `$r = (Get-Content -LiteralPath ${quoted(pin)} -Raw).Trim(); & ${quoted(process.execPath)} (Join-Path (Split-Path $r) 'dist/cli.js') --artifact $r --config ${quoted(cfg._config_path)} ${command}`;
     }
     const sh = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-    return `r=$(cat ${sh(pin)}) && ${sh(process.execPath)} "\${r%/*}/dist/cli.js" --artifact "$r" --config ${sh(cfg._config_path)} ticket close ${ticket}`;
+    return `r=$(cat ${sh(pin)}) && ${sh(process.execPath)} "\${r%/*}/dist/cli.js" --artifact "$r" --config ${sh(cfg._config_path)} ${command}`;
   }
   const artifact = readBuildReceipt(buildReceipt);
-  return `& ${quoted(process.execPath)} ${quoted(join(artifact.root, 'dist/cli.js'))} --artifact ${quoted(buildReceipt!)} --config ${quoted(cfg._config_path)} ticket close ${ticket}`;
+  return `& ${quoted(process.execPath)} ${quoted(join(artifact.root, 'dist/cli.js'))} --artifact ${quoted(buildReceipt!)} --config ${quoted(cfg._config_path)} ${command}`;
+}
+
+function closeCommand(cfg: Config, ticket: number, buildReceipt?: string): string {
+  return cliCommand(cfg, `ticket close ${ticket}`, buildReceipt);
 }
 
 function instructions(cfg: Config, ticket: number, buildReceipt?: string): string {

@@ -5,7 +5,7 @@ import { transaction } from '../core/db.ts';
 import { markSeen, readGuide, readInitiatives, requestExplainer, requestRefresh, setDismissed, setFlagged } from '../core/initiative-state.ts';
 import { retry, startNow } from '../core/jobs.ts';
 import { requestModelOptions, saveSetting } from '../core/settings.ts';
-import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, MUTE_MAX_MINUTES, muteBatch, muteTicket, pauseInput, TicketError } from '../core/tickets.ts';
+import { clearBatch, clearTicket, close, dismiss, makeTicket, mute, MUTE_MAX_MINUTES, muteBatch, muteTicket, pauseInput, restoreTicket, TicketError } from '../core/tickets.ts';
 import { HttpError, instance, withDatabase } from './instance.ts';
 import type { WebInstance } from './instance.ts';
 import { readState, representation, ticketDetail } from './state.ts';
@@ -251,6 +251,21 @@ async function chatFileInfo(current: WebInstance, ticket: number, path: string):
   return Response.json({ ticket, file }, { headers: { 'cache-control': 'no-store' } });
 }
 
+// The client's chat of the day ([web] chat_origin): open creates it at the first open of the day and registers its folder
+// with OpenChamber, as open-chat does for a ticket; status says whether it exists today and runs a turn now
+export async function clientChatPost(request: Request, client: string, action: string): Promise<Response> {
+  try {
+    const current = instance();
+    guardPost(request.headers, current);
+    await body(request, empty);
+    if (action !== 'open' && action !== 'status') throw new HttpError(404, 'action.not-found', 'Action not found');
+    if (!current.clientChat) throw new HttpError(404, 'chat.off', 'OpenChamber web is not configured');
+    if (!current.config.chats.enabled) throw new HttpError(409, 'chats.disabled', 'Chats off');
+    const result = await (action === 'open' ? current.clientChat.open(client) : current.clientChat.status(client)).catch(fromChat);
+    return Response.json(result, { headers: { 'cache-control': 'no-store' } });
+  } catch (error) { return errorResponse(error); }
+}
+
 export async function actionPost(request: Request, scope: 'ticket' | 'batch' | 'job' | 'conversation', id: string, action: string): Promise<Response> {
   try {
     const current = instance();
@@ -277,6 +292,7 @@ export async function actionPost(request: Request, scope: 'ticket' | 'batch' | '
       }
       if (scope === 'ticket' && action === 'close') return { ticket: close(db, value, input.reason ?? '') };
       if (scope === 'ticket' && action === 'clear') return { ticket: clearTicket(db, value) };
+      if (scope === 'ticket' && action === 'restore') return { ticket: restoreTicket(db, value) };
       if (scope === 'ticket' && action === 'start-now') {
         const owner = db.prepare('SELECT lifecycle,approved_at FROM ticket WHERE id=?').get(value);
         if (!owner) throw new HttpError(404, 'ticket.not-found', `Ticket ${value} not found`);

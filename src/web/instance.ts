@@ -4,6 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../core/config.ts';
 import type { ChatToken } from './chat-gate.ts';
 import type { ChatFiles } from './chat-files.ts';
+import type { ClientChats } from '../core/client-chat.ts';
 import type { Limiter, Sessions } from './login.ts';
 import type { Oidc } from './oidc.ts';
 
@@ -20,6 +21,8 @@ export interface WebInstance {
   chat?: Pick<ChatToken, 'token' | 'open' | 'page'>;
   // With chat: the files the ticket's chat wrote, for the viewer beside the chat, and any other it names when clicked
   files?: Pick<ChatFiles, 'list' | 'read' | 'describe'>;
+  // With chat: the client's chat of the day on the Overview and the guide (client-chat.ts)
+  clientChat?: Pick<ClientChats, 'open' | 'status'>;
 }
 
 const key = Symbol.for('everflow.web.instance');

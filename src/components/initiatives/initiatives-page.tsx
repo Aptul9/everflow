@@ -11,6 +11,7 @@ import { Inline } from '../tickets/markdown.tsx';
 import { TicketColumns } from '../tickets/ticket-columns.tsx';
 import type { Board, ColumnSpec } from '../tickets/ticket-columns.tsx';
 import { useOverview } from '../tickets/use-overview.ts';
+import { ClientChat } from './client-chat.tsx';
 import { DependencyGraph, initials } from './dependency-graph.tsx';
 import { formatDate, formatInitiativeTime as formatTime, Sources } from './sources.tsx';
 
@@ -323,5 +324,6 @@ export function InitiativesPage(props: { initialState: InitiativesState; initial
         {view && <Detail key={view.id} view={view} guide={guides[view.id] ?? null} board={board} tickets={board.state.initiatives[view.id]} />}
       </>}
     </main>
+    <ClientChat client={view?.client} origin={board.state.chats_enabled ? board.state.chat_origin : undefined} token={props.token} />
   </div>;
 }

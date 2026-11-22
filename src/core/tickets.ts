@@ -46,6 +46,11 @@ export interface Ticket {
   chat_running_at?: string | null;
   // 'ai' when the AI suggested the ticket
   origin?: string | null;
+  initiative?: string | null;
+  // AI tickets: JSON {text, sources} with the note sections and log entries the proposer cited
+  why?: string | null;
+  // 'overview_chat' when the client's Overview chat dismissed it
+  dismissed_by?: string | null;
 }
 
 export interface Message {
@@ -734,7 +739,9 @@ function closeFuture(db: DatabaseSync, ticket: number, at: string, keepUnseen = 
   }
 }
 
-function finishTicket(db: DatabaseSync, ticket: number, lifecycle: 'done' | 'dismissed', reason: string, at?: string, actor: 'you' | 'chat' | 'agent' = 'you'): number {
+export type Actor = 'you' | 'chat' | 'agent' | 'overview chat';
+
+function finishTicket(db: DatabaseSync, ticket: number, lifecycle: 'done' | 'dismissed', reason: string, at?: string, actor: Actor = 'you'): number {
   if (typeof reason !== 'string') throw new TicketError('ticket.invalid-input', 'Correction reason must be a string');
   return transaction(db, () => {
     const now = utc(at);
@@ -743,8 +750,8 @@ function finishTicket(db: DatabaseSync, ticket: number, lifecycle: 'done' | 'dis
     if (row.lifecycle === 'done' || row.lifecycle === 'dismissed') return ticket;
     closeFuture(db, ticket, now, lifecycle === 'done');
     const reportAt = row.report_at && utc(row.report_at) > now ? row.report_at : now;
-    db.prepare("UPDATE ticket SET lifecycle=?,closed_at=?,report='done',report_line=?,report_at=?,last_activity_at=? WHERE id=?")
-      .run(lifecycle, now, reason || (lifecycle === 'done' ? 'Closed manually' : 'Dismissed'), reportAt, now, ticket);
+    db.prepare("UPDATE ticket SET lifecycle=?,closed_at=?,report='done',report_line=?,report_at=?,last_activity_at=?,dismissed_by=? WHERE id=?")
+      .run(lifecycle, now, reason || (lifecycle === 'done' ? 'Closed manually' : 'Dismissed'), reportAt, now, actor === 'overview chat' ? 'overview_chat' : null, ticket);
     const base = `${lifecycle === 'done' ? 'close' : 'dismiss'}:ticket:${ticket}`;
     const existing = db.prepare('SELECT 1 FROM timeline WHERE event_key=?').get(base);
     const seq = Number(db.prepare('SELECT COALESCE(MAX(id),0)+1 AS seq FROM timeline').get()!.seq);
@@ -757,8 +764,75 @@ export function close(db: DatabaseSync, ticket: number, reason = '', at?: string
   return finishTicket(db, ticket, 'done', reason, at, actor);
 }
 
-export function dismiss(db: DatabaseSync, ticket: number, reason = '', at?: string, actor: 'you' | 'chat' = 'you'): number {
+export function dismiss(db: DatabaseSync, ticket: number, reason = '', at?: string, actor: 'you' | 'chat' | 'overview chat' = 'you'): number {
   return finishTicket(db, ticket, 'dismissed', reason, at, actor);
+}
+
+// Dismissals the client's Overview chat makes after Antonio's yes in that chat: the page's Dismiss, for tickets of that client
+// only, all of them or none. A reason is required; a ticket already closed is left as it is.
+export function dismissFromChat(db: DatabaseSync, client: string, tickets: readonly number[], reason: string, at?: string): { ticket: number; lifecycle: Lifecycle }[] {
+  if (typeof reason !== 'string' || !reason.trim()) throw new TicketError('ticket.invalid-input', 'A reason is required');
+  if (!tickets.length) throw new TicketError('ticket.invalid-input', 'At least one ticket is required');
+  return transaction(db, () => {
+    for (const id of tickets) {
+      if (getTicket(db, id).client !== client) throw new TicketError('ticket.invalid-input', `Ticket ${id} is not a ticket of ${client}`);
+    }
+    return [...new Set(tickets)].map((id) => {
+      dismiss(db, id, reason.trim(), at, 'overview chat');
+      return { ticket: id, lifecycle: getTicket(db, id).lifecycle };
+    });
+  });
+}
+
+// Only a proposal the Overview chat dismissed, never approved and with no chat, goes back where it was
+export function restorable(row: Pick<Ticket, 'lifecycle' | 'approved_at' | 'session_id' | 'dismissed_by'>): boolean {
+  return row.lifecycle === 'dismissed' && row.dismissed_by === 'overview_chat' && !row.approved_at && !row.session_id;
+}
+
+export function restoreTicket(db: DatabaseSync, ticket: number, at?: string): number {
+  return transaction(db, () => {
+    const now = utc(at);
+    if (!restorable(getTicket(db, ticket))) throw new TicketError('ticket.conflict', 'Only a proposal the Overview chat dismissed, never started and with no chat, can be restored');
+    db.prepare(`UPDATE ticket SET lifecycle='proposed',closed_at=NULL,report=NULL,report_line=NULL,report_at=NULL,dismissed_by=NULL,cleared_at=NULL,
+      last_activity_at=? WHERE id=?`).run(now, ticket);
+    const seq = Number(db.prepare('SELECT COALESCE(MAX(id),0)+1 AS seq FROM timeline').get()!.seq);
+    history(db, ticket, now, 'status', 'you', 'Restored: dismissed by the Overview chat', `restore:ticket:${ticket}:${seq}`);
+    return ticket;
+  });
+}
+
+export interface WhySource { id: string; kind: 'log' | 'section'; date?: string; text: string }
+export interface Why { text: string; sources: WhySource[] }
+
+export function parseWhy(value: string | null | undefined): Why | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as Partial<Why>;
+    return typeof parsed.text === 'string' && Array.isArray(parsed.sources) ? { text: parsed.text, sources: parsed.sources } : null;
+  } catch { return null; }
+}
+
+const overviewColumns: Record<Column, string> = { 'Needs you': 'You', Failed: 'You', Working: 'Working', 'Waiting on them': 'Them', Done: 'Done', Skipped: 'Skipped' };
+
+// What the client's Overview chat reads every turn: the client's open tickets and those finished in the last 7 days, on the
+// board and on its initiatives, with where each sits, where it came from, why and who it waits on
+export function ticketList(db: DatabaseSync, cfg: Pick<Config, 'initiatives'>, client: string, initiative?: string, at?: string) {
+  if (initiative !== undefined && cfg.initiatives[initiative]?.client !== client) throw new TicketError('ticket.invalid-input', `Unknown initiative ${initiative} for client ${client}`);
+  const rows = db.prepare(`SELECT * FROM ticket WHERE client=? AND merged_into IS NULL AND (lifecycle IN ('proposed','active') OR COALESCE(closed_at,last_activity_at,created_at)>=?)
+    ${initiative === undefined ? '' : 'AND initiative=?'} ORDER BY id`).all(client, daysBefore(utc(at), 7), ...(initiative === undefined ? [] : [initiative])) as unknown as Ticket[];
+  return rows.map((row) => {
+    const column = boardColumn(stage(db, row.id), row.lifecycle);
+    const why = parseWhy(row.why);
+    const triage = db.prepare("SELECT body FROM timeline WHERE ticket=? AND kind='triage' ORDER BY at DESC,id DESC LIMIT 1").get(row.id)?.body;
+    const byHand = db.prepare("SELECT 1 FROM timeline WHERE ticket=? AND event_key LIKE 'create:%'").get(row.id);
+    return { id: row.id, title: row.title, initiative: row.initiative ?? null,
+      column: row.initiative ? row.origin === 'ai' && row.lifecycle === 'proposed' ? 'AI' : overviewColumns[column] : column,
+      lifecycle: row.lifecycle, origin: row.origin === 'ai' ? 'ai' : byHand ? 'hand' : 'message',
+      why: why?.text ?? (typeof triage === 'string' ? triage.slice(0, 600) : null), why_sources: why?.sources.map((source) => source.id) ?? [],
+      waiting_on: row.lifecycle === 'active' && row.report === 'waiting_them' ? row.report_line : null,
+      report: row.report_line, summary: row.summary.slice(0, 400), ask: row.ask.slice(0, 300), has_chat: !!row.session_id,
+      created_at: row.created_at, closed_at: row.closed_at, dismissed_by: row.dismissed_by ?? null };
+  });
 }
 
 export const MUTE_FOREVER = '9999-12-31T23:59:59.000000Z';
@@ -858,6 +932,9 @@ export const newTicketSchema = z.strictObject({
   // A question Antonio already put: the ticket starts in Waiting on them, with no chat until something opens one
   waiting: z.object({ who: z.string().trim().min(1).max(40).regex(/^[^:]+$/, 'who has no colon'), what: z.string().trim().min(1).max(200),
     since: z.iso.date() }).optional(),
+  // Why the AI proposed it, with the note sections and log entries it rests on
+  why: z.strictObject({ text: z.string().trim().min(1).max(300),
+    sources: z.array(z.strictObject({ id: z.string().min(1).max(20), kind: z.enum(['log', 'section']), date: z.iso.date().optional(), text: z.string().max(400) })).min(1).max(10) }).optional(),
 });
 export type NewTicket = z.input<typeof newTicketSchema>;
 export type Waiting = NonNullable<z.output<typeof newTicketSchema>['waiting']>;
@@ -887,9 +964,9 @@ export function createTicket(db: DatabaseSync, cfg: Pick<Config, 'clients' | 'in
     const key = fields.key ? `create:${fields.key}` : null;
     const made = key ? db.prepare('SELECT ticket FROM timeline WHERE event_key=?').get(key) : undefined;
     if (made) return Number(made.ticket);
-    const id = Number(db.prepare(`INSERT INTO ticket(title,client,summary,ask,proposal,kb_notes,initiative,origin,created_at,last_activity_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`).run(fields.title, fields.client, fields.summary, fields.ask, fields.proposal, JSON.stringify(fields.kb_notes),
-      fields.initiative ?? null, fields.origin ?? null, now, now).lastInsertRowid);
+    const id = Number(db.prepare(`INSERT INTO ticket(title,client,summary,ask,proposal,kb_notes,initiative,origin,why,created_at,last_activity_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(fields.title, fields.client, fields.summary, fields.ask, fields.proposal, JSON.stringify(fields.kb_notes),
+      fields.initiative ?? null, fields.origin ?? null, fields.why ? JSON.stringify(fields.why) : null, now, now).lastInsertRowid);
     if (fields.waiting) setWaiting(db, id, fields.waiting, now);
     history(db, id, now, 'comment', actor, fields.waiting ? `Waiting on ${fields.waiting.who} since ${fields.waiting.since}${fields.origin === 'ai' ? ', found by AI' : ''}`
       : fields.origin === 'ai' ? 'Suggested by AI' : 'Created by hand', key ?? `create:ticket:${id}`);

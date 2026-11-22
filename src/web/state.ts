@@ -3,7 +3,7 @@ import { basename } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from '../core/config.ts';
 import { chatDirectory, clientsFor, sourceAccounts, sourceEnabled } from '../core/policy.ts';
-import { batchClients, batchMessages, batchPaused, boardColumn, detail, feedback, MUTE_FOREVER, pausedInputs } from '../core/tickets.ts';
+import { batchClients, batchMessages, batchPaused, boardColumn, detail, feedback, MUTE_FOREVER, parseWhy, pausedInputs, restorable } from '../core/tickets.ts';
 import type { Column, Message, Stage } from '../core/tickets.ts';
 import { modelChoice, readModelOptions } from '../core/settings.ts';
 import { calendarDay, utc } from '../core/time.ts';
@@ -45,6 +45,7 @@ export function ticketDetail(db: DatabaseSync, id: number): TicketDetail {
     kb_notes: (JSON.parse(row.kb_notes) as unknown[]).filter((value): value is string => typeof value === 'string'),
     origin: row.origin === 'ai' ? 'ai' : null, created_at: row.created_at, last_activity_at: row.last_activity_at, closed_at: row.closed_at, report: row.report,
     report_line: row.report_line, session_id: row.session_id, chat_running: !!row.chat_running_at, chat_waiting_since: typeof waiting === 'string' ? waiting : null, session_title: row.session_title, reason: timeline.find((event) => event.kind === 'triage')?.body ?? null,
+    why: parseWhy(row.why), dismissed_by: row.dismissed_by === 'overview_chat' ? 'overview_chat' : null, restorable: restorable(row),
     timeline_revision: representation(timeline).etag, messages, refs };
   return { ticket, messages, refs, timeline };
 }

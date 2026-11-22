@@ -17,6 +17,8 @@ Commands:
   status                      Read-only status; no migration or first-start cutoff
   ticket show ID
   ticket create --client NAME --title TEXT [--summary TEXT] [--ask TEXT] [--proposal TEXT] [--kb-note PATH]... [--key KEY] [--initiative ID] [--ai]
+  ticket list --client NAME [--initiative ID]
+  ticket dismiss ID [ID...] --client NAME --reason TEXT
   ticket merge SOURCE_ID TARGET_ID
   ticket relink CONVERSATION_ID TARGET_ID
   ticket close ID [--reason TEXT]
@@ -54,6 +56,8 @@ export function childEnvironment(): NodeJS.ProcessEnv & Record<string, string> {
 export interface Command {
   name: string; args: number[]; configPath?: string; buildReceipt?: string; port?: number; reason?: string; all?: boolean; runId?: string;
   ticket?: { client: string; title: string; summary?: string; ask?: string; proposal?: string; kb_notes?: string[]; key?: string; initiative?: string; origin?: 'ai' };
+  // ticket list and ticket dismiss: the client, and for list the initiative
+  scope?: { client: string; initiative?: string };
 }
 
 export function parseCommand(args: string[], artifactEnvironment = process.env.EVERFLOW_ARTIFACT): Command {
@@ -70,15 +74,20 @@ export function parseCommand(args: string[], artifactEnvironment = process.env.E
   if (new Set(names).size !== names.length) throw new CliError('cli.arguments');
   if (values.help || !args.length || positionals[0] === 'help') return { name: 'help', args: [] };
   const name = positionals.slice(0, ['ticket', 'job', 'quarantine'].includes(positionals[0] ?? '') ? 2 : 1).join(' ');
-  const count: Record<string, number> = { start: 0, stop: 0, status: 0, 'ticket show': 1, 'ticket create': 0, 'ticket merge': 2, 'ticket relink': 2, 'ticket close': 1,
+  const count: Record<string, number> = { start: 0, stop: 0, status: 0, 'ticket show': 1, 'ticket create': 0, 'ticket list': 0, 'ticket merge': 2, 'ticket relink': 2, 'ticket close': 1,
     'job list': 0, 'job retry': 1, 'job park': 1, 'quarantine replay': values.all ? 0 : 1, _run: 0 };
-  if (!(name in count)) throw new CliError('cli.arguments');
+  if (!(name in count) && name !== 'ticket dismiss') throw new CliError('cli.arguments');
   const rest = positionals.slice(name.includes(' ') ? 2 : 1);
-  if (rest.length !== count[name] || rest.some((id) => !/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))) throw new CliError('cli.arguments');
+  // ticket dismiss takes one ticket or more
+  if ((name === 'ticket dismiss' ? !rest.length : rest.length !== count[name]) || rest.some((id) => !/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id)))) throw new CliError('cli.arguments');
   if (values.all && name !== 'quarantine replay' || values.port !== undefined && !['start', '_run'].includes(name)
-    || values.reason !== undefined && !['job park', 'ticket close'].includes(name) || values['run-id'] !== undefined && name !== '_run') throw new CliError('cli.arguments');
+    || values.reason !== undefined && !['job park', 'ticket close', 'ticket dismiss'].includes(name) || values['run-id'] !== undefined && name !== '_run') throw new CliError('cli.arguments');
   const ticketFields = (['client', 'title', 'summary', 'ask', 'proposal', 'kb-note', 'key', 'initiative', 'ai'] as const).filter((option) => values[option] !== undefined);
-  if (name === 'ticket create' ? typeof values.client !== 'string' || typeof values.title !== 'string' : ticketFields.length) throw new CliError('cli.arguments');
+  const allowed = name === 'ticket list' ? ['client', 'initiative'] : name === 'ticket dismiss' ? ['client'] : [];
+  if (name === 'ticket create' ? typeof values.client !== 'string' || typeof values.title !== 'string'
+    : ticketFields.some((option) => !allowed.includes(option)) || allowed.length > 0 && typeof values.client !== 'string') throw new CliError('cli.arguments');
+  // the Overview chat's dismissal always says why
+  if (name === 'ticket dismiss' && (typeof values.reason !== 'string' || !values.reason.trim())) throw new CliError('cli.arguments');
   const port = values.port === undefined ? undefined : Number(values.port);
   if (port !== undefined && (typeof values.port !== 'string' || !/^\d+$/.test(values.port) || !Number.isInteger(port) || port < 0 || port > 65535)) throw new CliError('cli.arguments');
   if (typeof values.config !== 'string' || !isAbsolute(values.config) || values.config.includes('\0')) throw new CliError('cli.arguments');
@@ -91,7 +100,8 @@ export function parseCommand(args: string[], artifactEnvironment = process.env.E
     ...(name === 'ticket create' ? { ticket: { client: values.client!, title: values.title!, ...(values.summary === undefined ? {} : { summary: values.summary }),
       ...(values.ask === undefined ? {} : { ask: values.ask }), ...(values.proposal === undefined ? {} : { proposal: values.proposal }),
       ...(values['kb-note'] === undefined ? {} : { kb_notes: values['kb-note'] }), ...(values.key === undefined ? {} : { key: values.key }),
-      ...(values.initiative === undefined ? {} : { initiative: values.initiative }), ...(values.ai ? { origin: 'ai' as const } : {}) } } : {}) };
+      ...(values.initiative === undefined ? {} : { initiative: values.initiative }), ...(values.ai ? { origin: 'ai' as const } : {}) } } : {}),
+    ...(name === 'ticket list' || name === 'ticket dismiss' ? { scope: { client: values.client!, ...(values.initiative === undefined ? {} : { initiative: values.initiative }) } } : {}) };
 }
 
 export function cliFailure(error: unknown): { error: { code: string; reason?: string; native_status?: number } & FailureFields } {
@@ -139,7 +149,7 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
   } else {
     if (!fs.existsSync(cfg.db.path)) throw Object.assign(new Error('instance.unavailable'), { code: 'instance.unavailable' });
     const { DatabaseSync } = await import('node:sqlite');
-    const write = !['ticket show', 'job list'].includes(command.name);
+    const write = !['ticket show', 'ticket list', 'job list'].includes(command.name);
     using db = new DatabaseSync(cfg.db.path, { readOnly: !write, timeout: 30000 });
     if (db.prepare('PRAGMA user_version').get()!.user_version !== 2) throw Object.assign(new Error('instance.schema'), { code: 'instance.schema' });
     const { transaction } = await import('./core/db.ts');
@@ -150,6 +160,8 @@ export async function main(args = process.argv.slice(2)): Promise<number> {
       switch (command.name) {
         case 'ticket show': return tickets.detail(db, one!);
         case 'ticket create': return { ticket: tickets.createTicket(db, cfg, command.ticket!) };
+        case 'ticket list': return { client: command.scope!.client, tickets: tickets.ticketList(db, cfg, command.scope!.client, command.scope!.initiative) };
+        case 'ticket dismiss': return { tickets: tickets.dismissFromChat(db, command.scope!.client, command.args, command.reason!) };
         case 'ticket merge': return { ticket: tickets.merge(db, one!, two!) };
         case 'ticket relink': return { ticket: tickets.relink(db, one!, two!) };
         case 'ticket close': {
