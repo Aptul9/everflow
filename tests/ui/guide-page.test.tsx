@@ -194,7 +194,7 @@ function explainer(): Explainer {
 function guide(fields: Partial<GuideState> = {}): GuideState {
   return {
     initiative: { id: 'acme', title: 'Acme access', client: 'acme', note: '01_Projects/acme.md', at: '2026-11-18T07:00:00.000000Z', error: null, error_at: null,
-      summary: { state: 'waiting_them', headline: 'Alice silent on 4 questions', now: [], waits: [], next: [], done: [], rejected: 0, entries: 5, model: 'm' } },
+      summary: { state: 'waiting_them', headline: 'Alice silent on 4 questions', now: [], rejected: 0, entries: 5, model: 'm' }, waits: [] },
     today: '2026-11-18', at: '2026-11-18T07:00:00.000000Z', explainer: explainer(), error: null, error_at: null, requested: false, running: false, providers: true, dismissed: [], flagged: [], ...fields,
   };
 }
@@ -208,6 +208,15 @@ test('sections render with anchors and the one-liner', () => {
   expect(screen.getByRole('region', { name: 'Cosa blocca e sblocca' })).toBeTruthy();
   expect(screen.getByRole('article', { name: 'Discovery' }).textContent).toContain('1/3');
   expect(screen.getByRole('progressbar', { name: 'Avanzamento Discovery' }).getAttribute('aria-valuenow')).toBe('33');
+});
+
+test('the state pill counts the days from the initiative tickets waiting on someone, as on the Overview', () => {
+  const state = guide();
+  state.initiative.waits = [{ who: 'Alice', owes: 'them', text: 'questions 1-4', since: '2026-11-10', days: 6, sources: [{ id: 'T4', date: '2026-11-10', text: 'Ticket #4: Questions' }] }];
+  render(<GuidePage {...props(state)} />);
+  const pill = document.querySelector('[data-state="waiting_them"]')!;
+  expect(pill.textContent).toBe('Waiting on them · 6d');
+  expect(pill.className).toContain('text-destructive');
 });
 
 test('a glossary term in prose is linked, shows its short text on hover and jumps to the entry', async () => {

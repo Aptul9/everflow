@@ -1,11 +1,13 @@
 import type { DatabaseSync } from 'node:sqlite';
 import type { Config } from './config.ts';
+import { boardColumn, stage } from './tickets.ts';
 import { utc } from './time.ts';
+import type { Lifecycle } from './types.ts';
 import { guideItemKey } from '../lib/web-types.ts';
-import type { Explainer, GuideState, InitiativeLine, InitiativeNext, InitiativesState, InitiativeSummary, InitiativeTicket, InitiativeView, InitiativeWait } from '../lib/web-types.ts';
+import type { Explainer, GuideState, InitiativesState, InitiativeSummary, InitiativeView, InitiativeWait } from '../lib/web-types.ts';
 
-// The Overview page's side of the initiatives: stored summaries, the refresh request and page opens, all in the setting
-// table. No provider or vault access here, so the web routes stay off the model runtime.
+// The Overview page's side of the initiatives: stored summaries, the refresh request and page opens in the setting
+// table, and what their tickets wait on. No provider or vault access here, so the web routes stay off the model runtime.
 
 // A run marked running longer than this ended without clearing the mark (daemon stopped mid-run)
 const STALE_RUN_MS = 20 * 60_000;
@@ -50,50 +52,6 @@ export function stored(db: DatabaseSync, id: string): Stored {
 
 export function requestRefresh(db: DatabaseSync): void { writeSetting(db, 'initiatives.requested', utc()); }
 
-// A line of the note's ## Tickets section; the daemon reads them again whenever the note changes (initiative.tickets:<id>)
-export interface NoteTicket {
-  id: string; title: string; done: boolean; owner: 'you' | 'ai' | 'them'; who: string | null;
-  since: string | null; ask: string | null; done_at: string | null; line: string;
-  after?: string | null; details?: { label: string; value: string }[];
-}
-export interface StoredTickets { mtime: number | null; tickets: NoteTicket[] }
-
-export function storedTickets(db: DatabaseSync, id: string): StoredTickets {
-  try {
-    const value = JSON.parse(readSetting(db, `initiative.tickets:${id}`) ?? 'null') as StoredTickets | null;
-    return value && Array.isArray(value.tickets) ? value : { mtime: null, tickets: [] };
-  } catch { return { mtime: null, tickets: [] }; }
-}
-
-// With tickets in the note, the cards are the tickets: waits (map and Them) for what somebody owes, one per person and ask,
-// AI and You for the rest, Done for what closed in the last 7 days. Each card carries its tickets for the detail view.
-// The summary keeps its headline and now lines.
-export function ticketCards(summary: InitiativeSummary, tickets: readonly NoteTicket[], today: string): InitiativeSummary {
-  if (!tickets.length) return summary;
-  const source = (ticket: NoteTicket) => ({ id: `K${ticket.id}`, date: ticket.done_at ?? ticket.since ?? today, text: `Ticket ${ticket.id}: ${ticket.title}` });
-  const label = (ticket: NoteTicket) => `${ticket.id} ${ticket.title}`;
-  const card = (ticket: NoteTicket): InitiativeTicket => ({ id: ticket.id, title: ticket.title, who: ticket.who, ask: ticket.ask, since: ticket.since,
-    after: ticket.after ?? null, done_at: ticket.done_at, details: ticket.details ?? [] });
-  const open = tickets.filter((ticket) => !ticket.done);
-  const groups = new Map<string, NoteTicket[]>();
-  for (const ticket of open.filter((item) => item.who !== null && item.owner !== 'ai')) {
-    const key = [ticket.owner, ticket.who!.toLowerCase(), ticket.ask?.toLowerCase() ?? `#${ticket.id}`].join('\n');
-    groups.set(key, [...groups.get(key) ?? [], ticket]);
-  }
-  const waits = [...groups.values()].map((group): InitiativeWait => {
-    const [first] = group as [NoteTicket, ...NoteTicket[]];
-    const since = group.map((ticket) => ticket.since ?? today).sort()[0]!;
-    const text = group.length === 1 ? first.ask ? `${label(first)}: ${first.ask}` : label(first) : `${first.ask} (${group.map((ticket) => ticket.id).join(', ')})`;
-    return { who: first.who!, owes: first.owner === 'them' ? 'them' : 'you', text, since, days: workingDays(since, today),
-      sources: group.map(source), tickets: group.map(card) };
-  });
-  const next = open.filter((ticket) => ticket.owner !== 'them').map((ticket): InitiativeNext => ({ owner: ticket.owner === 'ai' ? 'ai' : 'you',
-    text: ticket.ask && ticket.who ? `${label(ticket)}. ${ticket.who}: ${ticket.ask}` : label(ticket), draft: null, sources: [source(ticket)], tickets: [card(ticket)] }));
-  const done = tickets.filter((ticket) => ticket.done && ticket.done_at && ticket.done_at >= shiftDay(today, -7))
-    .map((ticket): InitiativeLine => ({ text: label(ticket), sources: [source(ticket)], tickets: [card(ticket)] }));
-  return { ...summary, waits, next, done };
-}
-
 // One count per page open and day, for the pilot's use test
 export function markSeen(db: DatabaseSync, cfg: Config, at = Date.now()): Record<string, number> {
   const day = localTime(at, cfg.overview.timezone).day;
@@ -104,6 +62,18 @@ export function markSeen(db: DatabaseSync, cfg: Config, at = Date.now()): Record
   return views;
 }
 
+// The initiative's tickets in the board's Waiting on them column. Their chat ends such a turn with
+// STATUS: waiting_them | <who>: <line>; a line without <who>: waits on Them. since: the day of that report
+export function ticketWaits(db: DatabaseSync, id: string, today: string): InitiativeWait[] {
+  return db.prepare("SELECT id,title,lifecycle,report_line,COALESCE(report_at,last_activity_at,created_at) AS at FROM ticket WHERE initiative=? AND lifecycle='active' ORDER BY id").all(id)
+    .filter((row) => boardColumn(stage(db, Number(row.id)), row.lifecycle as Lifecycle) === 'Waiting on them').map((row): InitiativeWait => {
+      const line = row.report_line === null ? '' : String(row.report_line);
+      const [, who, text] = /^([^:]{1,40}):\s*(\S.*)$/.exec(line) ?? [null, 'Them', line || String(row.title)];
+      const since = String(row.at).slice(0, 10);
+      return { who: who!.trim(), owes: 'them', text: text!, since, days: workingDays(since, today), sources: [{ id: `T${row.id}`, date: since, text: `Ticket #${row.id}: ${row.title}` }] };
+    });
+}
+
 export function readInitiatives(db: DatabaseSync, cfg: Config, at = Date.now()): InitiativesState {
   const today = localTime(at, cfg.overview.timezone).day;
   const running = readSetting(db, 'initiatives.running');
@@ -111,9 +81,8 @@ export function readInitiatives(db: DatabaseSync, cfg: Config, at = Date.now()):
   try { views = JSON.parse(readSetting(db, 'initiatives.views') ?? '{}') as Record<string, number>; } catch { /* none counted */ }
   const initiatives = Object.entries(cfg.initiatives).map(([id, initiative]): InitiativeView => {
     const record = stored(db, id);
-    const summary = record.summary && ticketCards({ ...record.summary, waits: record.summary.waits.map((wait) => ({ ...wait, days: workingDays(wait.since, today) })) },
-      storedTickets(db, id).tickets, today);
-    return { id, title: initiative.title, client: initiative.client, note: initiative.note, at: record.at, summary, error: record.error, error_at: record.error_at };
+    return { id, title: initiative.title, client: initiative.client, note: initiative.note, at: record.at, summary: record.summary, error: record.error, error_at: record.error_at,
+      waits: ticketWaits(db, id, today) };
   });
   return { initiatives, today, views, requested: !!readSetting(db, 'initiatives.requested'),
     refreshing: !!running && at - Date.parse(running) < STALE_RUN_MS, providers: cfg.triage.providers.length > 0 };

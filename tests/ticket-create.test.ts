@@ -4,6 +4,7 @@ import { CliError, parseCommand } from '../src/cli.ts';
 import { approve } from '../src/core/approval.ts';
 import { loadConfig } from '../src/core/config.ts';
 import { openDb } from '../src/core/db.ts';
+import { readInitiatives } from '../src/core/initiative-state.ts';
 import { createTicket, stage } from '../src/core/tickets.ts';
 import { scratch } from './support.ts';
 
@@ -83,4 +84,36 @@ test('ticket create parses its fields, repeats --kb-note and refuses them on oth
   expect(() => parseCommand([...BASE, 'ticket', 'create', '7', '--client', 'acme', '--title', 'T'], undefined)).toThrow(CliError);
   expect(() => parseCommand([...BASE, 'ticket', 'close', '7', '--title', 'T'], undefined)).toThrow(CliError);
   expect(() => parseCommand([...BASE, 'status', '--kb-note', 'a.md'], undefined)).toThrow(CliError);
+});
+
+test('a ticket of an initiative is created only for that initiative client and shows on the Overview, not on the board', async () => {
+  const { path, cfg } = fixture();
+  cfg.initiatives = { 'acme-plan': { title: 'Plan', client: 'acme', note: '01_Projects/acme/plan.md', related: [] } };
+  using db = openDb(path);
+  expect(() => createTicket(db, cfg, { client: 'acme', title: 'X', initiative: 'missing' })).toThrow(/Unknown initiative/);
+  cfg.clients.other = { accounts: [], domains: ['other.invalid'], keywords: [] };
+  expect(() => createTicket(db, cfg, { client: 'other', title: 'X', initiative: 'acme-plan' })).toThrow(/Unknown initiative/);
+  const planned = createTicket(db, cfg, { client: 'acme', title: 'Cut one node', initiative: 'acme-plan' });
+  const loose = createTicket(db, cfg, { client: 'acme', title: 'Board work' });
+  expect(db.prepare('SELECT initiative FROM ticket WHERE id=?').get(planned)!.initiative).toBe('acme-plan');
+  const { readState } = await import('../src/web/state.ts');
+  const view = readState(db, cfg, new Date(AT));
+  expect(Object.values(view.groups).flat().map((ticket) => ticket.id)).toEqual([loose]);
+  expect(view.initiatives['acme-plan']!.needs_you.map((ticket) => ticket.id)).toEqual([planned]);
+  // A ticket in Them is a wait of the initiative: who from its STATUS line, Them without one
+  const unnamed = createTicket(db, cfg, { client: 'acme', title: 'Licence check', initiative: 'acme-plan' });
+  const report = db.prepare("UPDATE ticket SET lifecycle='active',approved_at=?,report='waiting_them',report_line=?,report_at='2026-11-18T09:00:00.000000Z' WHERE id=?");
+  report.run(AT, 'Bob: answer on the AU APIs', planned);
+  report.run(AT, 'Reply pending', unnamed);
+  const later = Date.parse('2026-11-23T09:00:00Z');
+  expect(readState(db, cfg, new Date(later)).initiatives['acme-plan']!.waiting_them.map((ticket) => ticket.id).sort((a, b) => a - b)).toEqual([planned, unnamed]);
+  expect(readInitiatives(db, cfg, later).initiatives[0]!.waits).toEqual([
+    { who: 'Bob', owes: 'them', text: 'answer on the AU APIs', since: '2026-11-18', days: 3, sources: [{ id: `T${planned}`, date: '2026-11-18', text: `Ticket #${planned}: Cut one node` }] },
+    { who: 'Them', owes: 'them', text: 'Reply pending', since: '2026-11-18', days: 3, sources: [{ id: `T${unnamed}`, date: '2026-11-18', text: `Ticket #${unnamed}: Licence check` }] }]);
+  expect(parseCommand([...BASE, 'ticket', 'create', '--client', 'acme', '--title', 'T', '--initiative', 'acme-plan'], undefined).ticket).toEqual({ client: 'acme', title: 'T', initiative: 'acme-plan' });
+  // --ai: a ticket the AI suggested, in the AI column of its initiative while proposed
+  expect(parseCommand([...BASE, 'ticket', 'create', '--client', 'acme', '--title', 'T', '--initiative', 'acme-plan', '--ai'], undefined).ticket).toEqual({ client: 'acme', title: 'T', initiative: 'acme-plan', origin: 'ai' });
+  const suggested = createTicket(db, cfg, { client: 'acme', title: 'Remind Bob', initiative: 'acme-plan', origin: 'ai' });
+  expect(readState(db, cfg, new Date(AT)).initiatives['acme-plan']!.needs_you.find((ticket) => ticket.id === suggested)?.origin).toBe('ai');
+  expect(() => parseCommand([...BASE, 'ticket', 'close', '7', '--ai'], undefined)).toThrow(CliError);
 });

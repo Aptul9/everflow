@@ -53,7 +53,7 @@ const lost = Symbol('lease lost');
 const statusRule = `End every turn with STATUS: <working|needs_you|waiting_them|done> | <one line>, where
 - working: more of your own work follows without any input.
 - needs_you: nothing moves until Antonio acts or decides (approve text, grant access, pick an option).
-- waiting_them: the next move belongs to someone outside (their reply, their change).
+- waiting_them: the next move belongs to someone outside (their reply, their change). Begin the line with who it waits on and a colon: STATUS: waiting_them | Bob: answer on the AU APIs
 - done: the ask is fully met; this closes the ticket.
 Everflow reads this last line and moves the ticket on its board from it; no command does that. When Antonio asks to change the ticket's status, end with the STATUS he asked for.
 This holds after the ticket was closed or dismissed too: a later turn's STATUS reopens it, or closes it as done.

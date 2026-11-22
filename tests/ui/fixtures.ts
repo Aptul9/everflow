@@ -4,7 +4,7 @@ export const AT = '2026-11-06T06:00:00.000000Z';
 export function card(id: number, fields: Partial<TicketCard> = {}): TicketCard {
   return { id, title: 'Reset access', client: 'North', lifecycle: 'proposed', stage: 'Needs you', summary: 'Source summary', ask: 'Confirm access scope',
     proposal: 'Check membership first', confidence: 0.88, maybe_ticket: 42, kb_notes: ['01_Projects/access.md'], created_at: AT, last_activity_at: AT,
-    closed_at: null, report: null, report_line: null, session_id: null, chat_running: false, chat_waiting_since: null, session_title: null, reason: 'Same issue as the open access request', timeline_revision: 'synthetic-initial-timeline',
+    closed_at: null, report: null, report_line: null, session_id: null, chat_running: false, chat_waiting_since: null, origin: null, session_title: null, reason: 'Same issue as the open access request', timeline_revision: 'synthetic-initial-timeline',
     refs: [{ id: 2, kind: 'jira', key: 'OPS-123', url: 'https://example.invalid/browse/OPS-123', seen_in: 'message' }],
     messages: [{ id: 2, source: 'outlook', sender: 'Third party', sent_at: AT, text: 'Newest source message', attachments: [] },
       { id: 1, source: 'teams', sender: 'Another sender', sent_at: '2026-11-05T06:00:00Z', text: 'Older source message', attachments: [] }], ...fields };
@@ -12,7 +12,7 @@ export function card(id: number, fields: Partial<TicketCard> = {}): TicketCard {
 
 export function uiState(): OverviewState {
   return {
-    tickets_enabled: true, chats_enabled: true, day: '2026-11-06',
+    tickets_enabled: true, chats_enabled: true, day: '2026-11-06', initiatives: {},
     groups: {
       needs_you: [card(1), card(2, { title: 'Second proposal' })],
       working: [card(3, { title: 'Active work', lifecycle: 'active', stage: 'Idle', report: 'working', report_line: 'Membership checked', session_title: 'North access investigation' })],

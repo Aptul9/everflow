@@ -3,56 +3,78 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { guidePerson, InitiativesPage } from '../../src/components/initiatives/initiatives-page.tsx';
-import type { Explainer, GuideState, InitiativesState, InitiativeView } from '../../src/lib/web-types.ts';
+import type { Explainer, GuideState, InitiativesState, InitiativeView, OverviewState } from '../../src/lib/web-types.ts';
+import { card, uiState } from './fixtures.ts';
 
 let fetcher: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => init?.method === 'POST' ? Response.json({ requested: true })
-    : String(input).startsWith('/api/guide/') ? new Response('{}', { status: 404 }) : Response.json(state()));
+    : String(input).startsWith('/api/guide/') ? new Response('{}', { status: 404 }) : String(input).startsWith('/api/state') ? Response.json(board()) : Response.json(state()));
   vi.stubGlobal('fetch', fetcher);
   window.sessionStorage.clear();
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const ACTION = 'a'.repeat(64);
-const props = () => ({ initialState: state(), token: ACTION });
+const props = () => ({ initialState: state(), initialBoard: board(), initialEtag: '"synthetic"', token: ACTION, initialNow: Date.parse('2026-11-18T09:00:00Z') });
 const source = (id: string, date: string, text: string) => ({ id, date, text });
-
 function acme(): InitiativeView {
   return { id: 'acme-access', title: 'Access', client: 'acme', note: '01_Projects/acme-access.md', at: '2026-11-18T07:00:00.000000Z', error: null, error_at: null,
     summary: { state: 'waiting_them', headline: 'Alice silent on 4 questions', model: 'm', entries: 40, rejected: 1,
-      now: [{ text: 'Standard waits documentation approval', sources: [source('L1', '2026-11-18', '2026-11-18 09:48 - Pat: standard pending')] }],
-      waits: [
-        { who: 'Alice', owes: 'them', text: 'questions 1-4', since: '2026-11-11', days: 5 + 1, sources: [source('L9', '2026-11-11', '2026-11-11 16:53 - SENT Alice 4)')] },
-        { who: 'Bob', owes: 'you', text: 'catalogue v2.13', since: '2026-11-18', days: 0, sources: [source('L2', '2026-11-18', '2026-11-18 - Built v2.13')] },
-      ],
-      next: [{ owner: 'ai', text: 'Reminder to Alice', draft: 'Hi Alice, any news on 1-4?', sources: [source('L9', '2026-11-11', 'x')] },
-        { owner: 'you', text: 'Send v2.13 to Bob', draft: null, sources: [source('L2', '2026-11-18', 'y')] }],
-      done: [{ text: 'Catalogue v2.13 built', sources: [source('L2', '2026-11-18', 'y')] }] } };
+      now: [{ text: 'Standard waits documentation approval', sources: [source('L1', '2026-11-18', '2026-11-18 09:48 - Pat: standard pending')] }] },
+    waits: [
+      { who: 'Alice', owes: 'them', text: 'questions 1-4', since: '2026-11-10', days: 6, sources: [source('T104', '2026-11-10', 'Ticket #104: Bob reviews catalogue')] },
+      { who: 'Bob', owes: 'them', text: 'catalogue review', since: '2026-11-18', days: 0, sources: [source('T107', '2026-11-18', 'Ticket #107: Catalogue review')] }] };
 }
 
 function state(): InitiativesState {
   return { initiatives: [acme(), { id: 'example-platform', title: 'Platform project', client: 'example', note: '01_Projects/example/example-platform.md', at: null, summary: null,
-    error: 'Provider first HTTP 503', error_at: '2026-11-18T07:01:00.000000Z' }], today: '2026-11-18', views: {}, requested: false, refreshing: false, providers: true };
+    error: 'Provider first HTTP 503', error_at: '2026-11-18T07:01:00.000000Z', waits: [] }], today: '2026-11-18', views: {}, requested: false, refreshing: false, providers: true };
 }
 
-test('cards show each initiative state; the detail draws who owes what, the board and the sources', async () => {
+// The board state: the board's own tickets plus acme's tickets, which show only on the Overview
+function board(): OverviewState {
+  const base = uiState();
+  return { ...base, initiatives: { 'acme-access': {
+    needs_you: [card(101, { title: 'Ask Alice for questions 1-4', client: 'acme' }), card(108, { title: 'Remind Bob of the review', client: 'acme', origin: 'ai' })],
+    failed: [card(102, { title: 'Publish catalogue', client: 'acme', lifecycle: 'active', stage: 'Failed' })],
+    working: [card(103, { title: 'Rebuild v2.14', client: 'acme', lifecycle: 'active', stage: 'Working', chat_running: true, session_id: 'ses_synthetic' })],
+    waiting_them: [card(104, { title: 'Bob reviews catalogue', client: 'acme', lifecycle: 'active', stage: 'Waiting on them', report: 'waiting_them', report_line: 'Asked Bob on Teams' })],
+    done_today: [card(105, { title: 'Catalogue v2.13 built', client: 'acme', lifecycle: 'done', stage: 'Done', closed_at: '2026-11-17T09:00:00Z' })],
+    skipped: [card(106, { title: 'Old idea', client: 'acme', lifecycle: 'dismissed', stage: 'Dismissed', closed_at: '2026-11-17T09:00:00Z' })],
+  }, 'example-platform': { needs_you: [], failed: [], working: [], waiting_them: [], done_today: [], skipped: [] } } };
+}
+
+test('an initiative shows its tickets in the board columns: AI suggestions, You with failed ones, Working, Them, Done this week, Skipped', async () => {
   render(<InitiativesPage {...props()} />);
-  const cards = screen.getAllByRole('button', { pressed: true });
-  expect(cards).toHaveLength(1);
-  expect(cards[0]!.textContent).toContain('Waiting on them · 6d');
   const detail = screen.getByRole('region', { name: 'acme Access' });
+  const column = (name: string) => within(detail).getByRole('region', { name });
+  const ids = (name: string) => [...column(name).querySelectorAll('article[data-ticket-id]')].map((item) => item.getAttribute('data-ticket-id'));
+  expect(ids('AI (1)')).toEqual(['108']);
+  expect(within(column('AI (1)')).getByRole('button', { name: 'Start' })).toBeTruthy();
+  expect(ids('You (2)')).toEqual(['101', '102']);
+  expect(ids('Working (1)')).toEqual(['103']);
+  expect(ids('Them (1)')).toEqual(['104']);
+  expect(ids('Done this week (1)')).toEqual(['105']);
+  expect(ids('Skipped (1)')).toEqual(['106']);
+  expect(column('Them (1)').textContent).toContain('Asked Bob on Teams');
+  expect(screen.getByRole('button', { pressed: true }).textContent).toContain('AI 1You 2Working 1Them 1');
+  await userEvent.click(within(column('You (2)')).getAllByRole('button', { name: 'Start' })[0]!);
+  await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/ticket/101/start', expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'x-everflow-token': ACTION }) })));
+  await userEvent.click(within(column('You (2)')).getByRole('button', { name: 'Expand ticket #101' }));
+  expect(within(screen.getByRole('dialog')).getByRole('heading', { name: 'Ask Alice for questions 1-4' })).toBeTruthy();
+});
+
+test('the detail draws who owes what and the sources of the current lines', async () => {
+  render(<InitiativesPage {...props()} />);
+  const detail = screen.getByRole('region', { name: 'acme Access' });
+  expect(screen.getAllByRole('button', { pressed: true })[0]!.textContent).toContain('Waiting on them · 6d');
   expect(within(detail).getByRole('group', { name: /Open requests/ }).getAttribute('aria-label')).toBe('Open requests: Alice 1, Bob 1');
   expect(detail.querySelector('[data-person="Alice"]')?.getAttribute('data-tone')).toBe('overdue');
-  expect(detail.querySelector('[data-person="Bob"]')?.getAttribute('data-tone')).toBe('you');
-  expect(within(detail).getByRole('region', { name: 'Them (1)' }).textContent).toContain('6 working days');
-  expect(within(detail).getByRole('region', { name: 'You (1)' }).textContent).toContain('Send v2.13 to Bob');
+  expect(detail.querySelector('[data-person="Bob"]')?.getAttribute('data-tone')).toBe('them');
   expect(detail.textContent).toContain('1 items dropped for citing no source');
   await userEvent.click(within(within(detail).getByRole('list')).getByRole('button', { name: 'Fonti (1)' }));
   expect(screen.getByRole('dialog').textContent).toContain('18/11/2026 · Registro del progettoPat: standard pending');
-  expect(screen.getByRole('dialog').textContent).not.toContain('2026-11-18 09:48');
-  await userEvent.click(within(within(detail).getByRole('region', { name: 'AI (1)' })).getByRole('button', { name: 'Draft' }));
-  expect(detail.textContent).toContain('Hi Alice, any news on 1-4?');
 });
 
 test('overview dates use Rome time', () => {
@@ -64,7 +86,7 @@ test('a failed initiative says so, the open is counted once a day, and Refresh a
   render(<InitiativesPage {...props()} />);
   await userEvent.click(screen.getByRole('button', { name: /Platform project/ }));
   const detail = screen.getByRole('region', { name: 'example Platform project' });
-  expect(within(detail).getByRole('alert').textContent).toContain('HTTP 503');
+  expect(within(detail).getAllByRole('alert')[0]!.textContent).toContain('HTTP 503');
   await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/initiatives/seen', expect.objectContaining({ method: 'POST' })));
   await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
   await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/initiatives/refresh', expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ 'x-everflow-token': ACTION }) })));
@@ -92,14 +114,6 @@ test('clicking a person fades the others and lists what they owe; Torna alla map
   expect(detail.querySelector('[data-focus-waits]')).toBeNull();
   expect(detail.querySelectorAll('[data-dim="true"]')).toHaveLength(0);
 });
-
-test('a Them card focuses its person on the map', async () => {
-  render(<InitiativesPage {...props()} />);
-  const detail = screen.getByRole('region', { name: 'acme Access' });
-  await userEvent.click(within(within(detail).getByRole('region', { name: 'Them (1)' })).getByRole('button', { name: 'Show what Alice owes' }));
-  expect(detail.querySelector('[data-person="Bob"]')!.getAttribute('data-dim')).toBe('true');
-});
-
 function guide(): GuideState {
   const ex: Explainer = {
     title: 'Access', one_liner: '', why: [], role: '', teams: [], concepts: [], glossary: [], warnings: [], ask_who: [], phases: [], timeline: [], blocked_by: [], next_you: [], notes: [], rejected: 0, model: 'test',
@@ -111,19 +125,15 @@ function guide(): GuideState {
   return { initiative: acme(), today: '2026-11-18', at: null, explainer: ex, error: null, error_at: null, requested: false, running: false, providers: true, dismissed: [], flagged: [] };
 }
 
-test('a board card focuses only its uniquely matching node with the same source text', async () => {
+test('with a guide, clicking a person on the map shows the nodes they owe in the dependency graph', async () => {
   fetcher.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => init?.method === 'POST' ? Response.json({ requested: true })
-    : String(input).includes('/api/guide/acme-access') ? Response.json(guide()) : new Response('{}', { status: 404 }));
+    : String(input).includes('/api/guide/acme-access') ? Response.json(guide()) : String(input).startsWith('/api/state') ? Response.json(board()) : new Response('{}', { status: 404 }));
   render(<InitiativesPage {...props()} />);
   await waitFor(() => expect(screen.getAllByRole('link', { name: 'Apri la guida' }).length).toBeGreaterThan(0));
   const detail = screen.getByRole('region', { name: 'acme Access' });
-  await userEvent.click(within(detail).getByRole('button', { name: 'Show what Alice owes' }));
-  expect(detail.querySelector('[data-graph]')?.getAttribute('data-focus')).toBe('questions');
-  expect(detail.querySelector('[data-edge="questions>goal"]')?.getAttribute('data-live')).toBe('true');
-  expect(within(detail).queryAllByRole('button', { name: 'Segnala come sbagliato' })).toHaveLength(0);
+  await userEvent.click(detail.querySelector('[data-person="Alice"]')!);
+  expect(detail.querySelector('[data-graph]')?.getAttribute('data-focus')).toBe('alice');
   await userEvent.click(within(detail).getByRole('button', { name: 'Togli la selezione (Esc)' }));
-  await userEvent.click(within(within(detail).getByRole('region', { name: 'AI (1)' })).getByRole('button', { name: 'Mostra dipendenze della scheda' }));
-  expect(detail.querySelector('[data-focus-line]')?.textContent).toContain('Nessuna dipendenza documentata');
   expect(detail.querySelector('[data-graph]')).toBeNull();
 });
 
@@ -133,33 +143,6 @@ test('ambiguous short names never select a guide person', () => {
   expect(guidePerson(ex, 'Alice')).toBeNull();
   expect(guidePerson(ex, 'Alice Example')).toBe('alice');
   expect(guidePerson(ex, 'Alice Stranger')).toBeNull();
-});
-
-test('matching source IDs with different source text do not link a board card', async () => {
-  const data = guide();
-  const ex = data.explainer!;
-  ex.sources = { L9: { id: 'L9', kind: 'log', text: 'Different log entry' } };
-  ex.graph.nodes[0]!.src = ['L9'];
-  fetcher.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => init?.method === 'POST' ? Response.json({ requested: true })
-    : String(input).includes('/api/guide/acme-access') ? Response.json(data) : new Response('{}', { status: 404 }));
-  render(<InitiativesPage {...props()} />);
-  await waitFor(() => expect(screen.getAllByRole('link', { name: 'Apri la guida' }).length).toBeGreaterThan(0));
-  const detail = screen.getByRole('region', { name: 'acme Access' });
-  await userEvent.click(within(detail).getByRole('button', { name: 'Show what Alice owes' }));
-  expect(detail.querySelector('[data-focus-line]')?.textContent).toContain('Nessuna dipendenza documentata');
-  expect(detail.querySelector('[data-graph]')).toBeNull();
-});
-
-test('a wait card does not select a node owed by a different person', async () => {
-  const data = guide();
-  data.explainer!.graph.edges[0]!.from = 'you';
-  fetcher.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => init?.method === 'POST' ? Response.json({ requested: true })
-    : String(input).includes('/api/guide/acme-access') ? Response.json(data) : new Response('{}', { status: 404 }));
-  render(<InitiativesPage {...props()} />);
-  await waitFor(() => expect(screen.getAllByRole('link', { name: 'Apri la guida' }).length).toBeGreaterThan(0));
-  const detail = screen.getByRole('region', { name: 'acme Access' });
-  await userEvent.click(within(detail).getByRole('button', { name: 'Show what Alice owes' }));
-  expect(detail.querySelector('[data-focus-line]')?.textContent).toContain('Nessuna dipendenza documentata');
 });
 
 test('the overview person map supports keyboard activation and reset', async () => {
@@ -172,36 +155,4 @@ test('the overview person map supports keyboard activation and reset', async () 
   alice.focus();
   await userEvent.keyboard(' ');
   expect(detail.querySelector('[data-focus-waits]')).toBeNull();
-});
-
-test('a note ticket card opens the board popup with all its fields; a grouped Them card lists every ticket; no source button on ticket cards', async () => {
-  const ticket = (id: string, title: string, extra: object = {}) => ({ id, title, who: null, ask: null, since: null, after: null, done_at: null, details: [], ...extra });
-  const view = acme();
-  view.summary = { ...view.summary!,
-    waits: [{ who: 'Admin', owes: 'them', text: 'ok to buy (R.1, R.3)', since: '2026-11-21', days: 0, sources: [source('KR.1', '2026-11-21', 'Ticket R.1: Reservation D8as_v5')],
-      tickets: [ticket('R.1', 'Reservation D8as_v5', { who: 'Admin', ask: 'ok to buy', since: '2026-11-21', details: [{ label: 'USD/m', value: '349' }] }),
-        ticket('R.3', 'Reservation P1v3', { who: 'Admin', ask: 'ok to buy', since: '2026-11-21', after: '1.5' })] }],
-    next: [{ owner: 'you', text: '1.4 AKS EU 12 to 11 nodes', draft: null, sources: [source('K1.4', '2026-11-22', 'Ticket 1.4: AKS EU 12 to 11 nodes')],
-      tickets: [ticket('1.4', 'AKS EU 12 to 11 nodes', { details: [{ label: 'RTO', value: 'none, cordon + drain' }, { label: 'USD/m', value: '350' }] })] }] };
-  render(<InitiativesPage {...props()} initialState={{ ...state(), initiatives: [view] }} />);
-  const detail = screen.getByRole('region', { name: 'acme Access' });
-  const you = within(detail).getByRole('region', { name: 'You (1)' });
-  expect(within(you).queryByRole('button', { name: /Fonti/ })).toBeNull();
-  await userEvent.click(within(you).getByText('1.4 AKS EU 12 to 11 nodes'));
-  const popup = screen.getByRole('dialog');
-  expect(within(popup).getByRole('heading', { name: '1.4 AKS EU 12 to 11 nodes' })).toBeTruthy();
-  expect(popup.textContent).toContain('RTOnone, cordon + drain');
-  expect(popup.textContent).toContain('USD/m350');
-  expect(popup.textContent).not.toContain('- [ ]');
-  await userEvent.keyboard('{Escape}');
-  expect(screen.queryByRole('dialog')).toBeNull();
-  const them = within(detail).getByRole('region', { name: 'Them (1)' });
-  expect(them.textContent).toContain('since 21/11');
-  await userEvent.click(within(them).getByRole('button', { name: /ok to buy/ }));
-  const group = screen.getByRole('dialog');
-  expect(within(group).getByRole('heading', { name: 'R.1 Reservation D8as_v5' })).toBeTruthy();
-  expect(within(group).getByRole('heading', { name: 'R.3 Reservation P1v3' })).toBeTruthy();
-  expect(group.textContent).toContain('after 1.5');
-  expect(group.textContent).toContain('since 21/11/2026');
-  expect(group.textContent).toContain('Waiting forok to buy');
 });

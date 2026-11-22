@@ -1,14 +1,16 @@
 'use client';
 
-import { ArrowRight, BookOpen, Bot, Check, ChevronDown, ChevronUp, Copy, LayoutGrid, LogOut, Network, RefreshCw, TriangleAlert, User, Users } from 'lucide-react';
+import { ArrowRight, BookOpen, LayoutGrid, LogOut, RefreshCw, TriangleAlert } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { cleanSourceText, italianDates } from '../../lib/web-types.ts';
-import type { Explainer, GuideState, InitiativeLine, InitiativeNext, InitiativesState, InitiativeStateName, InitiativeTicket, InitiativeView, InitiativeWait } from '../../lib/web-types.ts';
+import type { Explainer, GuideState, Group, InitiativesState, InitiativeStateName, InitiativeView, InitiativeWait, OverviewState, TicketCard as CardData } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert.tsx';
 import { Button } from '../ui/button.tsx';
 import { Inline } from '../tickets/markdown.tsx';
-import { Expand, Field } from '../tickets/ticket-card.tsx';
+import { TicketColumns } from '../tickets/ticket-columns.tsx';
+import type { Board, ColumnSpec } from '../tickets/ticket-columns.tsx';
+import { useOverview } from '../tickets/use-overview.ts';
 import { DependencyGraph, initials } from './dependency-graph.tsx';
 import { formatDate, formatInitiativeTime as formatTime, Sources } from './sources.tsx';
 
@@ -16,16 +18,19 @@ const POLL_MS = 15_000;
 // Waits on others older than this many working days turn red
 export const OVERDUE_DAYS = 5;
 
-function themDays(view: InitiativeView): number {
-  return Math.max(0, ...(view.summary?.waits ?? []).filter((wait) => wait.owes === 'them').map((wait) => wait.days));
+function themDays(waits: readonly InitiativeWait[]): number {
+  return Math.max(0, ...waits.filter((wait) => wait.owes === 'them').map((wait) => wait.days));
 }
+
+// A ticket the AI suggested and nobody started yet: the AI column, ahead of You
+const suggested = (ticket: CardData) => ticket.origin === 'ai' && ticket.lifecycle === 'proposed';
 
 const stateLabels: Record<InitiativeStateName, string> = { moving: 'Moving', waiting_them: 'Waiting on them', needs_you: 'Needs you', stuck: 'Stuck', quiet: 'Quiet' };
 
 export function StatePill({ view }: { view: InitiativeView }) {
   const summary = view.summary;
   if (!summary) return <span className="w-fit rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-muted-foreground">Not summed up yet</span>;
-  const days = themDays(view);
+  const days = themDays(view.waits);
   const tone = summary.state === 'stuck' || summary.state === 'waiting_them' && days > OVERDUE_DAYS ? 'bg-destructive-soft text-destructive'
     : summary.state === 'needs_you' ? 'bg-accent text-accent-foreground' : summary.state === 'waiting_them' ? 'bg-warning-soft text-warning'
     : summary.state === 'moving' ? 'bg-info-soft text-info' : 'bg-muted text-muted-foreground';
@@ -50,18 +55,6 @@ export function guidePerson(explainer: Explainer, who: string): string | null {
   if (exact.length) return exact.length === 1 ? exact[0]!.id : null;
   if (who.trim().split(/\s+/).length !== 1) return null;
   const matches = explainer.people.filter((item) => same(first(item.name), first(who)));
-  return matches.length === 1 ? matches[0]!.id : null;
-}
-
-// Source IDs are local to each generation, so compare the cited text, not the IDs.
-function guideNode(explainer: Explainer, line: InitiativeLine): string | null {
-  const normalize = (text: string) => text.trim().toLocaleLowerCase().replace(/\s+/g, ' ');
-  const wait = 'who' in line && 'owes' in line ? line as InitiativeWait : null;
-  const person = wait ? wait.owes === 'you' ? 'you' : guidePerson(explainer, wait.who) : null;
-  if (wait && !person) return null;
-  const matches = explainer.graph.nodes.filter((node) => normalize(node.label) === normalize(line.text)
-    && node.src.some((id) => explainer.sources[id] && line.sources.some((source) => normalize(source.text) === normalize(explainer.sources[id]!.text)))
-    && (!wait || explainer.graph.edges.some((edge) => edge.kind === 'owes' && edge.from === person && edge.to === node.id && edge.src.some((id) => !!explainer.sources[id]))));
   return matches.length === 1 ? matches[0]!.id : null;
 }
 
@@ -147,82 +140,6 @@ function FocusWaits({ waits, focus, onReset }: { waits: InitiativeWait[]; focus:
   </div>;
 }
 
-function FocusLine({ line, onReset }: { line: InitiativeLine; onReset: () => void }) {
-  return <div data-focus-line="" className="rounded-lg border bg-background p-3 text-sm">
-    <div className="flex items-start gap-2"><p><Text text={line.text} /><Sources sources={line.sources} /></p>
-      <Button type="button" variant="ghost" size="xs" className="ml-auto shrink-0" onClick={onReset}>Torna alla mappa</Button></div>
-    <p className="mt-2 text-muted-foreground">Nessuna dipendenza documentata per questa scheda.</p>
-  </div>;
-}
-
-function Draft({ next }: { next: InitiativeNext }) {
-  const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
-  if (!next.draft) return null;
-  return <div className="mt-2">
-    <div className="flex gap-1">
-      <Button type="button" variant="outline" size="xs" aria-expanded={open} onClick={() => setOpen(!open)}>
-        {open ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}Draft</Button>
-      <Button type="button" variant="outline" size="xs" onClick={() => { void navigator.clipboard?.writeText(next.draft!).then(() => setCopied(true)); }}>
-        {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}{copied ? 'Copied' : 'Copy'}</Button>
-    </div>
-    {open && <pre className="mt-1.5 rounded-md border bg-card p-2.5 font-sans text-xs whitespace-pre-wrap">{next.draft}</pre>}
-  </div>;
-}
-
-function Column(props: { title: string; icon: React.ReactNode; count: number; tone: string; children: React.ReactNode }) {
-  return <section aria-label={`${props.title} (${props.count})`} className={cn('flex min-w-0 flex-col gap-2 rounded-xl border-t-[3px] bg-muted/70 p-2.5 ring-1 ring-border/60', props.tone)}>
-    <h3 className="flex items-center gap-1.5 px-0.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">{props.icon}{props.title}
-      <span className="ml-auto rounded-full bg-background px-2 tabular-nums">{props.count}</span></h3>
-    {props.count === 0 && <p className="px-1 py-3 text-center text-xs text-muted-foreground">Nothing.</p>}
-    {props.children}
-  </section>;
-}
-
-const dayMonth = (day: string) => `${day.slice(8, 10)}/${day.slice(5, 7)}`;
-
-// The fields of a note ticket in the board's boxes: what is awaited, then the row of its table in the note
-function TicketFields({ ticket }: { ticket: InitiativeTicket }) {
-  const fields = [['Waiting for', ticket.ask], ...ticket.details.map((detail) => [detail.label, detail.value])].filter((field): field is [string, string] => !!field[1]);
-  return fields.length ? <dl className="grid gap-1.5">{fields.map(([label, value]) => <Field key={label} label={label} expanded><Text text={value} /></Field>)}</dl>
-    : <p className="text-sm text-muted-foreground">No details in the note.</p>;
-}
-
-function TicketMeta({ ticket }: { ticket: InitiativeTicket }) {
-  return <>
-    <span className="font-mono">{ticket.id}</span>
-    {ticket.who && <span>{ticket.who}</span>}
-    {ticket.since && <span>since {formatDate(ticket.since)}</span>}
-    {ticket.after && <span>after {ticket.after}</span>}
-    {ticket.done_at && <span>done {formatDate(ticket.done_at)}</span>}
-  </>;
-}
-
-// A card from the note's tickets opens the board's Expand popup with all its fields; a summary card shows its sources and its dependencies in the map
-function Item({ line, bar, onFocus, label, children }: { line: InitiativeLine; bar: string; onFocus?: () => void; label?: string; children?: React.ReactNode }) {
-  const box = cn('group relative rounded-lg border border-l-[3px] bg-card p-2.5 pr-8 text-[13px] leading-snug shadow-xs', bar);
-  const tickets = line.tickets ?? [];
-  if (tickets.length) {
-    const single = tickets.length === 1 ? tickets[0]! : null;
-    return <Expand label={single ? `Open ticket ${single.id}` : `Open tickets ${tickets.map((ticket) => ticket.id).join(', ')}`}
-      title={single ? `${single.id} ${single.title}` : line.text.replaceAll('**', '')}
-      meta={single ? <TicketMeta ticket={single} /> : <span>{tickets.length} tickets</span>}
-      trigger={<button type="button" className={cn(box, 'block w-full cursor-pointer text-left hover:border-foreground/25')}><Text text={line.text} />{children}</button>}>
-      {single ? <TicketFields ticket={single} /> : <div className="space-y-4">{tickets.map((ticket) => <section key={ticket.id} className="space-y-1.5">
-        <h3 className="text-sm font-semibold">{`${ticket.id} ${ticket.title}`}</h3>
-        <p className="flex flex-wrap gap-x-2 text-xs text-muted-foreground"><TicketMeta ticket={ticket} /></p>
-        <TicketFields ticket={ticket} />
-      </section>)}</div>}
-    </Expand>;
-  }
-  return <div onClick={(event) => { if (onFocus && !(event.target as Element).closest('button, a')) onFocus(); }}
-    className={cn(box, onFocus && 'cursor-pointer hover:border-foreground/25')}>
-    <Text text={line.text} /><Sources sources={line.sources} />
-    {children}
-    {onFocus && <button type="button" aria-label={label ?? 'Show in the map'} title={label ?? 'Show in the map'} onClick={onFocus}
-      className="absolute top-1.5 right-1.5 rounded p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground"><Network aria-hidden="true" className="size-3.5" /></button>}
-  </div>;
-}
 function GuideLink({ id, ready, size }: { id: string; ready: boolean; size: 'card' | 'head' }) {
   const href = `/overview/${encodeURIComponent(id)}`;
   if (size === 'card') return <a href={href} className={cn('inline-flex items-center gap-1.5 text-xs font-medium hover:underline', ready ? 'text-primary' : 'text-muted-foreground')}>
@@ -231,22 +148,22 @@ function GuideLink({ id, ready, size }: { id: string; ready: boolean; size: 'car
     <BookOpen aria-hidden="true" className="size-4" />{ready ? 'Apri la guida' : 'Guida in preparazione'}{ready && <ArrowRight aria-hidden="true" className="size-4" />}</a>;
 }
 
-function Detail({ view, guide }: { view: InitiativeView; guide: GuideState | null }) {
+function Detail({ view, guide, board, tickets }: { view: InitiativeView; guide: GuideState | null; board: Board; tickets: Record<Group, CardData[]> | undefined }) {
   const summary = view.summary;
   const explainer = guide?.explainer ?? null;
-  const [focus, setFocus] = useState<{ who?: string; line?: InitiativeLine; tick: number } | null>(null);
+  const [focus, setFocus] = useState<{ who: string; tick: number } | null>(null);
   const area = useRef<HTMLDivElement>(null);
   const pick = (who: string) => {
     setFocus((current) => ({ who, tick: (current?.tick ?? 0) + 1 }));
     area.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
   };
-  const pickLine = (line: InitiativeLine) => {
-    setFocus((current) => ({ line, tick: (current?.tick ?? 0) + 1 }));
-    area.current?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
-  };
-  const graphFocus = focus && explainer ? focus.line ? guideNode(explainer, focus.line) : focus.who ? guidePerson(explainer, focus.who) : null : null;
-  const them = summary?.waits.filter((wait) => wait.owes === 'them').sort((a, b) => b.days - a.days) ?? [];
-  const count = (owner: 'ai' | 'you') => summary?.next.filter((next) => next.owner === owner) ?? [];
+  const graphFocus = focus && explainer ? guidePerson(explainer, focus.who) : null;
+  const groups = tickets ?? { needs_you: [], working: [], waiting_them: [], failed: [], done_today: [], skipped: [] };
+  const columns: ColumnSpec[] = [{ group: 'needs_you', id: 'ai', label: 'AI', cards: groups.needs_you.filter(suggested) },
+    { group: 'needs_you', label: 'You', cards: [...groups.needs_you.filter((ticket) => !suggested(ticket)), ...groups.failed] }, { group: 'working', label: 'Working', cards: groups.working },
+    { group: 'waiting_them', label: 'Them', cards: groups.waiting_them }, { group: 'done_today', label: 'Done this week', cards: groups.done_today },
+    { group: 'skipped', label: 'Skipped', cards: groups.skipped }];
+  const count = columns.reduce((sum, column) => sum + column.cards.length, 0);
   return <section aria-label={`${view.client} ${view.title}`} className="space-y-5 rounded-xl border bg-card p-4 shadow-xs sm:p-6">
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
       <h2 className="text-lg font-semibold"><span className="mr-2 text-xs font-normal tracking-wide text-muted-foreground uppercase">{view.client}</span>{view.title}</h2>
@@ -263,33 +180,17 @@ function Detail({ view, guide }: { view: InitiativeView; guide: GuideState | nul
       <p className="max-w-4xl text-xl leading-snug font-semibold tracking-tight sm:text-2xl"><Text text={summary.headline} /></p>
       <div ref={area} className="scroll-mt-24">
         {focus && explainer && graphFocus ? <DependencyGraph key={focus.tick} explainer={explainer} today={guide!.today} focus={graphFocus} onFocusChange={(id) => { if (id === null) setFocus(null); }} />
-          : focus?.line ? <FocusLine line={focus.line} onReset={() => setFocus(null)} /> : <div className="grid items-start gap-5 lg:grid-cols-[1.1fr_1fr]">
+          : <div className="grid items-start gap-5 lg:grid-cols-[1.1fr_1fr]">
             <div>
-              <PeopleMap waits={summary.waits} focus={focus?.who} onFocus={(who) => focus?.who && same(focus.who, who) ? setFocus(null) : pick(who)} />
-              {focus?.who && <FocusWaits waits={summary.waits} focus={focus.who} onReset={() => setFocus(null)} />}
+              <PeopleMap waits={view.waits} focus={focus?.who} onFocus={(who) => focus && same(focus.who, who) ? setFocus(null) : pick(who)} />
+              {focus && <FocusWaits waits={view.waits} focus={focus.who} onReset={() => setFocus(null)} />}
             </div>
             <NowList summary={summary} />
           </div>}
       </div>
       {focus && explainer && graphFocus && <NowList summary={summary} />}
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Column title="AI" tone="border-t-primary" icon={<Bot aria-hidden="true" className="size-4 text-primary" />} count={count('ai').length}>
-          {count('ai').map((next, index) => <Item key={index} line={next} bar="border-l-primary" onFocus={() => pickLine(next)} label="Mostra dipendenze della scheda"><Draft next={next} /></Item>)}
-        </Column>
-        <Column title="You" tone="border-t-warning" icon={<User aria-hidden="true" className="size-4 text-warning" />} count={count('you').length}>
-          {count('you').map((next, index) => <Item key={index} line={next} bar="border-l-warning" onFocus={() => pickLine(next)} label="Mostra dipendenze della scheda"><Draft next={next} /></Item>)}
-        </Column>
-        <Column title="Them" tone="border-t-info" icon={<Users aria-hidden="true" className="size-4 text-info" />} count={them.length}>
-          {them.map((wait, index) =>
-            <Item key={index} line={{ ...wait, text: `**${wait.who}**: ${wait.text}` }} bar={wait.days > OVERDUE_DAYS ? 'border-l-destructive' : 'border-l-info'} onFocus={() => explainer ? pickLine(wait) : pick(wait.who)} label={`Show what ${wait.who} owes`}>
-              <span className={cn('mt-1 block text-xs', wait.days > OVERDUE_DAYS ? 'font-medium text-destructive' : 'text-muted-foreground')}>{wait.days === 0 ? `since ${dayMonth(wait.since)}` : `${wait.days} working day${wait.days === 1 ? '' : 's'}, since ${dayMonth(wait.since)}`}</span>
-            </Item>)}
-        </Column>
-        <Column title="Done this week" tone="border-t-success" icon={<Check aria-hidden="true" className="size-4 text-success" />} count={summary.done.length}>
-          {summary.done.map((line, index) => <Item key={index} line={line} bar="border-l-success" />)}
-        </Column>
-      </div>
     </>}
+    <TicketColumns board={board} title="Tickets" columns={columns} summary={() => `${count} tickets of this initiative`} />
   </section>;
 }
 
@@ -310,7 +211,9 @@ function signedOut(response: Response): boolean {
   return true;
 }
 
-export function InitiativesPage(props: { initialState: InitiativesState; token: string; signOut?: boolean }) {
+export function InitiativesPage(props: { initialState: InitiativesState; initialBoard: OverviewState; initialEtag: string; token: string; initialNow?: number; signOut?: boolean }) {
+  // The board's own state, polling and actions: the initiatives' tickets live there
+  const board = useOverview(props.initialBoard, props.initialEtag, props.token, props.initialNow);
   const [state, setState] = useState(props.initialState);
   const [selected, setSelected] = useState(props.initialState.initiatives[0]?.id ?? null);
   const [guides, setGuides] = useState<Record<string, GuideState>>({});
@@ -391,7 +294,7 @@ export function InitiativesPage(props: { initialState: InitiativesState; token: 
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           {state.initiatives.map((item) => {
             const summary = item.summary;
-            const count = (owner: 'ai' | 'you') => summary?.next.filter((next) => next.owner === owner).length ?? 0;
+            const tickets = board.state.initiatives[item.id];
             return <div key={item.id} data-selected={item.id === view?.id}
               className="flex flex-col rounded-xl border bg-card shadow-xs transition-colors hover:border-foreground/20 data-[selected=true]:border-primary data-[selected=true]:ring-1 data-[selected=true]:ring-primary">
               <button type="button" aria-pressed={item.id === view?.id} onClick={() => setSelected(item.id)} className="flex flex-1 flex-col gap-2 rounded-t-xl p-3.5 text-left">
@@ -400,17 +303,18 @@ export function InitiativesPage(props: { initialState: InitiativesState; token: 
                 <StatePill view={item} />
                 {summary && <span className="line-clamp-2 text-xs text-muted-foreground"><Text text={summary.headline} /></span>}
                 {item.error && <span className="inline-flex items-center gap-1 text-[11px] text-destructive"><TriangleAlert aria-hidden="true" className="size-3" />Last refresh failed</span>}
-                {summary && <span className="flex gap-3 text-[11px] text-muted-foreground">
-                  <span>You <b className="text-foreground">{count('you')}</b></span>
-                  <span>Them <b className="text-foreground">{summary.waits.filter((wait) => wait.owes === 'them').length}</b></span>
-                  <span>AI <b className="text-foreground">{count('ai')}</b></span>
+                {tickets && <span className="flex gap-3 text-[11px] text-muted-foreground">
+                  <span>AI <b className="text-foreground">{tickets.needs_you.filter(suggested).length}</b></span>
+                  <span>You <b className="text-foreground">{tickets.needs_you.filter((ticket) => !suggested(ticket)).length + tickets.failed.length}</b></span>
+                  <span>Working <b className="text-foreground">{tickets.working.length}</b></span>
+                  <span>Them <b className="text-foreground">{tickets.waiting_them.length}</b></span>
                 </span>}
               </button>
               <div className="border-t px-3.5 py-2"><GuideLink id={item.id} ready={!!guides[item.id]?.explainer} size="card" /></div>
             </div>;
           })}
         </div>
-        {view && <Detail key={view.id} view={view} guide={guides[view.id] ?? null} />}
+        {view && <Detail key={view.id} view={view} guide={guides[view.id] ?? null} board={board} tickets={board.state.initiatives[view.id]} />}
       </>}
     </main>
   </div>;
