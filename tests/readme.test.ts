@@ -11,7 +11,7 @@ import { HELP, parseCommand } from '../src/cli.ts';
 import { loadConfig } from '../src/core/config.ts';
 import { openDb, prepareStart } from '../src/core/db.ts';
 import { backoff } from '../src/core/jobs.ts';
-import { makeTicket } from '../src/core/tickets.ts';
+import { createTicket, makeTicket } from '../src/core/tickets.ts';
 import { createKernel } from '../src/windows/kernel.ts';
 import type { ProcessIdentity } from '../src/windows/kernel.ts';
 import { readBuildReceipt, samePath } from '../src/web/build-artifact.ts';
@@ -251,6 +251,20 @@ test('documented ticket create makes one proposed ticket and repeats nothing on 
   expect(db.prepare('SELECT title,client,summary,kb_notes,lifecycle,session_id FROM ticket').all()).toEqual([{ title: 'Cut one AKS node', client: 'acme',
     summary: 'Saves 350 USD a month', kb_notes: '["01_Projects/acme/plan.md"]', lifecycle: 'proposed', session_id: null }]);
   expect(db.prepare('SELECT body,event_key FROM timeline').all()).toEqual([{ body: 'Created by hand', event_key: 'create:acme-cost-1.4' }]);
+});
+
+test('documented client chat commands list the client\'s tickets and dismiss one with its reason, recorded as the overview chat', () => {
+  const f = fixture();
+  fs.appendFileSync(f.config, '\n[clients.acme]\ndomains = ["acme.invalid"]\n\n[initiatives.acme-plan]\ntitle = "Plan"\nclient = "acme"\nnote = "01_Projects/acme/plan.md"\n');
+  let ticket: number;
+  { using db = openDb(f.path); ticket = createTicket(db, loadConfig(f.config), { client: 'acme', title: 'Cut one AKS node', initiative: 'acme-plan', origin: 'ai' }); }
+  const lines = f.lines('Client chat').map((line) => line.replaceAll('$client', 'acme').replaceAll('$ticket', String(ticket)));
+  expect(lines.length).toBe(2);
+  expect(f.command(lines[0]!)).toMatchObject({ client: 'acme', tickets: [{ id: ticket, column: 'AI', origin: 'ai', initiative: 'acme-plan' }] });
+  expect(f.command(lines[1]!)).toEqual({ tickets: [{ ticket, lifecycle: 'dismissed' }] });
+  using db = new DatabaseSync(f.path, { readOnly: true });
+  expect(db.prepare('SELECT lifecycle,dismissed_by,report_line FROM ticket WHERE id=?').get(ticket)).toEqual({ lifecycle: 'dismissed', dismissed_by: 'overview_chat', report_line: 'Already done by hand' });
+  expect(db.prepare("SELECT actor FROM timeline WHERE ticket=? AND kind='status'").get(ticket)).toEqual({ actor: 'overview chat' });
 });
 
 test('documented stored-at cutoff persists once and Make ticket promotes a backlog batch without approving a chat', () => {
