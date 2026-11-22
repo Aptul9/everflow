@@ -70,7 +70,7 @@ export function storedTickets(db: DatabaseSync, id: string): StoredTickets {
 // The summary keeps its headline and now lines.
 export function ticketCards(summary: InitiativeSummary, tickets: readonly NoteTicket[], today: string): InitiativeSummary {
   if (!tickets.length) return summary;
-  const source = (ticket: NoteTicket) => ({ id: `K${ticket.id}`, date: ticket.done_at ?? ticket.since ?? today, text: ticket.line });
+  const source = (ticket: NoteTicket) => ({ id: `K${ticket.id}`, date: ticket.done_at ?? ticket.since ?? today, text: `Ticket ${ticket.id}: ${ticket.title}` });
   const label = (ticket: NoteTicket) => `${ticket.id} ${ticket.title}`;
   const card = (ticket: NoteTicket): InitiativeTicket => ({ id: ticket.id, title: ticket.title, who: ticket.who, ask: ticket.ask, since: ticket.since,
     after: ticket.after ?? null, done_at: ticket.done_at, details: ticket.details ?? [] });

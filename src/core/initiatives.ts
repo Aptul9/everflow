@@ -229,7 +229,7 @@ export async function summarize(cfg: Config, db: DatabaseSync, id: string, optio
   const offered = new Map<string, InitiativeSource>([
     ...context.entries.map((entry) => [entry.id, { id: entry.id, date: entry.date, text: `${entry.date}${entry.time ? ` ${entry.time}` : ''} - ${entry.text}` }] as const),
     ...tickets.map((ticket) => [ticket.id, { id: ticket.id, date: ticket.date, text: `Ticket #${ticket.id.slice(1)} (${ticket.lifecycle}): ${ticket.title}${ticket.report_line ? `. ${ticket.report_line}` : ''}` }] as const),
-    ...plan.map((ticket) => [`K${ticket.id}`, { id: `K${ticket.id}`, date: ticket.done_at ?? ticket.since ?? today, text: ticket.line }] as const),
+    ...plan.map((ticket) => [`K${ticket.id}`, { id: `K${ticket.id}`, date: ticket.done_at ?? ticket.since ?? today, text: `Ticket ${ticket.id}: ${ticket.title}` }] as const),
   ]);
   const messages: Message[] = [{ role: 'user', content: JSON.stringify({ kind: 'untrusted_initiative_data', today, initiative: { title: initiative.title, client: initiative.client },
     goal: context.goal, open_blockers: context.blockers, log: context.entries, tickets,

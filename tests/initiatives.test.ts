@@ -165,7 +165,7 @@ test('note tickets replace the summary cards: map and Them for what is owed, AI 
   expect(summary.next.map((next) => [next.owner, next.text])).toEqual([
     ['you', "0.1 Delete docs app (429 USD/m). Mirko: is it Maruca's documentation?"], ['you', '0.4 Serverless dbs to DTU'], ['ai', 'X.3 Price the 2027 expiry']]);
   expect(summary.done.map((line) => line.text)).toEqual(['0.2 TS decommission']);
-  expect(summary.waits[0]!.sources).toEqual([{ id: 'K0.1', date: '2026-11-16', text: expect.stringContaining('- [ ] 0.1 Delete docs app') }]);
+  expect(summary.waits[0]!.sources).toEqual([{ id: 'K0.1', date: '2026-11-16', text: 'Ticket 0.1: Delete docs app (429 USD/m)' }]);
 });
 
 test('waits with the same person and ask become one card; tickets carry after and the row of their table', () => {
