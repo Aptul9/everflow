@@ -91,6 +91,16 @@ export async function scriptedPeer() {
         if (state.losePrompt) { state.losePrompt = false; request.socket.destroy(); return; }
         json(response, { data: { ...admitted, id: state.wrongPromptID ? 'msg_wrong' : id } }); return;
       }
+      // Synthetic input: kept in the history; resume false runs no turn
+      if (suffix === '/synthetic' && call.method === 'POST') {
+        const id = String(call.body.id);
+        const history = messages.get(session.id) ?? [];
+        if (history.some((message) => message.id === id)) { json(response, { _tag: 'ConflictError', message: 'Duplicate input' }, 409); return; }
+        history.push({ id, type: 'synthetic', text: String(call.body.text), ...(call.body.description ? { description: String(call.body.description) } : {}), time: { created: Date.now() } });
+        messages.set(session.id, history);
+        if (call.body.resume !== false) session.time.busy = Date.now();
+        json(response, { data: { id, sessionID: session.id, time: { created: Date.now() }, type: 'synthetic', payload: { text: String(call.body.text) }, delivery: 'queue' } }); return;
+      }
       if (suffix === '/inbox') {
         json(response, { data: [...admissions.values()].filter((input) => input.sessionID === session.id) }, state.inboxStatus); return;
       }

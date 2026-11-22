@@ -202,18 +202,34 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
     } while (cursor);
     return messages;
   };
+  // tag: the session's everflow metadata (store and ticket, or the client of an Overview chat)
+  const createSession = async (title: string, tag: Record<string, string | number>, signal?: AbortSignal, choice?: { model: string; effort: string | null },
+    directory = cfg.opencode.directory): Promise<{ id: string }> => {
+    const selected = choice?.model ?? cfg.opencode.model;
+    const [providerID, ...model] = selected.split('/');
+    if (selected && (!providerID || !model.join('/'))) throw new TypeError('OpenCode model must be provider/model');
+    return client.session.create({ title, location: { directory }, metadata: { everflow: tag },
+      ...(selected ? { model: { providerID: providerID!, id: model.join('/'), ...(choice?.effort ? { variant: choice.effort } : {}) } } : {}) }, request(signal));
+  };
   return {
     // choice: the page's model/effort for new chats; without it the config model and the model's default effort
     // directory: the client's project folder, default [opencode] directory
     async create(title: string, store: string, ticket: number, signal?: AbortSignal, choice?: { model: string; effort: string | null },
       directory = cfg.opencode.directory): Promise<{ id: string }> {
       if (!store || !Number.isSafeInteger(ticket) || ticket <= 0) throw new TypeError('A durable store and ticket id are required');
-      const selected = choice?.model ?? cfg.opencode.model;
-      const [providerID, ...model] = selected.split('/');
-      if (selected && (!providerID || !model.join('/'))) throw new TypeError('OpenCode model must be provider/model');
-      return client.session.create({ title, location: { directory },
-        metadata: { everflow: { store_id: store, ticket } },
-        ...(selected ? { model: { providerID: providerID!, id: model.join('/'), ...(choice?.effort ? { variant: choice.effort } : {}) } } : {}) }, request(signal));
+      return createSession(title, { store_id: store, ticket }, signal, choice, directory);
+    },
+    createSession,
+    // Context the session keeps for its next turns without running one now (resume false: no model call)
+    async synthetic(session: string, id: string, text: string, description: string, signal?: AbortSignal): Promise<string> {
+      const admitted = await client.session.synthetic({ sessionID: session, id, text, description, resume: false }, request(signal));
+      if (admitted.id !== id || admitted.sessionID !== session) throw Object.assign(new Error('OpenCode returned a different synthetic identity'), { status: 400 });
+      return admitted.id;
+    },
+    // The text of every message typed in the session, oldest first
+    async userTexts(session: string, signal?: AbortSignal): Promise<string[]> {
+      return (await history(session, signal)).flatMap((message) => message.type === 'user' ? [{ at: message.time.created, text: message.text }] : [])
+        .sort((a, b) => a.at - b.at).map((message) => message.text);
     },
     async models(signal?: AbortSignal) {
       return (await client.model.list({ location: { directory: cfg.opencode.directory }, types: ['chat'] }, request(signal))).data;
