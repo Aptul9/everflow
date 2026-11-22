@@ -107,3 +107,8 @@ note = "01_Projects/serco/serco-eunify.md"
 title = "Azure cost reduction"
 client = "roar"
 note = "01_Projects/roar/roar-cost-reduction-2026-11.md"
+
+[initiatives.avvale-ariston-fabric]
+title = "Ariston CL12 on Fabric"
+client = "avvale"
+note = "01_Projects/avvale/avvale-ariston-fabric.md"
