@@ -339,7 +339,8 @@ export function TicketCard(props: {
       {(ticket.lifecycle === 'active' && ticket.report_line || ticket.summary) && <p className="line-clamp-2 text-[13px] whitespace-pre-wrap">
         <Inline text={ticket.lifecycle === 'active' && ticket.report_line || ticket.summary} />
       </p>}
-      {ticket.why && ticket.lifecycle === 'proposed' && <dl><Field label="Perché" expanded={false}><Inline text={ticket.why.text} /><WhySources why={ticket.why} /></Field></dl>}
+      {/* only the text is clamped, so the source chips always show */}
+      {ticket.why && ticket.lifecycle === 'proposed' && <dl><Field label="Perché" expanded><span className="line-clamp-3"><Inline text={ticket.why.text} /></span><WhySources why={ticket.why} /></Field></dl>}
       <TicketDetails ticket={ticket} now={props.now} badge={style.badge} />
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
     </div>
