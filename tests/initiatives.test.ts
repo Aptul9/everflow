@@ -193,6 +193,20 @@ test('waits with the same person and ask become one card; tickets carry after an
   expect(cards.waits[1]!.tickets![0]!.details).toEqual([{ label: 'Intervention', value: 'AU decommission' }, { label: 'USD/m', value: '~760' }, { label: 'RTO', value: 'api-au unreachable' }]);
 });
 
+test('questions not put yet are steps of yours: the same ask to the same person makes one You card and one map entry', () => {
+  const note = `${NOTE}
+## Tickets
+- [ ] R.1 Reservation D8as_v5 | you: Roar admin | since 2026-11-21 | ask: ok to buy 1Y reservations
+- [ ] R.3 Reservation P1v3 | you: Roar admin | since 2026-11-21 | ask: ok to buy 1Y reservations | after: 1.5
+- [ ] 0.4 Serverless dbs to DTU | you
+`;
+  const empty = { state: 'moving' as const, headline: 'h', now: [], waits: [], next: [], done: [], rejected: 0, entries: 0, model: 'm' };
+  const cards = ticketCards(empty, noteTickets(note), '2026-11-23');
+  expect(cards.next.map((next) => [next.owner, next.text, next.tickets!.map((ticket) => ticket.id)])).toEqual([
+    ['you', 'Roar admin: ok to buy 1Y reservations (R.1, R.3)', ['R.1', 'R.3']], ['you', '0.4 Serverless dbs to DTU', ['0.4']]]);
+  expect(cards.waits.map((wait) => [wait.who, wait.owes, wait.tickets!.length])).toEqual([['Roar admin', 'you', 2]]);
+});
+
 test('note tickets are read again only when the note changes', () => {
   const { cfg } = fixture();
   using db = openDb(cfg.db.path);

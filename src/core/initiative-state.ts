@@ -87,8 +87,18 @@ export function ticketCards(summary: InitiativeSummary, tickets: readonly NoteTi
     return { who: first.who!, owes: first.owner === 'them' ? 'them' : 'you', text, since, days: workingDays(since, today),
       sources: group.map(source), tickets: group.map(card) };
   });
-  const next = open.filter((ticket) => ticket.owner !== 'them').map((ticket): InitiativeNext => ({ owner: ticket.owner === 'ai' ? 'ai' : 'you',
-    text: ticket.ask && ticket.who ? `${label(ticket)}. ${ticket.who}: ${ticket.ask}` : label(ticket), draft: null, sources: [source(ticket)], tickets: [card(ticket)] }));
+  // Steps of Antonio's that are the same ask to the same person (a question not put yet) make one card
+  const steps = new Map<string, NoteTicket[]>();
+  for (const ticket of open.filter((item) => item.owner !== 'them')) {
+    const key = ticket.who && ticket.ask ? [ticket.owner, ticket.who.toLowerCase(), ticket.ask.toLowerCase()].join('\n') : `#${ticket.id}`;
+    steps.set(key, [...steps.get(key) ?? [], ticket]);
+  }
+  const next = [...steps.values()].map((group): InitiativeNext => {
+    const [first] = group as [NoteTicket, ...NoteTicket[]];
+    const text = group.length > 1 ? `${first.who}: ${first.ask} (${group.map((ticket) => ticket.id).join(', ')})`
+      : first.ask && first.who ? `${label(first)}. ${first.who}: ${first.ask}` : label(first);
+    return { owner: first.owner === 'ai' ? 'ai' : 'you', text, draft: null, sources: group.map(source), tickets: group.map(card) };
+  });
   const done = tickets.filter((ticket) => ticket.done && ticket.done_at && ticket.done_at >= shiftDay(today, -7))
     .map((ticket): InitiativeLine => ({ text: label(ticket), sources: [source(ticket)], tickets: [card(ticket)] }));
   return { ...summary, waits, next, done };
