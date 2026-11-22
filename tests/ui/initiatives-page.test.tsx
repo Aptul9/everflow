@@ -156,3 +156,18 @@ test('the overview person map supports keyboard activation and reset', async () 
   await userEvent.keyboard(' ');
   expect(detail.querySelector('[data-focus-waits]')).toBeNull();
 });
+
+test('the page opens on the initiative last opened, which each choice keeps in the cookie the server reads', async () => {
+  window.history.replaceState(null, '', '/overview');
+  try {
+    render(<InitiativesPage {...props()} initialSelected="example-platform" />);
+    expect(screen.getByRole('button', { pressed: true }).textContent).toContain('Platform project');
+    expect(screen.getByRole('region', { name: 'example Platform project' })).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { pressed: false, name: /Access/ }));
+    expect(screen.getByRole('button', { pressed: true }).textContent).toContain('Access');
+    expect(document.cookie).toContain('everflow_overview=acme-access');
+  } finally {
+    document.cookie = 'everflow_overview=; Path=/overview; Max-Age=0';
+    window.history.replaceState(null, '', '/');
+  }
+});

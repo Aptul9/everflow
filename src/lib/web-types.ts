@@ -179,6 +179,8 @@ export interface InitiativeView {
 export interface InitiativesState {
   initiatives: InitiativeView[]; today: string; views: Record<string, number>; requested: boolean; refreshing: boolean; providers: boolean;
 }
+// Cookie of the initiative last opened on the Overview: the server reads it, so the page reopens on it after the board, a guide or a reload
+export const OVERVIEW_COOKIE = 'everflow_overview';
 // Initiative guide (/overview/<id>): a plain-language explainer of one initiative, written in Italian from its vault note and
 // related notes. Every fact cites source ids (L = log entry, S = note section, N = related note, T = ticket); general
 // explanations (concepts, glossary) may cite none and carry general: true. sources holds only the ids cited.

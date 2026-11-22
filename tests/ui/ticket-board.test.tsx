@@ -940,6 +940,23 @@ test('done dialog closes a ticket with an optional reason and does not dismiss i
   expect(fetcher).not.toHaveBeenCalledWith('/api/ticket/1/dismiss', expect.anything());
 });
 
+test('a wait with no chat offers Discuss on its own row, over Done and Dismiss; once its chat exists it does not', async () => {
+  fetcher.mockImplementation(async (_input: string, init?: RequestInit) => init?.method === 'POST' ? Response.json({ ticket: 4 }) : new Response(null, { status: 304 }));
+  const state = uiState();
+  state.groups.waiting_them = [card(4, { title: 'Waiting on Bob', lifecycle: 'active', stage: 'Waiting on them', report: 'waiting_them', report_line: 'Bob: AU APIs' }),
+    card(8, { title: 'Chat wait', lifecycle: 'active', stage: 'Waiting on them', report: 'waiting_them', session_id: 'ses_synthetic' })];
+  board(state);
+  const wait = screen.getByRole('article', { name: 'Ticket #4: Waiting on Bob' });
+  const discuss = within(wait).getByRole('button', { name: 'Discuss' });
+  expect(discuss.className).toContain('col-span-2');
+  expect([...discuss.parentElement!.children].map((node) => node.textContent)).toEqual(['Discuss', 'Done', 'Dismiss']);
+  expect(within(screen.getByRole('article', { name: 'Ticket #8: Chat wait' })).queryByRole('button', { name: 'Discuss' })).toBeNull();
+  await userEvent.click(discuss);
+  await userEvent.type(within(screen.getByRole('dialog', { name: 'Discuss ticket #4 in OpenChamber' })).getByRole('textbox'), 'Draft a reminder');
+  await userEvent.click(screen.getByRole('button', { name: 'Open chat' }));
+  await waitFor(() => expect(fetcher).toHaveBeenCalledWith('/api/ticket/4/discuss', expect.objectContaining({ method: 'POST', body: '{"note":"Draft a reminder"}' })));
+});
+
 test('Discuss without a question opens the chat with an empty body', async () => {
   fetcher.mockImplementation(async (_input: string, init?: RequestInit) => init?.method === 'POST' ? Response.json({ ticket: 1 }) : new Response(null, { status: 304 }));
   board();

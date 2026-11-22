@@ -271,6 +271,11 @@ export function TicketCard(props: {
   const style = tones[tone(ticket)];
   const actions = props.enabled && !terminal;
   const starting = props.pending.has(keys.start);
+  // A wait has no chat until Antonio discusses it (or a message opens one): in Them, or in Needs you once answered
+  const unopened = ticket.lifecycle === 'active' && !ticket.session_id && (ticket.stage === 'Waiting on them' || ticket.stage === 'Needs you');
+  const discuss = (wide: boolean) => <ActionDialog label="Discuss" title={`Discuss ticket #${ticket.id} in OpenChamber`} confirm="Open chat" discuss shortcut="c" size="sm"
+    icon={<MessageSquarePlus aria-hidden="true" />} className={cn('h-9 min-w-0 sm:h-8', wide && 'col-span-2')} disabled={props.expired || props.pending.has(keys.discuss)}
+    onConfirm={(note) => post(keys.discuss, `/api/ticket/${ticket.id}/discuss`, note.trim() ? { note } : {}).then((result) => { props.onDiscussed?.(); return result; })} />;
   return <article tabIndex={-1} aria-labelledby={heading} data-ticket-id={ticket.id} draggable={actions}
     onDragStart={(event) => { event.dataTransfer?.setData('text/plain', `#${ticket.id}`); props.onDrag?.(true); }} onDragEnd={() => props.onDrag?.(false)}
     className={cn('group/card relative scroll-mt-28 overflow-hidden rounded-lg border bg-card transition-colors hover:border-foreground/20', actions && 'cursor-grab active:cursor-grabbing',
@@ -321,17 +326,16 @@ export function TicketCard(props: {
       <TicketDetails ticket={ticket} now={props.now} badge={style.badge} />
       {error && <p role="alert" className="rounded-md bg-destructive-soft px-2.5 py-1.5 text-xs text-destructive">{error}</p>}
     </div>
-    {/* Two equal columns: Start and Discuss over Done and Dismiss, so every label fits and nothing wraps alone */}
+    {/* Two equal columns: Start and Discuss over Done and Dismiss, so every label fits and nothing wraps alone; a wait's Discuss takes the row */}
     {actions && <div className="grid grid-cols-2 gap-1.5 border-t px-3 py-2">
       {ticket.lifecycle === 'proposed' && props.chats && <>
         <Button type="button" size="sm" data-shortcut="s" data-action="start" title="Start (s)" aria-label={starting ? 'Saving Start' : 'Start'} className="h-9 min-w-0 sm:h-8" disabled={props.expired || starting}
           onClick={() => { void post(keys.start, `/api/ticket/${ticket.id}/start`).catch(() => {}); }}>
           {starting ? <RotateCw aria-hidden="true" className="animate-spin" /> : <Play aria-hidden="true" />}<span className="truncate">{starting ? 'Saving Start' : 'Start'}</span>
         </Button>
-        <ActionDialog label="Discuss" title={`Discuss ticket #${ticket.id} in OpenChamber`} confirm="Open chat" discuss shortcut="c" size="sm"
-          icon={<MessageSquarePlus aria-hidden="true" />} className="h-9 min-w-0 sm:h-8" disabled={props.expired || props.pending.has(keys.discuss)}
-          onConfirm={(note) => post(keys.discuss, `/api/ticket/${ticket.id}/discuss`, note.trim() ? { note } : {}).then((result) => { props.onDiscussed?.(); return result; })} />
+        {discuss(false)}
       </>}
+      {unopened && props.chats && discuss(true)}
       <ActionDialog label="Mark done" display="Done" title={`Mark ticket #${ticket.id} done`} confirm="Confirm done" safe action="done"
         placeholder="What was done by hand (optional)" size="sm" icon={<Check aria-hidden="true" />}
         className="h-9 min-w-0 sm:h-8" disabled={props.expired || props.pending.has(keys.close)}
