@@ -240,20 +240,21 @@ test('one log entry that put several questions to the same person gives one wait
     { id: 3, lifecycle: 'active', report_line: 'Geoff: rebuild delete' }, { id: 4, lifecycle: 'dismissed', report_line: 'Already asked: same as wait #2' }]);
 });
 
-test('work that cannot move until an asked answer waits on it with its own title and texts, two pieces of work can wait on one answer, and a reworded wait linked to a listed wait creates nothing', async () => {
+test('work whose only missing step is an asked answer waits on it with its own title and texts, with no extra card; a question still to put never does; a reworded wait linked to a listed wait creates nothing', async () => {
   const { cfg } = fixture();
   using db = openDb(cfg.db.path);
-  for (const title of ['Resize MySQL prod (204 USD/m)', 'MySQL 8.0 to 8.4 on 4 servers'])
+  for (const title of ['Resize MySQL prod (204 USD/m)', 'MySQL 8.0 to 8.4 on 4 servers', 'Ask Mohamed: ok to buy the reservations'])
     db.prepare("INSERT INTO ticket(title,client,initiative,origin,lifecycle,summary,proposal,created_at) VALUES (?,'acme','demo','ai','proposed','Facts','1. Window\n2. Resize',?)").run(title, AT);
-  const answers = [{ waits: [{ who: 'Mohamed', what: 'maintenance window', src: 'L3', ticket: 'T1' }, { who: 'Mohamed', what: 'maintenance window', src: 'L3', ticket: 'T2' }] },
-    { waits: [{ who: 'Mohamed', what: 'the maintenance window for both', src: 'L3', ticket: 'T1' }] }];
+  const answers = [{ waits: [{ who: 'Mohamed', what: 'maintenance window', src: 'L3', ticket: null, blocked: ['T1', 'T2', 'T3'] }] },
+    { waits: [{ who: 'Mohamed', what: 'the maintenance window for both', src: 'L3', ticket: 'T1', blocked: ['T2'] }] }];
   await using peer = await scriptedPeer((_body, index) => ({ body: { content: [{ type: 'text', text: JSON.stringify(answers[Math.min(index, 1)]) }] } }));
   const options = { providers: { first: provider(peer.baseURL) } };
   expect(await proposeTickets(cfg, db, 'demo', options)).toEqual({ tickets: [], waits: [1, 2], answered: [] });
-  expect(db.prepare('SELECT id,title,summary,proposal,report,report_line FROM ticket ORDER BY id').all()).toEqual([
-    { id: 1, title: 'Resize MySQL prod (204 USD/m)', summary: 'Facts', proposal: '1. Window\n2. Resize', report: 'waiting_them', report_line: 'Mohamed: maintenance window' },
-    { id: 2, title: 'MySQL 8.0 to 8.4 on 4 servers', summary: 'Facts', proposal: '1. Window\n2. Resize', report: 'waiting_them', report_line: 'Mohamed: maintenance window' }]);
+  expect(db.prepare('SELECT id,title,summary,proposal,lifecycle,report,report_line FROM ticket ORDER BY id').all()).toEqual([
+    { id: 1, title: 'Resize MySQL prod (204 USD/m)', summary: 'Facts', proposal: '1. Window\n2. Resize', lifecycle: 'active', report: 'waiting_them', report_line: 'Mohamed: maintenance window' },
+    { id: 2, title: 'MySQL 8.0 to 8.4 on 4 servers', summary: 'Facts', proposal: '1. Window\n2. Resize', lifecycle: 'active', report: 'waiting_them', report_line: 'Mohamed: maintenance window' },
+    { id: 3, title: 'Ask Mohamed: ok to buy the reservations', summary: 'Facts', proposal: '1. Window\n2. Resize', lifecycle: 'proposed', report: null, report_line: null }]);
   expect(readInitiatives(db, cfg).initiatives[0]!.waits.map((wait) => [wait.who, wait.days])).toEqual([['Mohamed', 5], ['Mohamed', 5]]);
   expect(await proposeTickets(cfg, db, 'demo', options)).toEqual({ tickets: [], waits: [], answered: [] });
-  expect(db.prepare('SELECT COUNT(*) AS n FROM ticket').get()!.n).toBe(2);
+  expect(db.prepare('SELECT COUNT(*) AS n FROM ticket').get()!.n).toBe(3);
 });
