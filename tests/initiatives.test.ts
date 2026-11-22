@@ -161,19 +161,26 @@ test('proposed tickets: new work from the note becomes tickets of the initiative
   cfg.overview.propose_tickets = true;
   using db = openDb(cfg.db.path);
   db.prepare("INSERT INTO ticket(title,client,initiative,lifecycle,created_at) VALUES ('Old dismissed idea','acme','demo','dismissed',?)").run(AT);
-  const answer = { tickets: [{ key: 'ask-geoff-vault', title: 'Ask Geoff: Vault questions 1-3', summary: 'Sent 17/11, no answer.', ask: 'Get the Vault answers.', proposal: '1. Remind Geoff in writing.' },
-    { key: 'ask-geoff-vault', title: 'Ask Geoff again', summary: '', ask: '', proposal: '' }] };
+  const answer = { tickets: [{ key: 'ask-geoff-vault', title: 'Ask Geoff: Vault questions 1-3', summary: 'Sent 17/11, no answer.', ask: 'Get the Vault answers.', proposal: '1. Remind Geoff in writing.',
+    why: 'The goal needs the Vault answers and the log shows none yet.', src: ['S2', 'L2', 'L99'] },
+    { key: 'ask-geoff-vault', title: 'Ask Geoff again', summary: '', ask: '', proposal: '', why: 'Same', src: ['L2'] },
+    { key: 'invented', title: 'Invented work', summary: '', ask: '', proposal: '', why: 'No source', src: ['S9', 'L42'] },
+    { key: 'unsourced', title: 'Unsourced work', summary: '', ask: '', proposal: '' }] };
   await using peer = await scriptedPeer((_body, index) => ({ body: { content: [{ type: 'text', text: index === 0 ? 'not json' : JSON.stringify(answer) }] } }));
   const made = await proposeTickets(cfg, db, 'demo', { providers: { first: provider(peer.baseURL) } });
   expect(peer.requests).toHaveLength(2);
   expect(peer.requests[0]!.system).toContain('ticket list of one initiative');
   const data = JSON.parse(peer.requests[0]!.messages[0]!.content as string);
   expect(data.existing_tickets).toEqual([{ id: 'T1', title: 'Old dismissed idea', lifecycle: 'dismissed' }]);
-  expect(data.note).toContain('## goal');
-  expect(data.note).not.toContain('## log');
+  expect(data.note.map((section: { id: string; title: string }) => [section.id, section.title])).toEqual([['S1', 'status'], ['S2', 'goal'], ['S3', 'blockers']]);
+  expect(peer.requests[0]!.system).toContain('cites in src the note sections (S1, S2, ...) and log entries (L1, L2, ...)');
   expect(made).toEqual({ tickets: [2, 2], waits: [], answered: [] });
   expect(db.prepare('SELECT title,client,initiative,origin,lifecycle,kb_notes FROM ticket WHERE id=2').get()).toEqual({ title: 'Ask Geoff: Vault questions 1-3', client: 'acme',
     initiative: 'demo', origin: 'ai', lifecycle: 'proposed', kb_notes: '["01_Projects/demo.md"]' });
+  expect(JSON.parse(String(db.prepare('SELECT why FROM ticket WHERE id=2').get()!.why))).toEqual({ text: 'The goal needs the Vault answers and the log shows none yet.', sources: [
+    { id: 'S2', kind: 'section', text: 'goal' }, { id: 'L2', kind: 'log', date: '2026-11-17', text: '2026-11-17 12:04 - SENT Geoff: Vault Qs 1-3.' }] });
+  // a ticket citing no offered section or entry is dropped
+  expect(db.prepare('SELECT COUNT(*) AS n FROM ticket').get()!.n).toBe(2);
 });
 
 test('a failed proposal is recorded and leaves the summary of the same run in place', async () => {
