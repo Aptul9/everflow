@@ -221,7 +221,7 @@ A note may carry a `## Tickets` section, one line per piece of work. The daemon 
 - [x] 0.2 TS decommission | done 2026-11-19
 ```
 
-Owed tickets (`them: <person>`, `you: <person>`) go on the map and, when owed by others, in Them with their working days and the date they were asked; tickets owed by the same person for the same `ask` make one card listing their ids, waiting since the oldest. Open tickets owned by `you` or `ai` go in You or AI; done tickets of the last 7 days go in Done. A ticket card opens in place on click: what is awaited, from whom, since when, `after`, and the row of the same id in any Markdown table of the note whose first header is `#` (each other header with its value, column `T` and empty cells left out). The summary call also receives the tickets as `plan_tickets` with ids `K<id>`, which its lines may cite.
+Owed tickets (`them: <person>`, `you: <person>`) go on the map and, when owed by others, in Them with their working days and the date they were asked; tickets owed by the same person for the same `ask` make one card listing their ids, waiting since the oldest. Open tickets owned by `you` or `ai` go in You or AI; done tickets of the last 7 days go in Done. Clicking a ticket card opens the board's Expand popup: id, person, since when and `after` on top, then what is awaited and the row of the same id in any Markdown table of the note whose first header is `#` (each other header with its value, column `T` and empty cells left out). The summary call also receives the tickets as `plan_tickets` with ids `K<id>`, which its lines may cite.
 
 ## Guide
 

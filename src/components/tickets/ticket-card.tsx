@@ -180,13 +180,13 @@ export function Section({ title, children }: { title: string; children: React.Re
   </section>;
 }
 
-// Full text of a card in a popup; the card itself stays a clamped preview
-export function Expand({ label, title, meta, children }: { label: string; title: string; meta: React.ReactNode; children: React.ReactNode }) {
+// Full text of a card in a popup; the card itself stays a clamped preview. trigger: an element that opens it instead of the Expand button
+export function Expand({ label, title, meta, trigger, children }: { label: string; title: string; meta: React.ReactNode; trigger?: React.ReactElement; children: React.ReactNode }) {
   return <Dialog>
     <DialogTrigger asChild>
-      <Button variant="ghost" size="xs" type="button" data-shortcut="e" aria-label={label} title={`${label} (e)`} className="h-7 px-1.5 text-muted-foreground hover:text-foreground">
+      {trigger ?? <Button variant="ghost" size="xs" type="button" data-shortcut="e" aria-label={label} title={`${label} (e)`} className="h-7 px-1.5 text-muted-foreground hover:text-foreground">
         <Maximize2 aria-hidden="true" />Expand
-      </Button>
+      </Button>}
     </DialogTrigger>
     <DialogContent className="max-h-[calc(100dvh-2rem)] gap-4 overflow-y-auto sm:max-w-3xl">
       <DialogHeader className="gap-1.5 pr-10 text-left">
