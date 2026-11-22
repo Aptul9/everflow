@@ -179,10 +179,11 @@ const proposed = z.object({
   key: z.string().transform((value) => value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)).pipe(z.string().min(1)),
   title: clip(120).pipe(z.string().min(1)), summary: clip(600).default(''), ask: clip(300).default(''), proposal: clip(800).default(''),
 });
-// A question already put and still unanswered; src: the log entry where it went out. ticket: a listed ticket asking it or waiting on its answer
+// A question already put and still unanswered; src: the log entry where it went out. ticket: a listed ticket asking that
+// same question; blocked: listed tickets whose only missing step is its answer
 const waitItem = z.object({
   who: z.string().transform((value) => value.replaceAll(':', ' ').trim().slice(0, 40)).pipe(z.string().min(1)), what: clip(120).pipe(z.string().min(1)),
-  src: z.string(), ticket: z.string().nullish(),
+  src: z.string(), ticket: z.string().nullish(), blocked: z.array(z.string()).nullish(),
 });
 // The answer to a listed wait; src: the log entry that shows it
 const answerItem = z.object({ ticket: z.string(), src: z.string() });
@@ -194,15 +195,15 @@ Sort what is still open into two kinds and never mix them:
 - tickets: work still on Antonio's side and with no ticket yet: a step he does himself, or a question he has not put yet to a named person or team (title "Ask <who>: <what>"). Never a step that only another team carries out, never administrative work towards Antonio's own company (weekly reports, timesheets, invoices, leave), never proposing a call or meeting.
 - waits: a question or request Antonio already put to a named person or team (the log shows it sent or asked) with no answer in the log since. Nothing is left to ask there: we wait on them, so it is never a ticket.
 Then answered: listed tickets with waiting_on whose answer a later log entry shows.
-The existing tickets are listed with their state, including done and dismissed ones: never return any of them again as a ticket or a wait, even worded differently. A listed proposed ticket that asks a question the log shows already put, or that cannot move until that answer, becomes that wait: give its id in "ticket", one wait per such ticket, with the same who, what and src for the same question.
+The existing tickets are listed with their state, including done and dismissed ones: never return any of them again as a ticket or a wait, even worded differently. A listed proposed ticket that asks a question the log shows already put becomes that wait: give its id in "ticket". Listed proposed tickets whose only missing step is that answer, with nothing left to ask or do first, wait on it too: give their ids in "blocked". A ticket that still needs a question not put yet, or another ticket's work first, is neither.
 Return one JSON object only, no fences or prose:
-{"tickets":[{"key":"kebab-case id, stable for the same piece of work","title":"...","summary":"...","ask":"...","proposal":"..."}],"waits":[{"who":"...","what":"...","src":"L3","ticket":null}],"answered":[{"ticket":"T12","src":"L1"}]}
+{"tickets":[{"key":"kebab-case id, stable for the same piece of work","title":"...","summary":"...","ask":"...","proposal":"..."}],"waits":[{"who":"...","what":"...","src":"L3","ticket":null,"blocked":[]}],"answered":[{"ticket":"T12","src":"L1"}]}
 - tickets.title: at most 90 characters, plain English, no client name prefix.
 - tickets.summary: at most two short sentences with the facts from the note it rests on (numbers, names, dates as written).
 - tickets.ask: the piece of work in one sentence.
 - tickets.proposal: at most three short numbered steps; say where production is touched and that it needs Antonio's yes.
 - waits.who: who owes the answer, short, as the note names them (people, or "Mohamed + Basha"); when the log names only the client's company, the note's people section says who answers what. No colon.
-- waits.what: what they owe, at most 8 words. waits.src: the id of the log entry where Antonio put the question; a wait without it is dropped. waits.ticket: the id of the listed proposed ticket that asks it or waits on its answer, else null.
+- waits.what: what they owe, at most 8 words. waits.src: the id of the log entry where Antonio put the question; a wait without it is dropped. waits.ticket: the id of the listed proposed ticket that asks this same question, else null. waits.blocked: the ids of listed proposed tickets whose only missing step is this answer, else [].
 - answered.ticket: the id of a listed ticket with waiting_on. answered.src: the id of the log entry with the answer.
 - At most ${MAX_PROPOSED} tickets and ${MAX_WAITS} waits, most important first. Nothing: empty lists.`;
 
@@ -273,13 +274,14 @@ export async function proposeTickets(cfg: Config, db: DatabaseSync, id: string, 
         const key = waitKey(id, entry, item.who, item.what);
         const texts = waitTexts(item.who, item.what, entry);
         const wait = { who: item.who, what: item.what, since: entry.date };
-        // A listed ticket: a proposed one starts waiting, or leaves as a second ask of the same question; any other is already tracked
+        // The ticket asking the same question turns into the wait, or leaves as a second ask of it; work whose only missing
+        // step is the answer waits on it too, never a question still to put. With neither, the wait is a new ticket. A listed
+        // ticket that is no longer proposed is already tracked.
         const linked = ticketOf(item.ticket);
-        if (linked) {
-          const held = becomeWait(db, Number(linked.id), { waiting: wait, title: texts.title, question: QUESTION_TITLE.test(String(linked.title)) }, key);
-          return held === null ? [] : [held];
-        }
-        return [createTicket(db, cfg, { client: initiative.client, initiative: id, ...texts, waiting: wait, kb_notes: [initiative.note], key, origin: 'ai' })];
+        const blocked = (item.blocked ?? []).flatMap((ref) => { const work = ticketOf(ref); return work && !QUESTION_TITLE.test(String(work.title)) ? [work] : []; });
+        if (!linked && !blocked.length) return [createTicket(db, cfg, { client: initiative.client, initiative: id, ...texts, waiting: wait, kb_notes: [initiative.note], key, origin: 'ai' })];
+        return [...(linked ? [{ row: linked, question: QUESTION_TITLE.test(String(linked.title)) }] : []), ...blocked.map((row) => ({ row, question: false }))]
+          .flatMap(({ row, question }) => { const held = becomeWait(db, Number(row.id), { waiting: wait, title: texts.title, question }, key); return held === null ? [] : [held]; });
       });
       const answered = items(parsed.data.answered, answerItem).flatMap((item) => {
         const owner = ticketOf(item.ticket);
