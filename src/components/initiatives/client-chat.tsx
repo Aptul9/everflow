@@ -109,7 +109,8 @@ function Bubble({ client, origin, token }: { client: string; origin: string; tok
   return <>
     {shown && <Panel client={client} origin={origin} place={place} phone={phone} hidden={!open} open={() => post('open') as Promise<ClientChatOpen>}
       onOpened={refresh} onMinimize={() => toggle(false)} />}
-    <div data-client-chat="" className="fixed z-50 flex flex-col items-center gap-1" style={{ left: place.x, top: place.y, width: SIZE }}>
+    {/* on a phone the open panel takes the screen; its header minimizes it */}
+    <div data-client-chat="" hidden={phone && open} className={cn('fixed z-50 flex flex-col items-center gap-1', phone && open && 'hidden')} style={{ left: place.x, top: place.y, width: SIZE }}>
       <button type="button" aria-expanded={open} aria-label={open ? `Riduci la chat di ${client}` : `Apri la chat di ${client}`} title={`Chat di oggi · ${client}`}
         onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp}
         onClick={() => { if (moved.current) { moved.current = false; return; } toggle(!open); }}
@@ -133,10 +134,14 @@ function Panel(props: { client: string; origin: string; place: Place; phone: boo
   const style = (() => {
     if (props.phone || typeof window === 'undefined') return undefined;
     const width = Math.min(PANEL.width, window.innerWidth - 2 * MARGIN), height = Math.min(PANEL.height, window.innerHeight - 2 * MARGIN);
-    const right = place.x + SIZE / 2 > window.innerWidth / 2, below = place.y + SIZE / 2 > window.innerHeight / 2;
-    const left = right ? place.x + SIZE - width : place.x;
-    const top = below ? place.y - height - 12 : place.y + SIZE + 24;
-    return { width, height, left: Math.min(Math.max(MARGIN, left), window.innerWidth - width - MARGIN), top: Math.min(Math.max(MARGIN, top), window.innerHeight - height - MARGIN) };
+    const right = place.x + SIZE / 2 > window.innerWidth / 2;
+    const fit = (value: number, size: number, room: number) => Math.min(Math.max(MARGIN, value), room - size - MARGIN);
+    // under the bubble, else over it, else beside it, so it never covers the bubble
+    const under = place.y + SIZE + 24, over = place.y - height - 12;
+    if (under + height <= window.innerHeight - MARGIN || over >= MARGIN) {
+      return { width, height, left: fit(right ? place.x + SIZE - width : place.x, width, window.innerWidth), top: under + height <= window.innerHeight - MARGIN ? under : over };
+    }
+    return { width, height, left: fit(right ? place.x - width - 12 : place.x + SIZE + 12, width, window.innerWidth), top: fit(place.y + SIZE / 2 - height / 2, height, window.innerHeight) };
   })();
   return <section role="dialog" aria-modal="false" aria-label={`Chat di ${client}`} hidden={props.hidden} style={style}
     className={cn('fixed z-50 flex flex-col overflow-hidden border bg-card shadow-2xl', props.phone ? 'inset-0' : 'rounded-xl', props.hidden && 'hidden')}>
