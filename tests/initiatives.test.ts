@@ -2,7 +2,7 @@ import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { openDb } from '../src/core/db.ts';
-import { storedTickets } from '../src/core/initiative-state.ts';
+import { storedTickets, ticketCards } from '../src/core/initiative-state.ts';
 import { localTime, markSeen, noteContext, noteTickets, parseSummary, readInitiatives, refreshDue, refreshInitiatives, requestRefresh, syncTickets, workingDays } from '../src/core/initiatives.ts';
 import type { InitiativeSource } from '../src/lib/web-types.ts';
 import { kbFixture, provider, scriptedPeer } from './kb-support.ts';
@@ -166,6 +166,31 @@ test('note tickets replace the summary cards: map and Them for what is owed, AI 
     ['you', "0.1 Delete docs app (429 USD/m). Mirko: is it Maruca's documentation?"], ['you', '0.4 Serverless dbs to DTU'], ['ai', 'X.3 Price the 2027 expiry']]);
   expect(summary.done.map((line) => line.text)).toEqual(['0.2 TS decommission']);
   expect(summary.waits[0]!.sources).toEqual([{ id: 'K0.1', date: '2026-11-16', text: expect.stringContaining('- [ ] 0.1 Delete docs app') }]);
+});
+
+test('waits with the same person and ask become one card; tickets carry after and the row of their table', () => {
+  const note = `${NOTE}
+## Tickets
+- [ ] R.1 Reservation D8as_v5 | them: Roar admin | since 2026-11-21 | ask: ok to buy 1Y reservations
+- [ ] R.3 Reservation P1v3 | them: Roar admin | since 2026-11-20 | ask: ok to buy 1Y reservations | after: 1.5
+- [ ] 2.1 AU without SFTP | them: Andrè | since 2026-11-19 | ask: can api-au go?
+
+## Plan
+| # | Intervention | USD/m | RTO | T |
+|---|---|---:|---|---|
+| R.1 | RI 1Y D8as_v5 x3 | 349 | none | #94 |
+| 2.1 | AU decommission | ~760 | api-au unreachable | |
+`;
+  const tickets = noteTickets(note);
+  expect(tickets[0]!.details).toEqual([{ label: 'Intervention', value: 'RI 1Y D8as_v5 x3' }, { label: 'USD/m', value: '349' }, { label: 'RTO', value: 'none' }]);
+  expect(tickets[1]).toMatchObject({ after: '1.5', details: [] });
+  const empty = { state: 'moving' as const, headline: 'h', now: [], waits: [], next: [], done: [], rejected: 0, entries: 0, model: 'm' };
+  const cards = ticketCards(empty, tickets, '2026-11-23');
+  expect(cards.waits.map((wait) => [wait.who, wait.text, wait.since, wait.days, wait.tickets!.map((ticket) => ticket.id)])).toEqual([
+    ['Roar admin', 'ok to buy 1Y reservations (R.1, R.3)', '2026-11-20', 1, ['R.1', 'R.3']],
+    ['Andrè', '2.1 AU without SFTP: can api-au go?', '2026-11-19', 2, ['2.1']]]);
+  expect(cards.waits[0]!.sources.map((item) => item.id)).toEqual(['KR.1', 'KR.3']);
+  expect(cards.waits[1]!.tickets![0]!.details).toEqual([{ label: 'Intervention', value: 'AU decommission' }, { label: 'USD/m', value: '~760' }, { label: 'RTO', value: 'api-au unreachable' }]);
 });
 
 test('note tickets are read again only when the note changes', () => {

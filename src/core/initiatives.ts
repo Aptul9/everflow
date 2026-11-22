@@ -34,22 +34,48 @@ function noteSections(text: string): Map<string, string[]> {
   return sections;
 }
 
+// Rows of the note's Markdown tables whose first header is "#", by the id in their first cell: header and value of each other
+// non-empty cell, column T (ticket number) left out
+function tableRows(text: string): Map<string, { label: string; value: string }[]> {
+  const rows = new Map<string, { label: string; value: string }[]>();
+  const cells = (line: string) => line.trim().replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim());
+  const lines = text.split(/\r?\n/);
+  for (let index = 0; index < lines.length - 1; index++) {
+    const header = lines[index]!.trim().startsWith('|') ? cells(lines[index]!) : null;
+    if (!header || header[0] !== '#' || !/^\|?[\s:|-]+\|?$/.test(lines[index + 1]!.trim())) continue;
+    for (index += 2; index < lines.length && lines[index]!.trim().startsWith('|'); index++) {
+      const [id, ...values] = cells(lines[index]!);
+      if (!id || rows.has(id)) continue;
+      rows.set(id, values.flatMap((value, column) => {
+        const label = header[column + 1] ?? '';
+        return value && label && label !== 'T' ? [{ label: label.slice(0, 40), value: value.slice(0, 400) }] : [];
+      }).slice(0, 12));
+    }
+  }
+  return rows;
+}
+
 // ## Tickets lines: "- [ ] 0.4 Title | you", "| you: Mirko" (Antonio owes Mirko), "| ai", "| them: Andrè", "| since 2026-11-19",
-// "| ask: what is awaited", "- [x] 0.2 Title | done 2026-11-19". Unknown fields are ignored; owner defaults to you.
+// "| ask: what is awaited", "| after: 1.5" (waits for another ticket), "- [x] 0.2 Title | done 2026-11-19". Unknown fields are
+// ignored; owner defaults to you. details: the row of the same id in the note's tables.
 export function noteTickets(text: string): NoteTicket[] {
+  const rows = tableRows(text);
   return (noteSections(text).get('tickets') ?? []).flatMap((raw): NoteTicket[] => {
     const match = /^- \[([ xX])\] +(\S+) +(.+)$/.exec(raw.trim());
     if (!match) return [];
     const [title, ...fields] = match[3]!.split(' | ').map((part) => part.trim());
-    const ticket: NoteTicket = { id: match[2]!.slice(0, 20), title: title!.slice(0, 200), done: match[1] !== ' ', owner: 'you', who: null,
-      since: null, ask: null, done_at: null, line: raw.trim().slice(0, 600) };
+    const id = match[2]!.slice(0, 20);
+    const ticket: NoteTicket = { id, title: title!.slice(0, 200), done: match[1] !== ' ', owner: 'you', who: null,
+      since: null, ask: null, done_at: null, line: raw.trim().slice(0, 600), after: null, details: rows.get(id) ?? [] };
     for (const field of fields) {
       const owner = /^(you|ai|them)(?::\s*(.+))?$/i.exec(field);
       const day = /^(since|done) +(\d{4}-\d{2}-\d{2})$/i.exec(field);
       const ask = /^ask:\s*(.+)$/i.exec(field);
+      const after = /^after:\s*(.+)$/i.exec(field);
       if (owner) { ticket.owner = owner[1]!.toLowerCase() as NoteTicket['owner']; ticket.who = owner[2]?.trim().slice(0, 40) || null; }
       else if (day) ticket[day[1]!.toLowerCase() === 'since' ? 'since' : 'done_at'] = day[2]!;
       else if (ask) ticket.ask = ask[1]!.slice(0, 300);
+      else if (after) ticket.after = after[1]!.slice(0, 100);
     }
     if (ticket.owner === 'them' && !ticket.who) ticket.who = 'them';
     return [ticket];

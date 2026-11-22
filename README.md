@@ -212,7 +212,7 @@ The daemon sums each initiative up on weekdays from `[overview] hour` (default 8
 
 The page shows per initiative its state, a map of who owes what (red after 5 working days of waiting), the current lines with their sources on click, and the columns AI, You, Them and Done this week. AI items may carry a draft message; the page only shows and copies it, nothing is sent. Summaries, the refresh request and a per-day count of page opens live in the `setting` table; the vault is only read.
 
-A note may carry a `## Tickets` section, one line per piece of work. The daemon reads it on every tick when the note's modification time changed, with no provider call, and keeps it in the setting `initiative.tickets:<id>`. When it has tickets, the map, Them, AI, You and Done columns show the tickets instead of the summary's waits, next steps and done items; the headline and the current lines stay the model's. Each line is `- [ ] <id> <title>` or `- [x] <id> <title>`, then fields separated by ` | `: `you` (Antonio's step), `you: <person>` (Antonio owes that person), `ai` (can be prepared without him), `them: <person>` (that person owes it), `since YYYY-MM-DD` (waiting since, today when missing), `ask: <text>` (what is awaited) and `done YYYY-MM-DD`. Unknown fields are ignored and the owner defaults to `you`; at most 100 lines are read.
+A note may carry a `## Tickets` section, one line per piece of work. The daemon reads it on every tick when the note's modification time changed, with no provider call, and keeps it in the setting `initiative.tickets:<id>`. When it has tickets, the map, Them, AI, You and Done columns show the tickets instead of the summary's waits, next steps and done items; the headline and the current lines stay the model's. Each line is `- [ ] <id> <title>` or `- [x] <id> <title>`, then fields separated by ` | `: `you` (Antonio's step), `you: <person>` (Antonio owes that person), `ai` (can be prepared without him), `them: <person>` (that person owes it), `since YYYY-MM-DD` (waiting since, today when missing), `ask: <text>` (what is awaited), `after: <text>` (what it waits for, such as another ticket) and `done YYYY-MM-DD`. Unknown fields are ignored and the owner defaults to `you`; at most 100 lines are read.
 
 ```markdown
 ## Tickets
@@ -221,7 +221,7 @@ A note may carry a `## Tickets` section, one line per piece of work. The daemon 
 - [x] 0.2 TS decommission | done 2026-11-19
 ```
 
-Owed tickets (`them: <person>`, `you: <person>`) go on the map and, when owed by others, in Them with their working days; open tickets owned by `you` or `ai` go in You or AI; done tickets of the last 7 days go in Done. The summary call also receives the tickets as `plan_tickets` with ids `K<id>`, which its lines may cite.
+Owed tickets (`them: <person>`, `you: <person>`) go on the map and, when owed by others, in Them with their working days and the date they were asked; tickets owed by the same person for the same `ask` make one card listing their ids, waiting since the oldest. Open tickets owned by `you` or `ai` go in You or AI; done tickets of the last 7 days go in Done. A ticket card opens in place on click: what is awaited, from whom, since when, `after`, and the row of the same id in any Markdown table of the note whose first header is `#` (each other header with its value, column `T` and empty cells left out). The summary call also receives the tickets as `plan_tickets` with ids `K<id>`, which its lines may cite.
 
 ## Guide
 

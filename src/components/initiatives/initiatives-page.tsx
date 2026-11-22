@@ -1,9 +1,9 @@
 'use client';
 
 import { ArrowRight, BookOpen, Bot, Check, ChevronDown, ChevronUp, Copy, LayoutGrid, LogOut, Network, RefreshCw, TriangleAlert, User, Users } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { cleanSourceText, italianDates } from '../../lib/web-types.ts';
-import type { Explainer, GuideState, InitiativeLine, InitiativeNext, InitiativesState, InitiativeStateName, InitiativeView, InitiativeWait } from '../../lib/web-types.ts';
+import type { Explainer, GuideState, InitiativeLine, InitiativeNext, InitiativesState, InitiativeStateName, InitiativeTicket, InitiativeView, InitiativeWait } from '../../lib/web-types.ts';
 import { cn } from '../../lib/utils.ts';
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert.tsx';
 import { Button } from '../ui/button.tsx';
@@ -178,13 +178,40 @@ function Column(props: { title: string; icon: React.ReactNode; count: number; to
   </section>;
 }
 
+const dayMonth = (day: string) => `${day.slice(8, 10)}/${day.slice(5, 7)}`;
+
+// What a note ticket card holds: what is awaited, from whom and since when, what it waits for, then the row of its table
+function TicketDetails({ tickets }: { tickets: InitiativeTicket[] }) {
+  return <div data-ticket-details="" className="mt-2 space-y-2.5 border-t pt-2 text-xs">{tickets.map((ticket) => {
+    const facts = [['Waiting for', ticket.ask], ['From', ticket.who], ['Since', ticket.since && formatDate(ticket.since)], ['After', ticket.after],
+      ['Done', ticket.done_at && formatDate(ticket.done_at)], ...ticket.details.map((detail) => [detail.label, detail.value])]
+      .filter((fact): fact is [string, string] => !!fact[1]);
+    return <div key={ticket.id}>
+      {tickets.length > 1 && <p className="mb-1 font-medium text-foreground"><Text text={`${ticket.id} ${ticket.title}`} /></p>}
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">{facts.map(([label, value]) => <Fragment key={label}>
+        <dt className="text-muted-foreground">{label}</dt><dd className="min-w-0 break-words"><Text text={value} /></dd>
+      </Fragment>)}</dl>
+      {!facts.length && <p className="text-muted-foreground">No details in the note.</p>}
+    </div>;
+  })}</div>;
+}
+
+// A card from the note's tickets opens in place on click; a summary card shows its dependencies in the map
 function Item({ line, bar, onFocus, label, children }: { line: InitiativeLine; bar: string; onFocus?: () => void; label?: string; children?: React.ReactNode }) {
-  return <div onClick={(event) => { if (onFocus && !(event.target as Element).closest('button, a')) onFocus(); }}
-    className={cn('group relative rounded-lg border border-l-[3px] bg-card p-2.5 pr-8 text-[13px] leading-snug shadow-xs', bar, onFocus && 'cursor-pointer hover:border-foreground/25')}>
+  const [open, setOpen] = useState(false);
+  const tickets = line.tickets ?? [];
+  const act = tickets.length ? () => setOpen((value) => !value) : onFocus;
+  return <div onClick={(event) => { if (act && !(event.target as Element).closest('button, a, [data-ticket-details]')) act(); }}
+    aria-expanded={tickets.length ? open : undefined}
+    className={cn('group relative rounded-lg border border-l-[3px] bg-card p-2.5 pr-8 text-[13px] leading-snug shadow-xs', bar, act && 'cursor-pointer hover:border-foreground/25')}>
     <Text text={line.text} /><Sources sources={line.sources} />
     {children}
-    {onFocus && <button type="button" aria-label={label ?? 'Show in the map'} title={label ?? 'Show in the map'} onClick={onFocus}
-      className="absolute top-1.5 right-1.5 rounded p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground"><Network aria-hidden="true" className="size-3.5" /></button>}
+    {open && <TicketDetails tickets={tickets} />}
+    {tickets.length ? <button type="button" aria-label={open ? 'Hide details' : 'Show details'} title={open ? 'Hide details' : 'Show details'} onClick={() => setOpen(!open)}
+      className="absolute top-1.5 right-1.5 rounded p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground">
+      {open ? <ChevronUp aria-hidden="true" className="size-3.5" /> : <ChevronDown aria-hidden="true" className="size-3.5" />}</button>
+      : onFocus && <button type="button" aria-label={label ?? 'Show in the map'} title={label ?? 'Show in the map'} onClick={onFocus}
+        className="absolute top-1.5 right-1.5 rounded p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground"><Network aria-hidden="true" className="size-3.5" /></button>}
   </div>;
 }
 
@@ -247,7 +274,7 @@ function Detail({ view, guide }: { view: InitiativeView; guide: GuideState | nul
         <Column title="Them" tone="border-t-info" icon={<Users aria-hidden="true" className="size-4 text-info" />} count={them.length}>
           {them.map((wait, index) =>
             <Item key={index} line={{ ...wait, text: `**${wait.who}**: ${wait.text}` }} bar={wait.days > OVERDUE_DAYS ? 'border-l-destructive' : 'border-l-info'} onFocus={() => explainer ? pickLine(wait) : pick(wait.who)} label={`Show what ${wait.who} owes`}>
-              <span className={cn('mt-1 block text-xs', wait.days > OVERDUE_DAYS ? 'font-medium text-destructive' : 'text-muted-foreground')}>{wait.days === 0 ? 'today' : `${wait.days} working day${wait.days === 1 ? '' : 's'}`}</span>
+              <span className={cn('mt-1 block text-xs', wait.days > OVERDUE_DAYS ? 'font-medium text-destructive' : 'text-muted-foreground')}>{wait.days === 0 ? `since ${dayMonth(wait.since)}` : `${wait.days} working day${wait.days === 1 ? '' : 's'}, since ${dayMonth(wait.since)}`}</span>
             </Item>)}
         </Column>
         <Column title="Done this week" tone="border-t-success" icon={<Check aria-hidden="true" className="size-4 text-success" />} count={summary.done.length}>
