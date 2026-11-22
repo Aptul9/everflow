@@ -227,8 +227,10 @@ function refineBatch(db: DatabaseSync): void {
     transaction(db, () => db.exec('ALTER TABLE batch ADD COLUMN cleared_at TEXT'));
   }
   // initiative: the Overview initiative a ticket belongs to; such tickets show on the Overview, not on the board.
-  // origin: 'ai' for a ticket the AI suggested, shown in the AI column of its initiative until it is started
-  for (const column of ['cleared_at', 'chat_running_at', 'initiative', 'origin']) {
+  // origin: 'ai' for a ticket the AI suggested, shown in the AI column of its initiative until it is started.
+  // why: JSON {text, sources} of an AI ticket, the note sections and log entries it rests on.
+  // dismissed_by: 'overview_chat' when the client's Overview chat dismissed it, cleared when it is restored
+  for (const column of ['cleared_at', 'chat_running_at', 'initiative', 'origin', 'why', 'dismissed_by']) {
     if (!db.prepare('PRAGMA table_info(ticket)').all().some((row) => row.name === column)) {
       transaction(db, () => db.exec(`ALTER TABLE ticket ADD COLUMN ${column} TEXT`));
     }
