@@ -365,7 +365,8 @@ test('after Discuss the chat dialog opens as soon as the daemon has created the 
   board(state);
   await userEvent.click(within(ticket()).getByRole('button', { name: 'Discuss' }));
   await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Open chat' }));
-  const frame = await screen.findByTitle('Chat of ticket #1', {}, { timeout: 5_000 });
+  // two real 2 s polls before the chat exists: room for a loaded machine
+  const frame = await screen.findByTitle('Chat of ticket #1', {}, { timeout: 10_000 });
   expect(frame.getAttribute('src')).toContain('sessionId=ses_discussed1');
   expect(screen.getByRole('dialog', { name: '#1Reset access' })).toBeTruthy();
 });
