@@ -204,8 +204,9 @@ export const TICKET_MESSAGES = 50;
 // The ticket's own source: its primary and linked conversations and the batches attached to it, oldest first.
 // A chat it only keeps as context (it was closed, merged or relinked) feeds later tickets, not this one.
 export function ticketMessages(db: DatabaseSync, ticket: number): Message[] {
-  return (db.prepare(`SELECT DISTINCT m.* FROM message m LEFT JOIN ticket_conversation l ON l.conversation=m.conversation
-    LEFT JOIN batch b ON b.id=m.batch WHERE (l.ticket=? AND l.kind IN ('primary','linked')) OR b.ticket=?`).all(ticket, ticket) as unknown as Message[])
+  // Two indexed lookups: an OR across both joins scans every message, once per ticket on every board render
+  return (db.prepare(`SELECT m.* FROM ticket_conversation l JOIN message m ON m.conversation=l.conversation WHERE l.ticket=? AND l.kind IN ('primary','linked')
+    UNION SELECT m.* FROM batch b JOIN message m ON m.batch=b.id WHERE b.ticket=?`).all(ticket, ticket) as unknown as Message[])
     .sort((a, b) => utc(a.sent_at).localeCompare(utc(b.sent_at)) || a.id - b.id);
 }
 
