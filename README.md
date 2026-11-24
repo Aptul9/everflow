@@ -152,7 +152,7 @@ These values come from the exported schema in [config.ts](src/core/config.ts), n
 {
   "tickets": { "enabled": false },
   "chats": { "enabled": false },
-  "web": { "port": 8789 },
+  "web": { "port": 8789, "everid_subjects": [] },
   "triage": { "providers": [], "model": "", "tool_limit": 8, "timeout_seconds": 120, "min_confidence": 0.75, "history_messages": 40 },
   "windows": { "outlook": 300, "teams": 120, "teamsrelay": 120, "gchat": 120, "gmail": 300, "oemail": 180, "slack": 120 },
   "jobs": {
