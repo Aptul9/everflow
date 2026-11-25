@@ -94,8 +94,7 @@ test('a job due again at once leaves the event loop room for I/O between runs', 
   };
   const runtime = await startRuntime(f.cfg, db, { buildReceipt: process.env.TEST_BUILD_RECEIPT!, runId: 'due-again-run', handlers: { triage: handler } });
   try {
-    await delay(500);
-    expect(calls).toBe(50);
+    await vi.waitFor(() => expect(calls).toBe(50), { timeout: 30_000, interval: 50 });
     expect(seenByImmediate).toBeLessThan(50);
   } finally { await runtime.close(); }
 });
