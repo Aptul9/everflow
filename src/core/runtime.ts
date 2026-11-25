@@ -393,7 +393,7 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
   const watchers: { child: ChildProcess; done: Promise<void> }[] = [];
   const inFlight = new Map<number, { controller: AbortController; done: Promise<void> }>();
   const reconcile = new Set(db.prepare("SELECT id FROM job WHERE state IN ('queued','running') AND (kind='collect' OR turn_id IS NOT NULL OR reserved_at IS NOT NULL)").all().map((row) => Number(row.id)));
-  let native: ReturnType<typeof createKernel> | undefined, closing: Promise<void> | undefined, stopped = false, ticking = false;
+  let native: ReturnType<typeof createKernel> | undefined, closing: Promise<void> | undefined, stopped = false, ticking = false, maintainedAt = 0;
   const kernel = () => native ??= createKernel();
   const changed = () => options.onChildren?.([...registry.values()]);
   const fatal = (error: unknown, stage: string) => {
@@ -446,7 +446,9 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
       stage = 'runtime.models'; refreshModels(); checkAccounts();
       stage = 'runtime.initiatives'; refreshOverview(); refreshGuide();
       stage = 'runtime.schedule';
-      schedule(db, cfg); stage = 'runtime.maintenance'; scheduleMaintenance(db, cfg);
+      schedule(db, cfg);
+      // A repair sweep over every chat: once per interval, not after each finished job
+      if (Date.now() - maintainedAt >= cfg.jobs.collect_seconds * 1000) { stage = 'runtime.maintenance'; scheduleMaintenance(db, cfg); maintainedAt = Date.now(); }
       for (const id of reconcile) if (['done', 'cancelled', 'parked'].includes(String(db.prepare('SELECT state FROM job WHERE id=?').get(id)?.state))) reconcile.delete(id);
       // A recovery waiting out its rate-limit backoff keeps its slot and its ticket's order, but does not hold other tickets' new input until due
       const holding = () => { const now = utc(); return [...reconcile].some((id) => !db.prepare(`SELECT 1 FROM job j JOIN turn t ON t.id=j.turn_id
