@@ -7,7 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, expect, test, vi } from 'vitest';
 import { loadConfig } from '../src/core/config.ts';
 import { openDb, prepareStart } from '../src/core/db.ts';
-import { claim, complete, enqueue, park } from '../src/core/jobs.ts';
+import { claim, complete, defer, enqueue, park } from '../src/core/jobs.ts';
 import { scheduleMaintenance, startRuntime } from '../src/core/runtime.ts';
 import { startChat } from '../src/core/chat.ts';
 import { connect } from '../src/core/opencode.ts';
@@ -79,6 +79,24 @@ test('I1 old recovery waiting out a rate-limit backoff lets independent fresh in
   try {
     await delay(40); expect(calls).toEqual([fresh]);
     expect(db.prepare('SELECT state,next_at FROM job WHERE id=?').get(old)).toMatchObject({ state: 'queued', next_at: later });
+  } finally { await runtime.close(); }
+});
+
+test('a job due again at once leaves the event loop room for I/O between runs', async () => {
+  const f = fixture(); f.cfg.tickets.enabled = true;
+  using db = openDb(f.path); prepareStart(db);
+  const id = enqueue(db, 'triage', 'due-again', {});
+  let calls = 0, seenByImmediate = -1;
+  setImmediate(() => { seenByImmediate = calls; });
+  const handler = (_cfg: unknown, connection: ReturnType<typeof openDb>, job: any) => {
+    if (job.id !== id) return;
+    if (++calls < 50) defer(connection, job, new Date().toISOString()); else complete(connection, job, () => {});
+  };
+  const runtime = await startRuntime(f.cfg, db, { buildReceipt: process.env.TEST_BUILD_RECEIPT!, runId: 'due-again-run', handlers: { triage: handler } });
+  try {
+    await delay(500);
+    expect(calls).toBe(50);
+    expect(seenByImmediate).toBeLessThan(50);
   } finally { await runtime.close(); }
 });
 

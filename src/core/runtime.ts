@@ -466,11 +466,19 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
               if (controller.signal.aborted && owns(db, job, utc())) defer(db, job, after(utc(), cfg.jobs.collect_seconds));
               const current = db.prepare('SELECT state,failures FROM job WHERE id=?').get(job.id);
               if (current && (['done', 'cancelled', 'parked'].includes(String(current.state)) || current.state === 'queued' && current.failures === job.failures && !controller.signal.aborted)) reconcile.delete(job.id);
-            } finally { renewal.stop(); inFlight.delete(job.id); if (!stopped) queueMicrotask(tick); }
+            } finally { renewal.stop(); inFlight.delete(job.id); soon(); }
           });
         inFlight.set(job.id, { controller, done });
       }
     } catch (error) { fatal(error, stage); } finally { ticking = false; watchSessions(); }
+  }
+  // Finished jobs and session events ask for one tick after pending I/O: chained as microtasks, a job due again at once
+  // kept the loop from timers and requests until the page went offline
+  let soonQueued = false;
+  function soon() {
+    if (stopped || soonQueued) return;
+    soonQueued = true;
+    setImmediate(() => { soonQueued = false; tick(); });
   }
   // Marks written by another process (the chat's ticket CLI) are picked up at the next tick. OpenCode is not contacted
   // before the first approved chat exists, so the event stream starts with it.
@@ -479,7 +487,7 @@ export async function startRuntime(cfg: Config, db: DatabaseSync, options: Runti
   function watchSessions() {
     if (!retitler || stopped) return;
     if (!events && db.prepare('SELECT 1 FROM ticket WHERE session_id IS NOT NULL AND approved_at IS NOT NULL LIMIT 1').get()) {
-      events = startSessionEvents(cfg, db, { wake: retitler.wake, log, due: () => queueMicrotask(tick) });
+      events = startSessionEvents(cfg, db, { wake: retitler.wake, log, due: soon });
     }
     retitler.wake();
   }
