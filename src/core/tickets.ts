@@ -44,7 +44,7 @@ export interface Ticket {
   merged_into: number | null;
   // Set by sync while the bound session runs a turn, null once it is idle
   chat_running_at?: string | null;
-  // JSON {form, text} while the bound session waits on Antonio's answer to a question it put, null otherwise
+  // JSON {id, text} while the bound session waits on Antonio (its question, a permission request, a page), null otherwise
   asking?: string | null;
   // 'ai' when the AI suggested the ticket
   origin?: string | null;
@@ -178,7 +178,7 @@ export function stage(db: DatabaseSync, ticket: number, projection: { exclude_jo
   const row = { ...getTicket(db, ticket), ...(projection.report !== undefined ? { report: projection.report } : {}),
     ...(projection.lifecycle ? { lifecycle: projection.lifecycle } : {}) };
   if (db.prepare("SELECT 1 FROM job WHERE ticket=? AND state='parked' AND id<>?").get(ticket, projection.exclude_job ?? -1)) return 'Failed';
-  // A chat waiting on Antonio's answer to its question runs nowhere until he replies
+  // A chat waiting on Antonio (its question, a permission, a page) runs nowhere until he replies
   if (row.lifecycle === 'active' && row.asking && projection.report === undefined) return 'Needs you';
   if (row.lifecycle === 'active' && row.chat_running_at && projection.report === undefined) return 'Working';
   if (row.lifecycle === 'proposed' || row.report === 'needs_you' || row.report === 'blocked') return 'Needs you';

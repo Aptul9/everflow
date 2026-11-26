@@ -41,7 +41,7 @@ export interface TicketCard {
   report_line: string | null;
   session_id: string | null;
   chat_running: boolean;
-  // The question the chat put to Antonio and still waits on ('' when it has no text), null when none is open
+  // What the chat waits on Antonio for (its question, a permission request, a page); '' without text, null when nothing
   asking: string | null;
   // Approved input not yet sent to the chat, queued since then; null when nothing waits
   chat_waiting_since: string | null;

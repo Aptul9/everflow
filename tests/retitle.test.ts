@@ -3,7 +3,7 @@ import { afterEach, expect, test } from 'vitest';
 import { loadConfig } from '../src/core/config.ts';
 import { openDb } from '../src/core/db.ts';
 import { ingest, schedule } from '../src/core/ingest.ts';
-import { applySessionEvent, reconcileTitles, RETITLE_WAKE, retitlePass, startRetitler, startSessionEvents, syncNow } from '../src/core/retitle.ts';
+import { applySessionEvent, reconcileTitles, RETITLE_WAKE, retitlePass, startRetitler, startSessionEvents, syncNow, waitPass } from '../src/core/retitle.ts';
 import { boardColumn, stageTitle } from '../src/core/tickets.ts';
 import type { Stage } from '../src/core/tickets.ts';
 import { utc } from '../src/core/time.ts';
@@ -174,7 +174,7 @@ test('a question the chat puts moves the card to Needs you until that question i
   clear(f.db);
   expect(applySessionEvent(f.db, { type: 'form.created', data: { form: { id: 'frm_x', sessionID: 'ses_other', fields: [] } } }, AT)).toBe(false);
   expect(applySessionEvent(f.db, form('frm_1', 'Install Git too?'), AT)).toBe(true);
-  expect(JSON.parse(String(asking()))).toEqual({ form: 'frm_1', text: 'Install Git too?' });
+  expect(JSON.parse(String(asking()))).toEqual({ id: 'frm_1', text: 'Install Git too?' });
   expect(stageTitle(f.db, id)).toBe(`[Needs you] #${id} Synthetic`);
   expect(marks(f.db)).toEqual([id]);
   expect(readState(f.db, f.cfg, new Date(AT)).groups.needs_you.find((card) => card.id === id)).toMatchObject({ asking: 'Install Git too?', chat_running: true });
@@ -184,12 +184,53 @@ test('a question the chat puts moves the card to Needs you until that question i
   expect(asking()).toBeNull();
   expect(stageTitle(f.db, id)).toBe(`[Working] #${id} Synthetic`);
   applySessionEvent(f.db, form('frm_2', ''), AT);
-  expect(JSON.parse(String(asking()))).toEqual({ form: 'frm_2', text: 'Pick' });
+  expect(JSON.parse(String(asking()))).toEqual({ id: 'frm_2', text: 'Pick' });
   applySessionEvent(f.db, { type: 'form.cancelled', data: { id: 'frm_2', sessionID: session } }, AT);
+  expect(asking()).toBeNull();
+  expect(applySessionEvent(f.db, { type: 'permission.asked', data: { id: 'per_1', sessionID: session, action: 'bash', resources: ['git push'] } }, AT)).toBe(true);
+  expect(JSON.parse(String(asking()))).toEqual({ id: 'per_1', text: 'Permission: bash git push' });
+  expect(stageTitle(f.db, id)).toBe(`[Needs you] #${id} Synthetic`);
+  applySessionEvent(f.db, { type: 'permission.replied', data: { requestID: 'per_1', sessionID: session } }, AT);
   expect(asking()).toBeNull();
   applySessionEvent(f.db, form('frm_3', 'Again?'), AT);
   applySessionEvent(f.db, { type: 'session.execution.interrupted', data: { sessionID: session } }, AT);
   expect(asking()).toBeNull();
+});
+
+test('the wait watch moves running chats waiting on a page or permission to Needs you and back, and skips deleted chats', async () => {
+  const f = fixture();
+  const page = ticket(f.db), permission = ticket(f.db), free = ticket(f.db), gone = ticket(f.db), idle = ticket(f.db);
+  const session = (id: number) => String(f.db.prepare('SELECT session_id FROM ticket WHERE id=?').get(id)!.session_id);
+  const asking = (id: number) => f.db.prepare('SELECT asking FROM ticket WHERE id=?').get(id)!.asking;
+  f.db.prepare('UPDATE ticket SET chat_running_at=? WHERE id IN (?,?,?,?)').run(AT, page, permission, free, gone);
+  let pending: Record<string, { permissions?: unknown[]; pages?: unknown[] }> = {
+    [session(page)]: { pages: [{ id: 'call_1', sessionID: session(page), title: 'Pick a layout' }] },
+    [session(permission)]: { permissions: [{ id: 'per_1', sessionID: session(permission), action: 'edit', resources: ['a.ts'], message: 'Edit a.ts?' }] },
+    [session(idle)]: { pages: [{ id: 'call_2', title: 'Not running' }] },
+  };
+  const asked: string[] = [];
+  const peer = {
+    waits: async () => pending,
+    waiting: async (id: string, _signal?: AbortSignal, listed?: typeof pending | null) => {
+      asked.push(id);
+      if (id === session(gone)) throw Object.assign(new Error('OpenCode HTTP 404'), { resource: 'session' });
+      const own = listed?.[id];
+      const item = (own?.permissions?.[0] ?? own?.pages?.[0]) as { id: string; title?: string; message?: string } | undefined;
+      return item ? { id: item.id, text: item.message ?? item.title ?? '' } : undefined;
+    },
+  };
+  expect(await waitPass(f.db, peer)).toBe(true);
+  expect(asked).not.toContain(session(idle));
+  expect(JSON.parse(String(asking(page)))).toEqual({ id: 'call_1', text: 'Pick a layout' });
+  expect(JSON.parse(String(asking(permission)))).toEqual({ id: 'per_1', text: 'Edit a.ts?' });
+  expect([asking(free), asking(gone), asking(idle)]).toEqual([null, null, null]);
+  expect(stageTitle(f.db, page)).toBe(`[Needs you] #${page} Synthetic`);
+  expect(await waitPass(f.db, peer)).toBe(false);
+  pending = { [session(permission)]: pending[session(permission)]! };
+  expect(await waitPass(f.db, peer)).toBe(true);
+  expect(asking(page)).toBeNull();
+  expect(stageTitle(f.db, page)).toBe(`[Working] #${page} Synthetic`);
+  expect(asking(permission)).not.toBeNull();
 });
 
 test('a database whose card trigger predates open questions gets one that watches them', () => {

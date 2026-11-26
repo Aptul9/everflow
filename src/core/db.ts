@@ -236,7 +236,8 @@ function refineBatch(db: DatabaseSync): void {
   // origin: 'ai' for a ticket the AI suggested, shown in the AI column of its initiative until it is started.
   // why: JSON {text, sources} of an AI ticket, the note sections and log entries it rests on.
   // dismissed_by: 'overview_chat' when the client's Overview chat dismissed it, cleared when it is restored
-  // asking: JSON {form, text} of a question the ticket's chat put to Antonio and is waiting on; the card sits in Needs you
+  // asking: JSON {id, text} of what the ticket's chat waits on Antonio for (its question, a permission request, a page
+  // waiting on his choice); the card sits in Needs you meanwhile
   for (const column of ['cleared_at', 'chat_running_at', 'initiative', 'origin', 'why', 'dismissed_by', 'asking']) {
     if (!db.prepare('PRAGMA table_info(ticket)').all().some((row) => row.name === column)) {
       transaction(db, () => db.exec(`ALTER TABLE ticket ADD COLUMN ${column} TEXT`));

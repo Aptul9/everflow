@@ -3,7 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { Config } from './config.ts';
 import { transaction } from './db.ts';
 import { enqueue, hasPendingInput, healthError, healthOk } from './jobs.ts';
-import { connect, formQuestion } from './opencode.ts';
+import { askingValue, connect, formQuestion, permissionWait } from './opencode.ts';
 import type { Peer } from './opencode.ts';
 import { stageTitle } from './tickets.ts';
 import { utc } from './time.ts';
@@ -107,8 +107,8 @@ export function reconcileTitles(db: DatabaseSync, at = utc()): void {
   }
 }
 
-type SessionEvent = { type: string; data?: { sessionID?: unknown; title?: unknown; status?: { type?: unknown }; id?: unknown;
-  form?: { id?: unknown; sessionID?: unknown; title?: unknown; fields?: unknown } } };
+type SessionEvent = { type: string; data?: { sessionID?: unknown; title?: unknown; status?: { type?: unknown }; id?: unknown; requestID?: unknown;
+  action?: unknown; resources?: unknown; message?: unknown; form?: { id?: unknown; sessionID?: unknown; title?: unknown; fields?: unknown } } };
 
 /** Applies one OpenCode event to the ticket bound to its session. Returns whether anything may need a new title. */
 export function applySessionEvent(db: DatabaseSync, event: SessionEvent, at = utc()): boolean {
@@ -125,14 +125,16 @@ export function applySessionEvent(db: DatabaseSync, event: SessionEvent, at = ut
   if (event.type === 'session.execution.started' || status === 'busy' || status === 'retry') {
     db.prepare('UPDATE ticket SET chat_running_at=COALESCE(chat_running_at,?) WHERE id=?').run(at, ticket);
     recheck();
-  } else if (event.type === 'form.created') {
-    const form = event.data!.form!;
-    if (typeof form.id !== 'string') return false;
-    db.prepare('UPDATE ticket SET asking=? WHERE id=?').run(JSON.stringify(formQuestion({ ...form, id: form.id })), ticket);
-  } else if (event.type === 'form.replied' || event.type === 'form.cancelled') {
-    // Another question still open keeps the card where it is; the next sync reads it
-    if (typeof event.data?.id !== 'string') return false;
-    db.prepare("UPDATE ticket SET asking=NULL WHERE id=? AND json_extract(asking,'$.form')=?").run(ticket, event.data.id);
+  } else if (event.type === 'form.created' || event.type === 'permission.asked') {
+    const item = event.type === 'form.created' ? event.data!.form! : event.data!;
+    if (typeof item.id !== 'string') return false;
+    const wait = event.type === 'form.created' ? formQuestion({ ...item, id: item.id }) : permissionWait({ ...event.data!, id: item.id });
+    db.prepare('UPDATE ticket SET asking=? WHERE id=?').run(JSON.stringify(wait), ticket);
+  } else if (event.type === 'form.replied' || event.type === 'form.cancelled' || event.type === 'permission.replied') {
+    // Anything else still open puts the card back at the next wait watch
+    const id = event.type === 'permission.replied' ? event.data?.requestID : event.data?.id;
+    if (typeof id !== 'string') return false;
+    db.prepare("UPDATE ticket SET asking=NULL WHERE id=? AND json_extract(asking,'$.id')=?").run(ticket, id);
   } else if (event.type === 'session.idle' || status === 'idle' || event.type === 'session.execution.succeeded'
     || event.type === 'session.execution.failed' || event.type === 'session.execution.interrupted') {
     db.prepare('UPDATE ticket SET chat_running_at=NULL,asking=NULL WHERE id=?').run(ticket);
@@ -148,15 +150,50 @@ export function applySessionEvent(db: DatabaseSync, event: SessionEvent, at = ut
   return true;
 }
 
+/** Puts each running chat's card where what it waits on says: Needs you while it waits on Antonio, back once it does not.
+ * Covers OpenChamber pages, which send no opencode event, and any event missed. Returns whether a card moved. */
+export async function waitPass(db: DatabaseSync, peer: Pick<Peer, 'waits' | 'waiting'>, signal?: AbortSignal): Promise<boolean> {
+  const rows = db.prepare(`SELECT id,session_id FROM ticket WHERE lifecycle='active' AND approved_at IS NOT NULL AND session_id IS NOT NULL
+    AND (chat_running_at IS NOT NULL OR asking IS NOT NULL)`).all();
+  if (!rows.length) return false;
+  const listed = await peer.waits(signal);
+  let moved = false;
+  for (const row of rows) {
+    let wait;
+    try { wait = await peer.waiting(String(row.session_id), signal, listed); }
+    catch (error) { if ((error as { resource?: unknown }).resource === 'session') continue; throw error; }
+    moved = transaction(db, () => {
+      const current = (db.prepare('SELECT asking FROM ticket WHERE id=?').get(row.id!)?.asking ?? null) as string | null;
+      const next = askingValue(current, wait);
+      if (next === current) return false;
+      db.prepare('UPDATE ticket SET asking=? WHERE id=?').run(next, row.id!);
+      return true;
+    }) || moved;
+  }
+  return moved;
+}
+
 const STOPPED = Symbol('stopped');
 
 /** Keeps one OpenCode event stream open, reconnecting with backoff, and when no frame (keepalives included) came for `idleMs`. */
 export function startSessionEvents(cfg: Config, db: DatabaseSync, options: { wake: () => void; log: Log;
   // due: work an event made due (a finished turn's collector or sync) runs now instead of at the next tick
-  due?: () => void; peer?: () => Pick<Peer, 'events'>; idleMs?: number; maxBackoffMs?: number }) {
+  due?: () => void; peer?: () => Pick<Peer, 'events'>; idleMs?: number; maxBackoffMs?: number;
+  waitPeer?: () => Pick<Peer, 'waits' | 'waiting'>; waitMs?: number }) {
   const controller = new AbortController();
   const peer = options.peer ?? (() => connect(cfg, { timeoutMs: 2_147_483_647 }));
   const idleMs = options.idleMs ?? 60_000, maxBackoffMs = options.maxBackoffMs ?? 30_000;
+  // One client for the wait watch, so its OpenChamber sign-in is kept between passes
+  let waitClient: Pick<Peer, 'waits' | 'waiting'> | undefined, watching = false, watchFailures = 0;
+  const watch = setInterval(() => {
+    if (watching || controller.signal.aborted) return;
+    watching = true;
+    waitClient ??= (options.waitPeer ?? (() => connect(cfg, cfg.opencode.timeout_seconds === undefined ? {} : { timeoutMs: cfg.opencode.timeout_seconds * 1000 })))();
+    void waitPass(db, waitClient, controller.signal).then((moved) => { watchFailures = 0; if (moved) options.wake(); }, (error: unknown) => {
+      if (!controller.signal.aborted && watchFailures++ === 0) options.log({ source: 'daemon', code: 'waits.retry', message: String((error as Error)?.message ?? error).slice(0, 200) });
+    }).finally(() => { watching = false; });
+  }, options.waitMs ?? 10_000);
+  watch.unref();
   const done = (async () => {
     let failures = 0;
     while (!controller.signal.aborted) {
@@ -198,5 +235,5 @@ export function startSessionEvents(cfg: Config, db: DatabaseSync, options: { wak
       if (failures) await delay(Math.min(maxBackoffMs, 1000 * 2 ** (failures - 1)), undefined, { signal: controller.signal }).catch(() => {});
     }
   })();
-  return { close: async () => { controller.abort(); await done; } };
+  return { close: async () => { controller.abort(); clearInterval(watch); await done; } };
 }

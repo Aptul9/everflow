@@ -23,6 +23,8 @@ export async function scriptedPeer() {
   const admissions = new Map<string, SessionInboxUser>();
   // Open questions by session, as the question tool leaves them until answered
   const forms = new Map<string, { id: string; sessionID: string; title: string; fields: unknown[] }[]>();
+  // Permission requests waiting on an answer, across sessions
+  const permissions: { id: string; sessionID: string; action: string; resources: string[]; message?: string }[] = [];
   const calls: PeerCall[] = [];
   const state = {
     loseCreate: false, losePrompt: false, loseRename: false, loseArchive: false,
@@ -63,6 +65,10 @@ export async function scriptedPeer() {
       if (call.method === 'GET' && path === '/api/session/active') {
         json(response, { data: Object.fromEntries([...sessions.values()].filter((session) =>
           (session.time.busy ?? 0) > (session.time.idle ?? 0)).map((session) => [session.id, { type: 'running' }])) });
+        return;
+      }
+      if (call.method === 'GET' && path === '/api/permission/request') {
+        json(response, { location: { directory: '/synthetic' }, data: permissions });
         return;
       }
       const match = /^\/api\/session\/([^/]+)(.*)$/.exec(path);
@@ -141,7 +147,7 @@ export async function scriptedPeer() {
     messages.set(session, history);
     sessions.get(session)!.time.idle = at;
   };
-  return { url: `http://127.0.0.1:${address.port}`, sessions, messages, admissions, forms, calls, state, json, deliver, finish,
+  return { url: `http://127.0.0.1:${address.port}`, sessions, messages, admissions, forms, permissions, calls, state, json, deliver, finish,
     async [Symbol.asyncDispose]() {
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
