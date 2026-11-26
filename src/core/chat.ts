@@ -664,12 +664,17 @@ export async function collect(cfg: Config, db: DatabaseSync, job: Job, options: 
   } catch (error) { failed(cfg, db, job, error, options); }
 }
 
-// Records whether the bound session is running a turn, so a turn the owner started in OpenChamber shows as Working
+// Records whether the bound session is running a turn, so a turn the owner started in OpenChamber shows as Working,
+// and whether it waits on his answer to a question, which form events report first
 async function markRunning(db: DatabaseSync, job: Job, ticket: number, session: string, peer: Peer, options: ChatOptions): Promise<boolean> {
   const now = clock(options);
   const running = await peer.running(session, options.signal);
+  const question = running || ticketRow(db, ticket).asking ? (await peer.forms(session, options.signal))[0] : undefined;
   return fenced(db, job, () => {
-    db.prepare('UPDATE ticket SET chat_running_at=? WHERE id=?').run(running ? ticketRow(db, ticket).chat_running_at ?? now() : null, ticket);
+    const owner = ticketRow(db, ticket);
+    const kept = question && owner.asking && JSON.parse(owner.asking).form === question.form;
+    db.prepare('UPDATE ticket SET chat_running_at=?,asking=? WHERE id=?').run(running ? owner.chat_running_at ?? now() : null,
+      question ? kept ? owner.asking! : JSON.stringify(question) : null, ticket);
     return true;
   }, now) ?? false;
 }

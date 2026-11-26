@@ -406,6 +406,28 @@ test('sync shows a ticket as Working while its chat runs a turn the owner starte
   expect(stage(db, ticket)).toBe('Waiting on them');
 });
 
+test('sync moves a running chat that waits on an open question to Needs you, and back to Working once it is answered', async () => {
+  await using peer = await scriptedPeer();
+  const { cfg, path } = chatFixture(peer.url);
+  using db = openDb(path);
+  const ticket = proposed(db, { lifecycle: 'active', approved_at: AT, session_id: 'ses_direct' });
+  peer.sessions.set('ses_direct', remoteSession('ses_direct', cfg.opencode.directory));
+  const api = connect(cfg);
+  await api.prompt('ses_direct', 'msg_owner', 'Go on');
+  peer.deliver('ses_direct', 'msg_owner');
+  peer.forms.set('ses_direct', [{ id: 'frm_1', sessionID: 'ses_direct', title: 'Scope', fields: [{ title: 'Scope', description: 'Install Git too?' }] }]);
+  jobs.enqueue(db, 'sync', 'sync', {});
+  await chat.sync(cfg, db, claimed(db, cfg));
+  expect(JSON.parse(String(row(db, 'ticket', ticket).asking))).toEqual({ form: 'frm_1', text: 'Install Git too?' });
+  expect(stage(db, ticket)).toBe('Needs you');
+  expect(row(db, 'ticket', ticket).session_title).toBe(`[Needs you] #${ticket} ${row(db, 'ticket', ticket).title}`);
+  peer.forms.delete('ses_direct');
+  vi.setSystemTime(new Date('2026-11-06T00:05:00Z'));
+  await chat.sync(cfg, db, claimed(db, cfg));
+  expect(row(db, 'ticket', ticket).asking).toBeNull();
+  expect(stage(db, ticket)).toBe('Working');
+});
+
 test('a turn started in a dismissed ticket\'s chat after the dismissal reopens it to its STATUS, and STATUS done then closes it', async () => {
   await using peer = await scriptedPeer();
   const { cfg, path } = chatFixture(peer.url);

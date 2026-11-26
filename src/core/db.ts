@@ -31,8 +31,8 @@ CREATE INDEX IF NOT EXISTS timeline_ticket ON timeline(ticket);`;
 const mark = "INSERT OR REPLACE INTO stage_dirty(ticket,at) VALUES (%s,strftime('%Y-%m-%dT%H:%M:%fZ','now'))";
 const stageMarks = `
 CREATE TABLE IF NOT EXISTS stage_dirty (ticket INTEGER PRIMARY KEY, at TEXT NOT NULL);
-CREATE TRIGGER IF NOT EXISTS stage_dirty_ticket AFTER UPDATE OF lifecycle,report,chat_running_at,title,session_id,merged_into ON ticket
-  WHEN NEW.lifecycle IS NOT OLD.lifecycle OR NEW.report IS NOT OLD.report OR NEW.chat_running_at IS NOT OLD.chat_running_at
+CREATE TRIGGER IF NOT EXISTS stage_dirty_ticket AFTER UPDATE OF lifecycle,report,chat_running_at,asking,title,session_id,merged_into ON ticket
+  WHEN NEW.lifecycle IS NOT OLD.lifecycle OR NEW.report IS NOT OLD.report OR NEW.chat_running_at IS NOT OLD.chat_running_at OR NEW.asking IS NOT OLD.asking
     OR NEW.title IS NOT OLD.title OR NEW.session_id IS NOT OLD.session_id OR NEW.merged_into IS NOT OLD.merged_into
   BEGIN ${mark.replace('%s', 'NEW.id')}; END;
 CREATE TRIGGER IF NOT EXISTS stage_dirty_job_insert AFTER INSERT ON job WHEN NEW.ticket IS NOT NULL
@@ -45,7 +45,13 @@ CREATE TRIGGER IF NOT EXISTS stage_dirty_turn_state AFTER UPDATE OF state ON tur
   BEGIN ${mark.replace('%s', 'NEW.ticket')}; END;`;
 
 function refineStageMarks(db: DatabaseSync): void {
-  if (hasTable(db, 'stage_dirty')) { db.exec(stageMarks); return; }
+  if (hasTable(db, 'stage_dirty')) {
+    // A trigger made before the chat's open question moved cards does not watch it
+    const ticketMark = db.prepare("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='stage_dirty_ticket'").get();
+    if (ticketMark && !String(ticketMark.sql).includes('asking')) db.exec('DROP TRIGGER stage_dirty_ticket');
+    db.exec(stageMarks);
+    return;
+  }
   // First start with marks: every chat gets its title checked once, which moves existing titles to column names
   transaction(db, () => {
     db.exec(stageMarks);
@@ -230,7 +236,8 @@ function refineBatch(db: DatabaseSync): void {
   // origin: 'ai' for a ticket the AI suggested, shown in the AI column of its initiative until it is started.
   // why: JSON {text, sources} of an AI ticket, the note sections and log entries it rests on.
   // dismissed_by: 'overview_chat' when the client's Overview chat dismissed it, cleared when it is restored
-  for (const column of ['cleared_at', 'chat_running_at', 'initiative', 'origin', 'why', 'dismissed_by']) {
+  // asking: JSON {form, text} of a question the ticket's chat put to Antonio and is waiting on; the card sits in Needs you
+  for (const column of ['cleared_at', 'chat_running_at', 'initiative', 'origin', 'why', 'dismissed_by', 'asking']) {
     if (!db.prepare('PRAGMA table_info(ticket)').all().some((row) => row.name === column)) {
       transaction(db, () => db.exec(`ALTER TABLE ticket ADD COLUMN ${column} TEXT`));
     }
