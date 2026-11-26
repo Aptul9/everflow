@@ -34,10 +34,20 @@ test.each(Object.keys(decision()))('requires exact named model field %s', (key) 
   expect(() => parse(JSON.stringify(fields))).toThrow();
 });
 
+test('one json fence around the whole answer is unwrapped and the original response kept', () => {
+  for (const raw of [`\`\`\`json\n${JSON.stringify(decision())}\n\`\`\``, ` \`\`\`\r\n${JSON.stringify(decision())}\r\n\`\`\`\n`]) {
+    expect(parse(raw)).toEqual({ ...decision(), raw });
+  }
+  expect(() => parse('```json\n{"on_us":true}\n```')).toThrow();
+});
+
 test.each([
-  '```json\n{"on_us":true}\n```', 'Here is the decision: {}', '{}{}', '[]', 'null', 'true',
+  'Here is the decision: {}', '{}{}', '[]', 'null', 'true',
   `${JSON.stringify(decision())}\n${JSON.stringify(decision())}`, JSON.stringify(decision()).replace('0.9', '1e999'),
-])('never salvages prose, fences, concatenated JSON or non-finite numbers: %s', (raw) => {
+  `Decision:\n\`\`\`json\n${JSON.stringify(decision())}\n\`\`\``, `\`\`\`json\n${JSON.stringify(decision())}\n\`\`\`\nDone.`,
+  `\`\`\`json\n${JSON.stringify(decision())}\n\`\`\`\n\`\`\`json\n${JSON.stringify(decision())}\n\`\`\``,
+  `\`\`\`json\n${JSON.stringify(decision())}`, `\`\`\`json ${JSON.stringify(decision())} \`\`\``,
+])('never salvages prose, fence with prose, several fences, concatenated JSON or non-finite numbers: %s', (raw) => {
   expect(() => parse(raw)).toThrow();
 });
 
@@ -184,6 +194,7 @@ test('repair receives the exact parse error once; another invalid answer retains
   const repair = peer.requests[1]!.messages.filter((message) => typeof message.content === 'string')
     .map((message) => JSON.parse(message.content as string) as Record<string, unknown>).find((message) => message.kind === 'decision_repair');
   expect(repair).toMatchObject({ parse_error: expected, raw: first });
+  expect(repair!.instruction).toMatch(/single JSON object only, without code fences or prose/);
   expect(error).toMatchObject({ responses: [{ raw: first, parse_error: expected }, { raw: second }] });
 });
 
