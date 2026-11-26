@@ -7,7 +7,7 @@ import { chatDirectory } from './policy.ts';
 import { transaction } from './db.ts';
 import { backoff, classify, complete, defer, enqueue, fail, hasPendingInput, healthError, healthOk, owns, reserveTurn } from './jobs.ts';
 import type { Job } from './jobs.ts';
-import { connect } from './opencode.ts';
+import { askingValue, connect } from './opencode.ts';
 import type { Peer, TurnDetail } from './opencode.ts';
 import { modelChoice, readModelOptions } from './settings.ts';
 import { addRefs, batchMessages, boardColumn, extractRefs, ownContext, route, stage, stageTitle, TICKET_MESSAGES, TicketError, ticketMessages } from './tickets.ts';
@@ -665,16 +665,14 @@ export async function collect(cfg: Config, db: DatabaseSync, job: Job, options: 
 }
 
 // Records whether the bound session is running a turn, so a turn the owner started in OpenChamber shows as Working,
-// and whether it waits on his answer to a question, which form events report first
+// and whether it waits on him (a question, a permission request, a page), which events and the wait watch report first
 async function markRunning(db: DatabaseSync, job: Job, ticket: number, session: string, peer: Peer, options: ChatOptions): Promise<boolean> {
   const now = clock(options);
   const running = await peer.running(session, options.signal);
-  const question = running || ticketRow(db, ticket).asking ? (await peer.forms(session, options.signal))[0] : undefined;
+  const wait = running || ticketRow(db, ticket).asking ? await peer.waiting(session, options.signal) : undefined;
   return fenced(db, job, () => {
     const owner = ticketRow(db, ticket);
-    const kept = question && owner.asking && JSON.parse(owner.asking).form === question.form;
-    db.prepare('UPDATE ticket SET chat_running_at=?,asking=? WHERE id=?').run(running ? owner.chat_running_at ?? now() : null,
-      question ? kept ? owner.asking! : JSON.stringify(question) : null, ticket);
+    db.prepare('UPDATE ticket SET chat_running_at=?,asking=? WHERE id=?').run(running ? owner.chat_running_at ?? now() : null, askingValue(owner.asking, wait), ticket);
     return true;
   }, now) ?? false;
 }

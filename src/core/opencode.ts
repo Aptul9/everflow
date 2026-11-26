@@ -153,14 +153,32 @@ function interval(messages: readonly SessionMessageInfo[], target?: string): Tur
 
 // server.connected always arrives first on its own
 export const SESSION_EVENTS = ['session.status', 'session.idle', 'session.execution.started', 'session.execution.succeeded',
-  'session.execution.failed', 'session.execution.interrupted', 'session.renamed', 'form.created', 'form.replied', 'form.cancelled'] as const;
+  'session.execution.failed', 'session.execution.interrupted', 'session.renamed', 'form.created', 'form.replied', 'form.cancelled',
+  'permission.asked', 'permission.replied'] as const;
+
+// Something a chat waits on Antonio for: its question, a permission request or an OpenChamber page waiting on his choice
+export interface Wait { id: string; text: string }
+
+const firstText = (...values: unknown[]) => values.find((value): value is string => typeof value === 'string' && value.trim() !== '')?.trim() ?? '';
 
 // The question tool's box in OpenChamber is a form: its header and the first question, as OpenChamber's own notification reads it
-export function formQuestion(form: { id: string; title?: unknown; fields?: unknown }): { form: string; text: string } {
+export function formQuestion(form: { id: string; title?: unknown; fields?: unknown }): Wait {
   const first = (Array.isArray(form.fields) ? form.fields[0] : null) as { title?: unknown; description?: unknown } | null;
-  const text = [first?.description, first?.title, form.title].find((value): value is string => typeof value === 'string' && value.trim() !== '');
-  return { form: form.id, text: text?.trim() ?? '' };
+  return { id: form.id, text: firstText(first?.description, first?.title, form.title) };
 }
+
+export function permissionWait(request: { id: string; action?: unknown; resources?: unknown; message?: unknown }): Wait {
+  const resources = Array.isArray(request.resources) ? request.resources.filter((value) => typeof value === 'string').join(', ') : '';
+  return { id: request.id, text: firstText(request.message, `Permission: ${firstText(request.action)} ${resources}`) };
+}
+
+// The JSON a ticket keeps for what its chat waits on: the same wait keeps its stored value, none clears it
+export function askingValue(current: string | null | undefined, wait: Wait | undefined): string | null {
+  if (!wait) return null;
+  return current && (JSON.parse(current) as { id?: unknown }).id === wait.id ? current : JSON.stringify(wait);
+}
+
+type Pending = Record<string, { forms?: unknown[]; permissions?: unknown[]; pages?: unknown[] }>;
 
 const settingsSchema = z.looseObject({ desktopLocalPort: z.number().int().min(1).max(65535), desktopUiPassword: z.string().default('') });
 
@@ -193,8 +211,9 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
     url = `http://127.0.0.1:${settings.desktopLocalPort}`;
     password = settings.desktopUiPassword;
   }
-  const client = OpenCode.make({ baseUrl: endpoint(url).href.replace(/\/$/, ''),
-    fetch: authenticatedFetch({ url, password, openchamber, timeoutMs: options.timeoutMs ?? 30_000, ...(options.fetch ? { fetch: options.fetch } : {}) }) });
+  const base = endpoint(url).href.replace(/\/$/, '');
+  const fetcher = authenticatedFetch({ url, password, openchamber, timeoutMs: options.timeoutMs ?? 30_000, ...(options.fetch ? { fetch: options.fetch } : {}) });
+  const client = OpenCode.make({ baseUrl: base, fetch: fetcher });
   const request = (signal?: AbortSignal) => signal ? { signal } : {};
   const history = async (session: string, signal?: AbortSignal) => {
     const messages: SessionMessageInfo[] = [];
@@ -217,6 +236,12 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
     if (selected && (!providerID || !model.join('/'))) throw new TypeError('OpenCode model must be provider/model');
     return client.session.create({ title, location: { directory }, metadata: { everflow: tag },
       ...(selected ? { model: { providerID: providerID!, id: model.join('/'), ...(choice?.effort ? { variant: choice.effort } : {}) } } : {}) }, request(signal));
+  };
+  // OpenChamber's list of what each session waits on, kept from its own event watch; null on a plain opencode server
+  const waits = async (signal?: AbortSignal): Promise<Pending | null> => {
+    if (!openchamber) return null;
+    const response = await fetcher(`${base}/api/sessions/status`, request(signal));
+    return ((await response.json()) as { pending?: Pending }).pending ?? {};
   };
   return {
     // choice: the page's model/effort for new chats; without it the config model and the model's default effort
@@ -294,8 +319,25 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
     async running(session: string, signal?: AbortSignal): Promise<boolean> {
       return (await client.session.active(request(signal)))[session]?.type === 'running';
     },
-    // Questions the session put and still waits on
-    forms: async (session: string, signal?: AbortSignal) => (await client.session.form.list({ sessionID: session }, request(signal))).map(formQuestion),
+    waits,
+    // The first thing the session waits on Antonio for: its open questions, read from opencode itself, then permission
+    // requests and pages from OpenChamber's list (listed: one read of it for several sessions), or opencode's permission
+    // requests without OpenChamber
+    async waiting(session: string, signal?: AbortSignal, listed?: Pending | null): Promise<Wait | undefined> {
+      const question = (await client.session.form.list({ sessionID: session }, request(signal))).map(formQuestion)[0];
+      if (question) return question;
+      const pending = listed === undefined ? await waits(signal) : listed;
+      if (pending) {
+        const own = pending[session];
+        const permission = (own?.permissions ?? []).filter((item): item is { id: string } => typeof (item as { id?: unknown })?.id === 'string').map(permissionWait)[0];
+        const page = (own?.pages ?? []).filter((item): item is { id: string; title?: unknown } => typeof (item as { id?: unknown })?.id === 'string')
+          .map((item) => ({ id: item.id, text: firstText(item.title) }))[0];
+        return permission ?? page;
+      }
+      const directory = (await client.session.get({ sessionID: session }, request(signal))).location.directory;
+      return (await client.permission.request.list({ location: { directory } }, request(signal))).data
+        .filter((item) => item.sessionID === session).map(permissionWait)[0];
+    },
     archive: (session: string, archived = true, signal?: AbortSignal) => client.session.update({ sessionID: session, archived }, request(signal)),
     // Server-sent events; the connection needs a peer made with a timeout longer than the stream should live.
     // onActivity also fires on keepalive frames, so a silent stream can be told apart from a dead one.
