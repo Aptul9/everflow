@@ -125,6 +125,17 @@ test('an invalid triage leaves Problems once a later assessment of the same batc
   expect(invalid()).not.toContain(batch);
 });
 
+test('an invalid triage leaves Problems once its batch reached the chat unjudged', () => {
+  const fixture = webFixture();
+  using db = new DatabaseSync(fixture.path);
+  const invalid = () => readState(db, fixture.cfg).problems.triage.map((item) => item.batch);
+  const batch = invalid()[0]!;
+  db.prepare("UPDATE batch SET outcome='routed' WHERE id=?").run(batch);
+  expect(invalid()).toContain(batch);
+  db.prepare("UPDATE batch SET outcome='forwarded' WHERE id=?").run(batch);
+  expect(invalid()).not.toContain(batch);
+});
+
 test('build entry points stay dynamic and never initialize an instance on import', () => {
   expect(readFileSync('src/app/page.tsx', 'utf8')).toContain("export const dynamic = 'force-dynamic'");
   expect(readFileSync('src/server.ts', 'utf8')).not.toContain('import.meta.main');
