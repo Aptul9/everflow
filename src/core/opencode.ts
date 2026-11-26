@@ -153,7 +153,14 @@ function interval(messages: readonly SessionMessageInfo[], target?: string): Tur
 
 // server.connected always arrives first on its own
 export const SESSION_EVENTS = ['session.status', 'session.idle', 'session.execution.started', 'session.execution.succeeded',
-  'session.execution.failed', 'session.execution.interrupted', 'session.renamed'] as const;
+  'session.execution.failed', 'session.execution.interrupted', 'session.renamed', 'form.created', 'form.replied', 'form.cancelled'] as const;
+
+// The question tool's box in OpenChamber is a form: its header and the first question, as OpenChamber's own notification reads it
+export function formQuestion(form: { id: string; title?: unknown; fields?: unknown }): { form: string; text: string } {
+  const first = (Array.isArray(form.fields) ? form.fields[0] : null) as { title?: unknown; description?: unknown } | null;
+  const text = [first?.description, first?.title, form.title].find((value): value is string => typeof value === 'string' && value.trim() !== '');
+  return { form: form.id, text: text?.trim() ?? '' };
+}
 
 const settingsSchema = z.looseObject({ desktopLocalPort: z.number().int().min(1).max(65535), desktopUiPassword: z.string().default('') });
 
@@ -287,6 +294,8 @@ export function connect(cfg: Config, options: TransportOptions = {}) {
     async running(session: string, signal?: AbortSignal): Promise<boolean> {
       return (await client.session.active(request(signal)))[session]?.type === 'running';
     },
+    // Questions the session put and still waits on
+    forms: async (session: string, signal?: AbortSignal) => (await client.session.form.list({ sessionID: session }, request(signal))).map(formQuestion),
     archive: (session: string, archived = true, signal?: AbortSignal) => client.session.update({ sessionID: session, archived }, request(signal)),
     // Server-sent events; the connection needs a peer made with a timeout longer than the stream should live.
     // onActivity also fires on keepalive frames, so a silent stream can be told apart from a dead one.

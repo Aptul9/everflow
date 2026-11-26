@@ -21,6 +21,8 @@ export async function scriptedPeer() {
   const sessions = new Map<string, SessionInfo>();
   const messages = new Map<string, SessionMessageInfo[]>();
   const admissions = new Map<string, SessionInboxUser>();
+  // Open questions by session, as the question tool leaves them until answered
+  const forms = new Map<string, { id: string; sessionID: string; title: string; fields: unknown[] }[]>();
   const calls: PeerCall[] = [];
   const state = {
     loseCreate: false, losePrompt: false, loseRename: false, loseArchive: false,
@@ -101,6 +103,7 @@ export async function scriptedPeer() {
         if (call.body.resume !== false) session.time.busy = Date.now();
         json(response, { data: { id, sessionID: session.id, time: { created: Date.now() }, type: 'synthetic', payload: { text: String(call.body.text) }, delivery: 'queue' } }); return;
       }
+      if (suffix === '/form' && call.method === 'GET') { json(response, { data: forms.get(session.id) ?? [] }); return; }
       if (suffix === '/inbox') {
         json(response, { data: [...admissions.values()].filter((input) => input.sessionID === session.id) }, state.inboxStatus); return;
       }
@@ -138,7 +141,7 @@ export async function scriptedPeer() {
     messages.set(session, history);
     sessions.get(session)!.time.idle = at;
   };
-  return { url: `http://127.0.0.1:${address.port}`, sessions, messages, admissions, calls, state, json, deliver, finish,
+  return { url: `http://127.0.0.1:${address.port}`, sessions, messages, admissions, forms, calls, state, json, deliver, finish,
     async [Symbol.asyncDispose]() {
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

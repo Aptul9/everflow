@@ -61,8 +61,8 @@ test('writes that can move a card mark its ticket once; other writes do not', ()
   f.db.prepare("UPDATE ticket SET summary='x',ask='y' WHERE id=?").run(id);
   f.db.prepare("UPDATE ticket SET report=NULL,chat_running_at=NULL WHERE id=?").run(id);
   expect(marks(f.db)).toEqual([]);
-  for (const sql of ["UPDATE ticket SET report='needs_you' WHERE id=?", "UPDATE ticket SET chat_running_at='x' WHERE id=?", "UPDATE ticket SET lifecycle='done' WHERE id=?",
-    "UPDATE ticket SET title='Renamed' WHERE id=?"]) {
+  for (const sql of ["UPDATE ticket SET report='needs_you' WHERE id=?", "UPDATE ticket SET chat_running_at='x' WHERE id=?", "UPDATE ticket SET asking='{}' WHERE id=?",
+    "UPDATE ticket SET lifecycle='done' WHERE id=?", "UPDATE ticket SET title='Renamed' WHERE id=?"]) {
     f.db.prepare(sql).run(id);
     expect(marks(f.db)).toEqual([id]);
     clear(f.db);
@@ -162,6 +162,48 @@ test('session events: a started turn reads Working, a finished one makes its syn
   expect(applySessionEvent(f.db, { type: 'session.renamed', data: { sessionID: session, title: 'Something else' } }, AT)).toBe(true);
   expect(marks(f.db)).toEqual([id]);
   expect(f.db.prepare('SELECT session_title FROM ticket WHERE id=?').get(id)!.session_title).toBe('Something else');
+});
+
+test('a question the chat puts moves the card to Needs you until that question is answered or the turn ends', () => {
+  const f = fixture();
+  const id = ticket(f.db);
+  const session = String(f.db.prepare('SELECT session_id FROM ticket WHERE id=?').get(id)!.session_id);
+  const asking = () => f.db.prepare('SELECT asking FROM ticket WHERE id=?').get(id)!.asking;
+  const form = (formID: string, text: string) => ({ type: 'form.created', data: { form: { id: formID, sessionID: session, title: 'Header', fields: [{ title: 'Pick', description: text }] } } });
+  applySessionEvent(f.db, { type: 'session.execution.started', data: { sessionID: session } }, AT);
+  clear(f.db);
+  expect(applySessionEvent(f.db, { type: 'form.created', data: { form: { id: 'frm_x', sessionID: 'ses_other', fields: [] } } }, AT)).toBe(false);
+  expect(applySessionEvent(f.db, form('frm_1', 'Install Git too?'), AT)).toBe(true);
+  expect(JSON.parse(String(asking()))).toEqual({ form: 'frm_1', text: 'Install Git too?' });
+  expect(stageTitle(f.db, id)).toBe(`[Needs you] #${id} Synthetic`);
+  expect(marks(f.db)).toEqual([id]);
+  expect(readState(f.db, f.cfg, new Date(AT)).groups.needs_you.find((card) => card.id === id)).toMatchObject({ asking: 'Install Git too?', chat_running: true });
+  applySessionEvent(f.db, { type: 'form.replied', data: { id: 'frm_other', sessionID: session } }, AT);
+  expect(asking()).not.toBeNull();
+  applySessionEvent(f.db, { type: 'form.replied', data: { id: 'frm_1', sessionID: session } }, AT);
+  expect(asking()).toBeNull();
+  expect(stageTitle(f.db, id)).toBe(`[Working] #${id} Synthetic`);
+  applySessionEvent(f.db, form('frm_2', ''), AT);
+  expect(JSON.parse(String(asking()))).toEqual({ form: 'frm_2', text: 'Pick' });
+  applySessionEvent(f.db, { type: 'form.cancelled', data: { id: 'frm_2', sessionID: session } }, AT);
+  expect(asking()).toBeNull();
+  applySessionEvent(f.db, form('frm_3', 'Again?'), AT);
+  applySessionEvent(f.db, { type: 'session.execution.interrupted', data: { sessionID: session } }, AT);
+  expect(asking()).toBeNull();
+});
+
+test('a database whose card trigger predates open questions gets one that watches them', () => {
+  const files = scratch('retitle-asking-');
+  {
+    using db = openDb(files.path);
+    db.exec(`DROP TRIGGER stage_dirty_ticket; CREATE TRIGGER stage_dirty_ticket AFTER UPDATE OF report ON ticket WHEN NEW.report IS NOT OLD.report
+      BEGIN INSERT OR REPLACE INTO stage_dirty(ticket,at) VALUES (NEW.id,'x'); END;`);
+  }
+  using db = openDb(files.path);
+  const id = ticket(db);
+  clear(db);
+  db.prepare("UPDATE ticket SET asking='{}' WHERE id=?").run(id);
+  expect(marks(db)).toEqual([id]);
 });
 
 test('a finished turn makes a waiting collector due now and leaves the sync to it', () => {

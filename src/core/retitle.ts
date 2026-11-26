@@ -3,7 +3,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import type { Config } from './config.ts';
 import { transaction } from './db.ts';
 import { enqueue, hasPendingInput, healthError, healthOk } from './jobs.ts';
-import { connect } from './opencode.ts';
+import { connect, formQuestion } from './opencode.ts';
 import type { Peer } from './opencode.ts';
 import { stageTitle } from './tickets.ts';
 import { utc } from './time.ts';
@@ -107,11 +107,12 @@ export function reconcileTitles(db: DatabaseSync, at = utc()): void {
   }
 }
 
-type SessionEvent = { type: string; data?: { sessionID?: unknown; title?: unknown; status?: { type?: unknown } } };
+type SessionEvent = { type: string; data?: { sessionID?: unknown; title?: unknown; status?: { type?: unknown }; id?: unknown;
+  form?: { id?: unknown; sessionID?: unknown; title?: unknown; fields?: unknown } } };
 
 /** Applies one OpenCode event to the ticket bound to its session. Returns whether anything may need a new title. */
 export function applySessionEvent(db: DatabaseSync, event: SessionEvent, at = utc()): boolean {
-  const session = event.data?.sessionID;
+  const session = event.type === 'form.created' ? event.data?.form?.sessionID : event.data?.sessionID;
   if (typeof session !== 'string') return false;
   const owner = db.prepare('SELECT id,session_title FROM ticket WHERE session_id=? AND approved_at IS NOT NULL').get(session);
   if (!owner) return false;
@@ -124,9 +125,17 @@ export function applySessionEvent(db: DatabaseSync, event: SessionEvent, at = ut
   if (event.type === 'session.execution.started' || status === 'busy' || status === 'retry') {
     db.prepare('UPDATE ticket SET chat_running_at=COALESCE(chat_running_at,?) WHERE id=?').run(at, ticket);
     recheck();
+  } else if (event.type === 'form.created') {
+    const form = event.data!.form!;
+    if (typeof form.id !== 'string') return false;
+    db.prepare('UPDATE ticket SET asking=? WHERE id=?').run(JSON.stringify(formQuestion({ ...form, id: form.id })), ticket);
+  } else if (event.type === 'form.replied' || event.type === 'form.cancelled') {
+    // Another question still open keeps the card where it is; the next sync reads it
+    if (typeof event.data?.id !== 'string') return false;
+    db.prepare("UPDATE ticket SET asking=NULL WHERE id=? AND json_extract(asking,'$.form')=?").run(ticket, event.data.id);
   } else if (event.type === 'session.idle' || status === 'idle' || event.type === 'session.execution.succeeded'
     || event.type === 'session.execution.failed' || event.type === 'session.execution.interrupted') {
-    db.prepare('UPDATE ticket SET chat_running_at=NULL WHERE id=?').run(ticket);
+    db.prepare('UPDATE ticket SET chat_running_at=NULL,asking=NULL WHERE id=?').run(ticket);
     recheck();
     // An input Everflow sent is read by its collector, otherwise by the ticket's sync: either is due now
     db.prepare("UPDATE job SET next_at=? WHERE ticket=? AND kind='collect' AND state='queued' AND next_at>?").run(at, ticket, at);

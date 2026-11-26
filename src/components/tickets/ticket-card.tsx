@@ -307,8 +307,8 @@ export function TicketCard(props: {
       <h4 id={heading} className="text-sm leading-snug font-semibold"><span className="sr-only">{`Ticket #${ticket.id}:`}</span>{' '}{ticket.title}</h4>
       {/* A closed ticket keeps its chat, archived in OpenChamber */}
       {ticket.session_id && <p title={`Session ${ticket.session_id}`} className="flex min-w-0 items-center gap-1.5 rounded-md bg-info-soft px-2 py-1 text-xs font-medium text-info">
-        {ticket.chat_running ? <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin" /> : <MessagesSquare aria-hidden="true" className="size-3.5 shrink-0" />}
-        <span className="min-w-0">{`${ticket.chat_running ? 'Chat working now' : terminal ? 'Chat in OpenChamber' : 'Chat open in OpenChamber'}${props.chatProject ? `, project ${props.chatProject}` : ''}`}</span>
+        {ticket.chat_running && ticket.asking === null ? <LoaderCircle aria-hidden="true" className="size-3.5 shrink-0 animate-spin" /> : <MessagesSquare aria-hidden="true" className="size-3.5 shrink-0" />}
+        <span className="min-w-0">{`${ticket.asking !== null ? 'Chat waits on your answer' : ticket.chat_running ? 'Chat working now' : terminal ? 'Chat in OpenChamber' : 'Chat open in OpenChamber'}${props.chatProject ? `, project ${props.chatProject}` : ''}`}</span>
         {props.chatOrigin && props.onOpenChat ? <button type="button" onClick={props.onOpenChat} aria-label={`Open the chat of ticket #${ticket.id}`} className={cn('ml-auto', chatLink)}>
           Open<Maximize2 aria-hidden="true" className="size-3" />
         </button> : <a href={`openchamber://session/${encodeURIComponent(ticket.session_id)}`} aria-label={`Open the chat of ticket #${ticket.id} in OpenChamber`}
@@ -335,9 +335,9 @@ export function TicketCard(props: {
           className="gap-1 px-1.5 text-[11px]"><Sparkles className="size-3" />dalla chat</Badge>}
         <span className="ml-auto font-mono text-muted-foreground">#{ticket.id}</span>
       </div>
-      {/* The card is a glance: the AI sum-up, or the chat's latest status while it runs; the rest is in Expand */}
-      {(ticket.lifecycle === 'active' && ticket.report_line || ticket.summary) && <p className="line-clamp-2 text-[13px] whitespace-pre-wrap">
-        <Inline text={ticket.lifecycle === 'active' && ticket.report_line || ticket.summary} />
+      {/* The card is a glance: the AI sum-up, the chat's open question, or its latest status while it runs; the rest is in Expand */}
+      {(ticket.asking || ticket.lifecycle === 'active' && ticket.report_line || ticket.summary) && <p className="line-clamp-2 text-[13px] whitespace-pre-wrap">
+        <Inline text={ticket.asking || ticket.lifecycle === 'active' && ticket.report_line || ticket.summary} />
       </p>}
       {/* only the text is clamped, so the source chips always show */}
       {ticket.why && ticket.lifecycle === 'proposed' && <dl><Field label="Perché" expanded><span className="line-clamp-3"><Inline text={ticket.why.text} /></span><WhySources why={ticket.why} /></Field></dl>}
