@@ -49,9 +49,9 @@ export async function readAccounts(cfg: Config, options: { providers?: Readonly<
       const response = await (options.fetch ?? fetch)(`${base}/usage/quota/all`, { redirect: 'error', signal: AbortSignal.timeout(10_000), ...(key ? { headers: { 'x-api-key': key } } : {}) });
       if (!response.ok) throw new Error(`Meridian quota HTTP ${response.status}`);
       profiles = quotaSchema.parse(await response.json()).profiles;
-    } catch (error) {
-      const message = error instanceof z.ZodError ? 'Meridian quota response has an unexpected shape' : error instanceof Error ? error.message : String(error);
-      for (const route of routes) verdicts.push({ id: route.id, state: 'unavailable', error: message });
+    } catch {
+      // A quota read that fails says nothing about the accounts: the triage calls keep deciding health, so failover still runs
+      for (const route of routes) verdicts.push({ id: route.id, state: 'throttled' });
       continue;
     }
     for (const route of routes) {
