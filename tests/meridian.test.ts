@@ -69,11 +69,17 @@ test.each([
   ['an unreachable Meridian', () => { throw new TypeError('fetch failed'); }, 'fetch failed'],
   ['a Meridian error status', () => new Response('nope', { status: 500 }), 'Meridian quota HTTP 500'],
   ['an unexpected answer', () => Response.json({ accounts: [] }), 'Meridian quota response has an unexpected shape'],
-])('%s makes every route on that proxy unavailable', async (_name, reply, error) => {
+])('%s leaves every route on that proxy to its triage calls', async (_name, reply) => {
   const { cfg } = kbFixture();
   cfg.triage.providers = ['a', 'b'];
   const verdicts = await readAccounts(cfg, { fetch: fakeFetch(reply).fetch, providers: { a: route('notarify'), b: route('roar') } });
-  expect(verdicts).toEqual([{ id: 'a', state: 'unavailable', error }, { id: 'b', state: 'unavailable', error }]);
+  expect(verdicts).toEqual([{ id: 'a', state: 'throttled' }, { id: 'b', state: 'throttled' }]);
+  using db = openDb(cfg.db.path);
+  applyAccounts(db, cfg, verdicts, AT);
+  expect(db.prepare("SELECT 1 FROM health WHERE dependency LIKE 'provider:%'").get()).toBeUndefined();
+  await using peer = await scriptedPeer(() => ({ body: text() }));
+  await assess(cfg, context(), [], 'new', undefined, { db, providers: { a: provider(peer.baseURL), b: provider(peer.baseURL) } });
+  expect(peer.requests).toHaveLength(1);
 });
 
 test('no providers file or no triage routes reads nothing', async () => {
